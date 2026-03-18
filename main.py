@@ -11,23 +11,16 @@ import time
 # --- SURVIE RENDER ---
 app = Flask(__name__)
 @app.route('/')
-def health(): return "PRIME TERMINAL LIVE", 200
+def health(): return "PRIME TERMINAL V6 ACTIVE", 200
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-# --- CONFIGURATION (NOUVEAU TOKEN) ---
+# --- CONFIGURATION (TON NOUVEAU TOKEN VÉRIFIÉ) ---
 TOKEN = "8658287331:AAHh4vzRPxMQPDxnjvDdSpfk483cAsvLnbk"
 bot = telebot.TeleBot(TOKEN)
 MY_ID = "5968288964"
-
-# --- SÉCURITÉ ANTI-CONFLIT ---
-try:
-    bot.remove_webhook()
-    time.sleep(1)
-except:
-    pass
 
 sys_data = {"pair": "EUR/USD"}
 
@@ -42,7 +35,7 @@ def main_interface(message):
         "      💎 **PRIME TERMINAL V6**\n"
         "╚══════════════════╝\n"
         f"● **ACTIF :** `{sys_data['pair']}`\n"
-        "● **MODE :** `SNIPER MANUEL` 🎯\n"
+        "● **MODE :** `SNIPER ANTI-CRASH` 🛡️\n"
         "● **EXPIRATION :** `AUTO-DYNAMIQUE` ⚡\n"
         "──────────────────"
     )
@@ -62,17 +55,15 @@ def handle_query(call):
         bot.answer_callback_query(call.id, f"Actif : {sys_data['pair']}")
         bot.edit_message_text(f"✅ **ACTIF ACTUALISÉ :** `{sys_data['pair']}`", call.message.chat.id, call.message.message_id)
 
-# --- LOGIQUE DE SIGNAL AVEC EXPIRATION CALCULÉE ---
+# --- LOGIQUE DE SIGNAL ---
 @bot.message_handler(func=lambda m: m.text == "🎯 ANALYSE SNIPER")
 def get_dynamic_signal(message):
-    status_msg = bot.send_message(message.chat.id, "🛰 **ANALYSE DU FLUX...**", parse_mode="Markdown")
+    status_msg = bot.send_message(message.chat.id, "🛰 **ANALYSE TECHNIQUE...**", parse_mode="Markdown")
     try:
-        # Analyse Flash via CCXT
         ex = ccxt.binance()
         bars = ex.fetch_ohlcv("BTC/USDT", timeframe='1m', limit=40)
         df = pd.DataFrame(bars, columns=['t','o','h','l','c','v'])
         
-        # Indicateurs
         range_moyen = (df['h'] - df['l']).tail(5).mean()
         prix_actuel = df['c'].iloc[-1]
         delta = df['c'].diff()
@@ -82,12 +73,10 @@ def get_dynamic_signal(message):
 
         action = "🟢 ACHAT (CALL)" if rsi < 50 else "🔴 VENTE (PUT)"
         
-        # Expiration Dynamique
         if range_moyen > (prix_actuel * 0.0005): exp = "30 SEC"
         elif rsi < 35 or rsi > 65: exp = "1 MIN"
         else: exp = "2 MIN"
 
-        # Heure d'entrée avec 1m30 de préparation
         futur = datetime.now() + timedelta(seconds=90)
         h_entree = (futur + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime("%H:%M")
 
@@ -101,16 +90,24 @@ def get_dynamic_signal(message):
             f"📍 **ORDRE À :** `{h_entree}:00` 👈\n"
             f"📊 **CONFIANCE :** `[ 96% ]` 🔥\n"
             "──────────────────\n"
-            "💎 _Préparez-vous à la seconde 00 !_"
+            "💎 _Prêt pour l'entrée à la seconde 00._"
         )
         bot.delete_message(message.chat.id, status_msg.message_id)
         bot.send_message(message.chat.id, signal_box, parse_mode="Markdown")
         
     except Exception:
-        bot.send_message(message.chat.id, "❌ Erreur de flux. Réessayez.")
+        bot.send_message(message.chat.id, "❌ Erreur flux. Réessayez.")
 
+# --- BOUCLE DE SURVIE (ANTI-CRASH) ---
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
-    # Redémarrage propre en cas de déconnexion
-    bot.infinity_polling(timeout=20, long_polling_timeout=10)
     
+    print("--- DÉMARRAGE DU BOT EN MODE SÉCURITÉ ---")
+    while True:
+        try:
+            bot.remove_webhook()
+            bot.infinity_polling(timeout=20, long_polling_timeout=10)
+        except Exception as e:
+            print(f"Relance automatique dans 5s... Erreur : {e}")
+            time.sleep(5)
+        
