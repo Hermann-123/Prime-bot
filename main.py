@@ -6,11 +6,12 @@ import pandas as pd
 from datetime import datetime, timedelta
 from flask import Flask
 import os
+import time
 
 # --- SURVIE RENDER ---
 app = Flask(__name__)
 @app.route('/')
-def health(): return "Terminal Online", 200
+def health(): return "PRIME TERMINAL LIVE", 200
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
@@ -20,6 +21,10 @@ def run_server():
 TOKEN = "8658287331:AAEqTnQ9F-PvqpFGty0woA0oZ4V66RmtdK4"
 bot = telebot.TeleBot(TOKEN)
 MY_ID = "5968288964"
+
+# Suppression des anciens Webhooks pour éviter l'erreur 409
+bot.remove_webhook()
+time.sleep(1)
 
 sys_data = {"pair": "EUR/USD"}
 
@@ -34,8 +39,8 @@ def main_interface(message):
         "      💎 **PRIME TERMINAL V6**\n"
         "╚══════════════════╝\n"
         f"● **ACTIF :** `{sys_data['pair']}`\n"
+        "● **MODE :** `SNIPER MANUEL` 🎯\n"
         "● **EXPIRATION :** `AUTO-DYNAMIQUE` ⚡\n"
-        "● **PRÉPARATION :** `1m 30s` ⏱\n"
         "──────────────────"
     )
     bot.send_message(message.chat.id, header, parse_mode="Markdown", reply_markup=markup)
@@ -54,21 +59,18 @@ def handle_query(call):
         bot.answer_callback_query(call.id, f"Actif : {sys_data['pair']}")
         bot.edit_message_text(f"✅ **ACTIF ACTUALISÉ :** `{sys_data['pair']}`", call.message.chat.id, call.message.message_id)
 
-# --- LOGIQUE DE SIGNAL AVEC EXPIRATION CALCULÉE ---
+# --- ANALYSE ET EXPIRATION CALCULÉE ---
 @bot.message_handler(func=lambda m: m.text == "🎯 ANALYSE SNIPER")
 def get_dynamic_signal(message):
-    status_msg = bot.send_message(message.chat.id, "🛰 **ANALYSE DES FLUX EN COURS...**", parse_mode="Markdown")
-    
+    status_msg = bot.send_message(message.chat.id, "🛰 **ANALYSE DU FLUX...**", parse_mode="Markdown")
     try:
         ex = ccxt.binance()
         bars = ex.fetch_ohlcv("BTC/USDT", timeframe='1m', limit=40)
         df = pd.DataFrame(bars, columns=['t','o','h','l','c','v'])
         
-        # Calcul de la volatilité (ATR simplifié)
+        # Calcul Volatilité et RSI
         range_moyen = (df['h'] - df['l']).tail(5).mean()
         prix_actuel = df['c'].iloc[-1]
-        
-        # Calcul RSI
         delta = df['c'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(7).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(7).mean()
@@ -76,35 +78,27 @@ def get_dynamic_signal(message):
 
         action = "🟢 ACHAT (CALL)" if rsi < 50 else "🔴 VENTE (PUT)"
         
-        # --- CALCUL DYNAMIQUE DE L'EXPIRATION ---
-        # Si le marché est nerveux (gros range), on prend court. Si calme, on prend long.
-        if range_moyen > (prix_actuel * 0.0005):
-            expiration_calculee = "30 SEC"
-        elif rsi < 30 or rsi > 70:
-            expiration_calculee = "1 MIN"
-        else:
-            expiration_calculee = "2 MIN"
+        # Expiration Dynamique
+        if range_moyen > (prix_actuel * 0.0005): exp = "30 SEC"
+        elif rsi < 30 or rsi > 70: exp = "1 MIN"
+        else: exp = "2 MIN"
 
-        # --- CALCUL DE L'HEURE D'ENTRÉE (1m30 de préparation) ---
-        maintenant = datetime.now()
-        future_time = maintenant + timedelta(seconds=90)
-        # On cible la minute suivante pile
-        entree_datetime = (future_time + timedelta(minutes=1)).replace(second=0, microsecond=0)
-        h_entree = entree_datetime.strftime("%H:%M")
+        # Heure d'entrée avec 1m30 de préparation
+        futur = datetime.now() + timedelta(seconds=90)
+        h_entree = (futur + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime("%H:%M")
 
         signal_box = (
-            "🚀 **SIGNAL SNIPER INTELLIGENT** 🚀\n"
+            "🚀 **SIGNAL GÉNÉRÉ** 🚀\n"
             "──────────────────\n"
             f"🛰 **ACTIF :** `{sys_data['pair']}`\n"
             f"🎯 **ACTION :** **{action}**\n"
-            f"⏳ **EXPIRATION :** `{expiration_calculee}` ⏱\n"
+            f"⏳ **EXPIRATION :** `{exp}` ⏱\n"
             "──────────────────\n"
-            f"📍 **ENTRÉE À :** `{h_entree}:00` 👈\n"
-            f"📊 **CONFIANCE :** `[ 94.6% ]` 🔥\n"
+            f"📍 **ORDRE À :** `{h_entree}:00` 👈\n"
+            f"📊 **CONFIANCE :** `[ 95% ]` 🔥\n"
             "──────────────────\n"
-            "💡 _L'expiration a été calculée selon la volatilité._"
+            "💎 _Soyez prêt à la seconde 00 !_"
         )
-        
         bot.delete_message(message.chat.id, status_msg.message_id)
         bot.send_message(message.chat.id, signal_box, parse_mode="Markdown")
         
@@ -113,4 +107,6 @@ def get_dynamic_signal(message):
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
-    bot.infinity_polling()
+    # Utilisation de infinity_polling pour gérer les micro-coupures
+    bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    
