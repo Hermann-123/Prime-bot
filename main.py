@@ -10,7 +10,7 @@ import time
 import google.generativeai as genai
 
 # --- CONFIG IA ---
-GEMINI_API_KEY = "AIzaSyDqIELRqLMeoV9bYBkXBuvpSacpuzzOAiA"
+GEMINI_API_KEY = "os.environ.get("GEMINI_API_KEY")"
 genai.configure(api_key=GEMINI_API_KEY)
 # Utilisation du modèle Pro standard (plus compatible)
 model = genai.GenerativeModel('gemini-pro')
