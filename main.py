@@ -113,3 +113,4 @@ if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
     # Redémarrage propre en cas de déconnexion
     bot.infinity_polling(timeout=20, long_polling_timeout=10)
+    
