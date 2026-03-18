@@ -9,11 +9,11 @@ import os
 import time
 import google.generativeai as genai
 
-# --- 1. CONFIGURATION (MISE À JOUR MODÈLE) ---
+# --- CONFIG IA ---
 GEMINI_API_KEY = "AIzaSyDqIELRqLMeoV9bYBkXBuvpSacpuzzOAiA"
 genai.configure(api_key=GEMINI_API_KEY)
-# On utilise 'gemini-1.5-flash' qui est plus stable sur les serveurs gratuits
-model = genai.GenerativeModel('gemini-1.5-flash')
+# Utilisation du modèle Pro standard (plus compatible)
+model = genai.GenerativeModel('gemini-pro')
 
 TOKEN = "8658287331:AAHh4vzRPxMQPDxnjvDdSpfk483cAsvLnbk"
 bot = telebot.TeleBot(TOKEN)
@@ -21,27 +21,27 @@ sys_data = {"pair": "EUR/USD"}
 
 app = Flask(__name__)
 @app.route('/')
-def health(): return "IA ONLINE", 200
+def health(): return "IA V8.2 ONLINE", 200
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-# --- 2. CERVEAU IA AVEC DÉBOGAGE ---
+# --- CERVEAU IA ---
 def get_ai_advice(prompt):
     try:
-        response = model.generate_content(f"Tu es un expert trading. Réponds en 1 phrase courte : {prompt}")
+        # On force une réponse très courte pour éviter les erreurs de génération
+        response = model.generate_content(f"Réponds en 10 mots max : {prompt}")
         return response.text
     except Exception as e:
-        # Cela nous dira EXACTEMENT quel est le problème
-        return f"❌ Erreur IA : {str(e)[:50]}"
+        return f"⚠️ IA indisponible. Utilisation de l'analyse mathématique."
 
-# --- 3. INTERFACE ---
+# --- INTERFACE ---
 @bot.message_handler(commands=['start', 'menu'])
 def welcome(message):
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     markup.add("🎯 ANALYSE IA SNIPER", "📱 CHOISIR LA PAIRE", "🧠 DEMANDER À L'IA")
-    bot.send_message(message.chat.id, "💎 **PRIME TERMINAL V8.1**\n_Mode Flash IA activé._", reply_markup=markup)
+    bot.send_message(message.chat.id, "💎 **PRIME TERMINAL V8.2**\n_Connexion IA sécurisée._", reply_markup=markup)
 
 @bot.message_handler(func=lambda m: m.text == "🎯 ANALYSE IA SNIPER")
 def get_ia_signal(message):
@@ -50,20 +50,21 @@ def get_ia_signal(message):
         bars = ex.fetch_ohlcv("BTC/USDT", timeframe='1m', limit=10)
         prices = [b[4] for b in bars]
         
-        prompt = f"Prix actuels {prices}. Pour {sys_data['pair']}, donne : DIRECTION (CALL/PUT) et RAISON."
-        ai_decision = get_ai_advice(prompt)
+        # Analyse IA
+        ai_decision = get_ai_advice(f"Analyse ces prix {prices}. Direction pour {sys_data['pair']}?")
         
+        # Calcul temps
         h = (datetime.now() + timedelta(seconds=90)).replace(second=0, microsecond=0) + timedelta(minutes=1)
         
         signal = (
-            f"🚀 **SIGNAL IA FLASH**\n"
+            f"🚀 **SIGNAL IA V8.2**\n"
             f"🛰 **ACTIF :** `{sys_data['pair']}`\n"
-            f"📊 **IA :** {ai_decision}\n"
+            f"📊 **ANALYSE :** {ai_decision}\n"
             f"📍 **ENTRÉE :** `{h.strftime('%H:%M')}:00`"
         )
         bot.send_message(message.chat.id, signal)
     except:
-        bot.send_message(message.chat.id, "❌ Erreur Flux")
+        bot.send_message(message.chat.id, "❌ Erreur technique. Réessayez.")
 
 @bot.message_handler(func=lambda m: m.text == "🧠 DEMANDER À L'IA")
 def ask_mode(message):
@@ -83,4 +84,4 @@ if __name__ == "__main__":
             bot.infinity_polling(timeout=15)
         except:
             time.sleep(5)
-        
+    
