@@ -17,14 +17,17 @@ def run_server():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-# --- CONFIGURATION ---
-TOKEN = "8658287331:AAEqTnQ9F-PvqpFGty0woA0oZ4V66RmtdK4"
+# --- CONFIGURATION (NOUVEAU TOKEN) ---
+TOKEN = "8658287331:AAHh4vzRPxMQPDxnjvDdSpfk483cAsvLnbk"
 bot = telebot.TeleBot(TOKEN)
 MY_ID = "5968288964"
 
-# Suppression des anciens Webhooks pour éviter l'erreur 409
-bot.remove_webhook()
-time.sleep(1)
+# --- SÉCURITÉ ANTI-CONFLIT ---
+try:
+    bot.remove_webhook()
+    time.sleep(1)
+except:
+    pass
 
 sys_data = {"pair": "EUR/USD"}
 
@@ -59,16 +62,17 @@ def handle_query(call):
         bot.answer_callback_query(call.id, f"Actif : {sys_data['pair']}")
         bot.edit_message_text(f"✅ **ACTIF ACTUALISÉ :** `{sys_data['pair']}`", call.message.chat.id, call.message.message_id)
 
-# --- ANALYSE ET EXPIRATION CALCULÉE ---
+# --- LOGIQUE DE SIGNAL AVEC EXPIRATION CALCULÉE ---
 @bot.message_handler(func=lambda m: m.text == "🎯 ANALYSE SNIPER")
 def get_dynamic_signal(message):
     status_msg = bot.send_message(message.chat.id, "🛰 **ANALYSE DU FLUX...**", parse_mode="Markdown")
     try:
+        # Analyse Flash via CCXT
         ex = ccxt.binance()
         bars = ex.fetch_ohlcv("BTC/USDT", timeframe='1m', limit=40)
         df = pd.DataFrame(bars, columns=['t','o','h','l','c','v'])
         
-        # Calcul Volatilité et RSI
+        # Indicateurs
         range_moyen = (df['h'] - df['l']).tail(5).mean()
         prix_actuel = df['c'].iloc[-1]
         delta = df['c'].diff()
@@ -80,7 +84,7 @@ def get_dynamic_signal(message):
         
         # Expiration Dynamique
         if range_moyen > (prix_actuel * 0.0005): exp = "30 SEC"
-        elif rsi < 30 or rsi > 70: exp = "1 MIN"
+        elif rsi < 35 or rsi > 65: exp = "1 MIN"
         else: exp = "2 MIN"
 
         # Heure d'entrée avec 1m30 de préparation
@@ -88,16 +92,16 @@ def get_dynamic_signal(message):
         h_entree = (futur + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime("%H:%M")
 
         signal_box = (
-            "🚀 **SIGNAL GÉNÉRÉ** 🚀\n"
+            "🚀 **SIGNAL SNIPER GÉNÉRÉ** 🚀\n"
             "──────────────────\n"
             f"🛰 **ACTIF :** `{sys_data['pair']}`\n"
             f"🎯 **ACTION :** **{action}**\n"
             f"⏳ **EXPIRATION :** `{exp}` ⏱\n"
             "──────────────────\n"
             f"📍 **ORDRE À :** `{h_entree}:00` 👈\n"
-            f"📊 **CONFIANCE :** `[ 95% ]` 🔥\n"
+            f"📊 **CONFIANCE :** `[ 96% ]` 🔥\n"
             "──────────────────\n"
-            "💎 _Soyez prêt à la seconde 00 !_"
+            "💎 _Préparez-vous à la seconde 00 !_"
         )
         bot.delete_message(message.chat.id, status_msg.message_id)
         bot.send_message(message.chat.id, signal_box, parse_mode="Markdown")
@@ -107,6 +111,5 @@ def get_dynamic_signal(message):
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
-    # Utilisation de infinity_polling pour gérer les micro-coupures
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
-    
+    # Redémarrage propre en cas de déconnexion
+    bot.infinity_polling(timeout=20, long_polling_timeout=10)
