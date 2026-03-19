@@ -3,6 +3,7 @@ from telebot import types
 import threading
 import os
 import requests
+import time
 from flask import Flask
 
 # --- CONFIGURATION ---
@@ -15,12 +16,11 @@ app = Flask(__name__)
 @app.route('/')
 def health(): return "BOT V16 (API 2.5) ONLINE", 200
 
-# --- LE BYPASS DIRECT AVEC LE NOUVEAU MODÈLE ---
+# --- LE BYPASS DIRECT ---
 def get_ai_response(prompt):
     if not API_KEY:
         return "❌ ERREUR : La clé API manque."
     
-    # URL mise à jour pour pointer vers le modèle actif et ultra-rapide
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={API_KEY}"
     headers = {'Content-Type': 'application/json'}
     data = {
@@ -31,11 +31,9 @@ def get_ai_response(prompt):
         response = requests.post(url, headers=headers, json=data)
         result = response.json()
         
-        # Si Google valide la requête
         if response.status_code == 200:
             return result['candidates'][0]['content']['parts'][0]['text']
         else:
-            # Si la clé API ou autre chose bloque, on affiche la vraie erreur
             error_msg = result.get('error', {}).get('message', 'Erreur inconnue')
             return f"🚨 Refus de Google : {error_msg}"
             
@@ -53,4 +51,30 @@ def welcome(message):
 def signal(message):
     bot.send_chat_action(message.chat.id, 'typing')
     prompt = "Agis comme un trader expert. Donne un signal court CALL ou PUT pour EUR/USD maintenant, avec 2 lignes d'explication maximum."
+    res = get_ai_response(prompt)
+    bot.send_message(message.chat.id, f"🚀 **ANALYSE DU MARCHÉ :**\n\n{res}")
+
+@bot.message_handler(func=lambda m: True)
+def chat(message):
+    bot.send_chat_action(message.chat.id, 'typing')
+    bot.reply_to(message, get_ai_response(message.text))
+
+# --- DÉMARRAGE ANTI-CRASH ---
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port), daemon=True).start()
+    
+    # On nettoie les anciennes connexions Telegram bloquées
+    try:
+        bot.remove_webhook()
+        time.sleep(1)
+    except:
+        pass
+
+    # Boucle infinie pour empêcher le script de s'éteindre
+    while True:
+        try:
+            bot.infinity_polling(timeout=15, long_polling_timeout=5)
+        except Exception as e:
+            time.sleep(3)
     
