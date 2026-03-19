@@ -2,63 +2,67 @@ import telebot
 from telebot import types
 import threading
 import os
-import google.generativeai as genai
+import requests
 from flask import Flask
 
-# --- 1. CONFIGURATION ---
+# --- CONFIGURATION ---
 TOKEN = "8658287331:AAHh4vzRPxMQPDxnjvDdSpfk483cAsvLnbk"
 bot = telebot.TeleBot(TOKEN)
 API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# --- 2. SERVEUR RENDER (POUR GARDER LE BOT EN LIGNE) ---
+# --- SERVEUR WEB ---
 app = Flask(__name__)
 @app.route('/')
-def health(): return "BOT ACTIF ET EN LIGNE", 200
+def health(): return "BOT V15 DIRECT API ONLINE", 200
 
-# --- 3. MOTEUR IA CENTRALISÉ ---
+# --- LE BYPASS DIRECT (CONNEXION PURE) ---
 def get_ai_response(prompt):
     if not API_KEY:
-        return "❌ ERREUR : La clé API manque sur Render."
+        return "❌ ERREUR : La clé API manque."
+    
+    # On attaque directement l'URL de Google (aucun bug de bibliothèque possible)
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
+    headers = {'Content-Type': 'application/json'}
+    data = {
+        "contents": [{"parts": [{"text": prompt}]}]
+    }
     
     try:
-        genai.configure(api_key=API_KEY)
-        # Utilisation du modèle le plus rapide et stable
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(prompt)
-        return response.text
+        response = requests.post(url, headers=headers, json=data)
+        result = response.json()
+        
+        # Si Google valide la requête
+        if response.status_code == 200:
+            return result['candidates'][0]['content']['parts'][0]['text']
+        else:
+            # Si la clé API a un souci, Google nous dira exactement pourquoi
+            error_msg = result.get('error', {}).get('message', 'Erreur inconnue')
+            return f"🚨 Refus de Google : {error_msg}"
+            
     except Exception as e:
-        # Si Google bloque, le bot ne crashe pas, il explique l'erreur
-        return f"🚨 Erreur serveur IA : {str(e)}"
+        return f"🚨 Erreur de réseau : {str(e)}"
 
-# --- 4. COMMANDES TELEGRAM ---
+# --- COMMANDES TELEGRAM ---
 @bot.message_handler(commands=['start', 'menu'])
 def welcome(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("🎯 SIGNAL TRADING", "🧠 QUESTION IA")
-    bot.send_message(message.chat.id, "✅ **SYSTÈME PRO INITIALISÉ**\nChoisissez une option ci-dessous :", reply_markup=markup)
+    bot.send_message(message.chat.id, "💎 **PRIME V15 (BYPASS ACTIVÉ)**\nConnexion directe établie.", reply_markup=markup)
 
 @bot.message_handler(func=lambda m: m.text == "🎯 SIGNAL TRADING")
 def signal(message):
-    # Fait apparaître "Le bot écrit..." sur Telegram
     bot.send_chat_action(message.chat.id, 'typing')
-    
-    # Ordre précis donné à l'IA
     prompt = "Agis comme un trader expert. Donne un signal court CALL ou PUT pour EUR/USD maintenant, avec 2 lignes d'explication maximum."
     res = get_ai_response(prompt)
-    
     bot.send_message(message.chat.id, f"🚀 **ANALYSE DU MARCHÉ :**\n\n{res}")
 
 @bot.message_handler(func=lambda m: True)
 def chat(message):
-    # Si l'utilisateur tape autre chose, le bot lui répond comme ChatGPT
     bot.send_chat_action(message.chat.id, 'typing')
     bot.reply_to(message, get_ai_response(message.text))
 
-# --- 5. DÉMARRAGE SÉCURISÉ ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
-    # Lancement du serveur Web dans un thread séparé
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port), daemon=True).start()
-    # Lancement du bot Telegram
-    print("Démarrage du bot...")
     bot.infinity_polling()
+                                   
