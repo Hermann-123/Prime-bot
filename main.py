@@ -1,80 +1,107 @@
-import telebot
-from telebot import types
-import threading
 import os
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import requests
-import time
-from flask import Flask
+import google.generativeai as genai
+from dotenv import load_dotenv
 
-# --- CONFIGURATION ---
-TOKEN = "8658287331:AAHh4vzRPxMQPDxnjvDdSpfk483cAsvLnbk"
-bot = telebot.TeleBot(TOKEN)
-API_KEY = os.environ.get("GEMINI_API_KEY")
+# 1. Chargement des clés secrètes (à configurer sur Render)
+load_dotenv()
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# --- SERVEUR WEB ---
-app = Flask(__name__)
-@app.route('/')
-def health(): return "BOT V16 (API 2.5) ONLINE", 200
+# 2. Initialisation du bot et de l'IA
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
+genai.configure(api_key=GEMINI_API_KEY)
+# On utilise le modèle IA adapté au texte direct
+model = genai.GenerativeModel('gemini-pro') 
 
-# --- LE BYPASS DIRECT ---
-def get_ai_response(prompt):
-    if not API_KEY:
-        return "❌ ERREUR : La clé API manque."
-    
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={API_KEY}"
-    headers = {'Content-Type': 'application/json'}
-    data = {
-        "contents": [{"parts": [{"text": prompt}]}]
-    }
-    
+# 3. Fonction : Récupérer le vrai prix en direct (Zéro surcharge mémoire)
+def obtenir_prix_actuel(symbole="BTCUSDT"):
+    """Récupère le prix sur Binance de façon ultra-rapide."""
+    url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbole}"
     try:
-        response = requests.post(url, headers=headers, json=data)
-        result = response.json()
-        
-        if response.status_code == 200:
-            return result['candidates'][0]['content']['parts'][0]['text']
-        else:
-            error_msg = result.get('error', {}).get('message', 'Erreur inconnue')
-            return f"🚨 Refus de Google : {error_msg}"
-            
+        reponse = requests.get(url, timeout=5)
+        donnees = reponse.json()
+        return round(float(donnees['price']), 4)
     except Exception as e:
-        return f"🚨 Erreur de réseau : {str(e)}"
+        print(f"Erreur API Binance: {e}")
+        return None
 
-# --- COMMANDES TELEGRAM ---
-@bot.message_handler(commands=['start', 'menu'])
-def welcome(message):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("🎯 SIGNAL TRADING", "🧠 QUESTION IA")
-    bot.send_message(message.chat.id, "💎 **PRIME V16 (NOUVELLE IA)**\nConnexion directe établie avec succès.", reply_markup=markup)
-
-@bot.message_handler(func=lambda m: m.text == "🎯 SIGNAL TRADING")
-def signal(message):
-    bot.send_chat_action(message.chat.id, 'typing')
-    prompt = "Agis comme un trader expert. Donne un signal court CALL ou PUT pour EUR/USD maintenant, avec 2 lignes d'explication maximum."
-    res = get_ai_response(prompt)
-    bot.send_message(message.chat.id, f"🚀 **ANALYSE DU MARCHÉ :**\n\n{res}")
-
-@bot.message_handler(func=lambda m: True)
-def chat(message):
-    bot.send_chat_action(message.chat.id, 'typing')
-    bot.reply_to(message, get_ai_response(message.text))
-
-# --- DÉMARRAGE ANTI-CRASH ---
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port), daemon=True).start()
+# 4. Interface : Le menu de démarrage
+@bot.message_handler(commands=['start'])
+def envoyer_menu(message):
+    markup = InlineKeyboardMarkup()
+    bouton = InlineKeyboardButton("🎯 SIGNAL TRADING", callback_data="generer_signal")
+    markup.add(bouton)
     
-    # On nettoie les anciennes connexions Telegram bloquées
-    try:
-        bot.remove_webhook()
-        time.sleep(1)
-    except:
-        pass
+    texte_accueil = (
+        "🏴‍☠️ **Bienvenue sur Signaux Prime** 🤯\n\n"
+        "L'analyseur est connecté aux données en temps réel.\n"
+        "Clique ci-dessous pour obtenir un signal immédiat."
+    )
+    bot.send_message(message.chat.id, texte_accueil, reply_markup=markup, parse_mode="Markdown")
 
-    # Boucle infinie pour empêcher le script de s'éteindre
-    while True:
-        try:
-            bot.infinity_polling(timeout=15, long_polling_timeout=5)
-        except Exception as e:
-            time.sleep(3)
+# 5. Le Cerveau : Ce qui se passe quand on clique sur le bouton
+@bot.callback_query_handler(func=lambda call: call.data == "generer_signal")
+def traitement_signal(call):
+    # Message d'attente
+    bot.edit_message_text("🔄 *Connexion au marché et analyse en cours...*", 
+                          call.message.chat.id, 
+                          call.message.message_id, 
+                          parse_mode="Markdown")
+    
+    # Étape A : On chope le prix en direct (ex: Bitcoin)
+    # Tu peux changer "BTCUSDT" par "EURUSDT" si tu veux cibler le Forex via Binance
+    prix_direct = obtenir_prix_actuel("BTCUSDT") 
+    
+    if not prix_direct:
+        bot.edit_message_text("❌ Impossible de récupérer le prix en direct. Réessaie.", 
+                              call.message.chat.id, 
+                              call.message.message_id)
+        return
+
+    # Étape B : Le Prompt Sniper (Aucun avertissement toléré)
+    prompt = f"""Tu es un trader institutionnel expert, froid et précis. 
+    Le prix actuel en direct du marché (BTC/USDT) est exactement de : {prix_direct}.
+    
+    Analyse techniquement la situation à très court terme. Tu dois UNIQUEMENT répondre avec un signal clair selon ce format strict (ne rajoute RIEN d'autre) :
+    
+    🚀 **SIGNAL :** [CALL ou PUT]
+    🎯 **ENTRÉE :** {prix_direct}
+    ✅ **TAKE PROFIT :** [Prix calculé logique]
+    🛑 **STOP LOSS :** [Prix calculé logique pour protéger le capital]
+    📊 **ANALYSE :** [Deux phrases courtes et purement techniques justifiant les niveaux de TP et SL].
+    
+    RÈGLES ABSOLUES : 
+    1. Interdiction stricte de faire des simulations.
+    2. Interdiction stricte d'ajouter des avertissements de risque financier.
+    3. Interdiction stricte de mentionner que tu es une IA."""
+
+    # Étape C : Envoi à l'IA et affichage de la réponse
+    try:
+        reponse_ia = model.generate_content(prompt)
+        
+        # On remet le bouton pour qu'il puisse relancer un signal
+        markup = InlineKeyboardMarkup()
+        bouton_nouveau = InlineKeyboardButton("🎯 NOUVEAU SIGNAL", callback_data="generer_signal")
+        markup.add(bouton_nouveau)
+        
+        # Affichage du signal final
+        bot.edit_message_text(reponse_ia.text, 
+                              call.message.chat.id, 
+                              call.message.message_id, 
+                              reply_markup=markup, 
+                              parse_mode="Markdown")
+                              
+    except Exception as e:
+        print(f"Erreur IA: {e}")
+        bot.edit_message_text("❌ Erreur lors de la génération du signal par l'IA.", 
+                              call.message.chat.id, 
+                              call.message.message_id)
+
+# 6. Lancement du bot
+if __name__ == "__main__":
+    print("Bot en ligne...")
+    bot.infinity_polling()
     
