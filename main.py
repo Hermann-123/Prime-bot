@@ -2,86 +2,59 @@ import telebot
 from telebot import types
 import threading
 import ccxt
-import pandas as pd
-from datetime import datetime, timedelta
-from flask import Flask
 import os
 import time
 import google.generativeai as genai
+from flask import Flask
 
-# --- 1. CONFIGURATION SÉCURISÉE ---
-# Le code récupère la clé que tu as mise dans Render
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    # Modèle Flash : ultra rapide pour éviter les coupures sur Render
-    model = genai.GenerativeModel('gemini-1.5-flash')
-else:
-    print("⚠️ ERREUR : Clé API introuvable dans les variables d'environnement")
-
+# --- CONFIG ---
 TOKEN = "8658287331:AAHh4vzRPxMQPDxnjvDdSpfk483cAsvLnbk"
 bot = telebot.TeleBot(TOKEN)
-sys_data = {"pair": "EUR/USD"}
 
-# --- 2. SERVEUR DE MAINTIEN EN VIE ---
+# On récupère la clé depuis Render
+API_KEY = os.environ.get("GEMINI_API_KEY")
+
 app = Flask(__name__)
 @app.route('/')
-def health(): return "PRIME V10 ONLINE", 200
+def health(): return "DEBUG MODE ACTIVE", 200
 
-def run_server():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
-
-# --- 3. CERVEAU IA AVEC AUTO-RETRY ---
-def get_ai_advice(prompt):
-    for attempt in range(2):  # Réessaie 2 fois en cas de bug
-        try:
-            full_prompt = f"Tu es un trader pro. Réponds court (15 mots max) : {prompt}"
-            response = model.generate_content(full_prompt)
-            return response.text
-        except Exception:
-            time.sleep(2)
-    return "⚠️ Le marché est trop agité. Réessayez dans 1 minute."
-
-# --- 4. COMMANDES DU BOT ---
-@bot.message_handler(commands=['start', 'menu'])
-def welcome(message):
-    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    markup.add("🎯 ANALYSE IA SNIPER", "🧠 DEMANDER À L'IA")
-    bot.send_message(message.chat.id, "💎 **PRIME TERMINAL V10 (PRO)**\n_Système IA sécurisé et actif._", reply_markup=markup)
-
-@bot.message_handler(func=lambda m: m.text == "🎯 ANALYSE IA SNIPER")
-def get_ia_signal(message):
-    msg = bot.send_message(message.chat.id, "🔍 *Analyse des graphiques en cours...*", parse_mode="Markdown")
+# --- LE DÉTECTEUR D'ERREUR ---
+def get_ai_response(prompt):
+    if not API_KEY:
+        return "❌ ERREUR : La clé API n'est pas détectée par Render."
+    
     try:
-        # Analyse technique simplifiée
-        ai_decision = get_ai_advice(f"Donne une prédiction CALL ou PUT pour {sys_data['pair']}.")
-        
-        # Temps d'expiration
-        h = (datetime.now() + timedelta(seconds=90)).replace(second=0, microsecond=0) + timedelta(minutes=1)
-        
-        signal = (
-            f"🚀 **SIGNAL SNIPER IA**\n\n"
-            f"🛰 **ACTIF :** `{sys_data['pair']}`\n"
-            f"📊 **IA :** {ai_decision}\n"
-            f"📍 **ENTRÉE :** `{h.strftime('%H:%M')}:00`"
-        )
-        bot.edit_message_text(signal, message.chat.id, msg.message_id, parse_mode="Markdown")
-    except:
-        bot.send_message(message.chat.id, "❌ Flux de données saturé.")
+        genai.configure(api_key=API_KEY)
+        # On utilise 'gemini-pro' qui est le plus compatible partout
+        model = genai.GenerativeModel('gemini-pro')
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        # ICI : On affiche l'erreur réelle pour savoir quoi réparer
+        return f"🚨 ERREUR IA RÉELLE : {str(e)}"
 
-@bot.message_handler(func=lambda m: m.text == "🧠 DEMANDER À L'IA")
-def ask_mode(message):
-    bot.send_message(message.chat.id, "💬 Posez votre question sur le trading à l'IA :")
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add("🎯 TESTER LE SIGNAL", "🧠 POSER UNE QUESTION")
+    bot.send_message(message.chat.id, "🛠 **MODE DIAGNOSTIC V11**", reply_markup=markup)
+
+@bot.message_handler(func=lambda m: m.text == "🎯 TESTER LE SIGNAL")
+def test_signal(message):
+    res = get_ai_response("Donne un signal CALL ou PUT pour EUR/USD avec une courte raison.")
+    bot.send_message(message.chat.id, f"📊 **RÉSULTAT DU TEST :**\n\n{res}")
+
+@bot.message_handler(func=lambda m: m.text == "🧠 POSER UNE QUESTION")
+def ask(message):
+    bot.send_message(message.chat.id, "Pose ta question :")
 
 @bot.message_handler(func=lambda m: True)
-def handle_chat(message):
-    if len(message.text) > 2:
-        reponse = get_ai_advice(message.text)
-        bot.reply_to(message, reponse)
+def chat(message):
+    answer = get_ai_response(message.text)
+    bot.reply_to(message, answer)
 
 if __name__ == "__main__":
-    threading.Thread(target=run_server, daemon=True).start()
-    bot.infinity_polling(timeout=20, long_polling_timeout=10)
-               
+    port = int(os.environ.get("PORT", 8080))
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port), daemon=True).start()
+    bot.infinity_polling()
+    
