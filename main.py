@@ -47,7 +47,7 @@ def obtenir_prix_actuel(symbole):
     except:
         return None
 
-# --- VÉRIFICATION AUTOMATIQUE (ITM/OTM) ---
+# --- VÉRIFICATION AUTOMATIQUE (ITM/OTM) CORRIGÉE ---
 def relever_prix_entree(chat_id, symbole):
     prix = obtenir_prix_actuel(symbole)
     if prix and chat_id in trades_en_cours:
@@ -149,26 +149,24 @@ def analyser_binaire_pro(symbole):
 
 # --- SCANNER AUTOMATIQUE EN ARRIÈRE-PLAN ---
 def scanner_marche_auto():
-    devises_a_surveiller = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCHF", "USDCAD", "USDPKR"]
+    # Suppression de GBPUSD ici
+    devises_a_surveiller = ["EURUSD", "USDJPY", "AUDUSD", "USDCHF", "USDCAD", "USDPKR"]
     while True:
-        time.sleep(60)  # Le bot scanne désormais TOUTES LES MINUTES en silence !
+        time.sleep(60)
         if not utilisateurs_actifs:
             continue
         
         for actif in devises_a_surveiller:
             action, confiance, exp, duree = analyser_binaire_pro(actif)
             
-            # Si un signal est trouvé sur une devise
             if action and "⚠️" not in action and confiance:
                 maintenant = time.time()
                 
-                # Vérification Anti-Spam (Pause de 15 minutes max par devise pour ne pas inonder de messages)
                 if actif in derniere_alerte_auto and (maintenant - derniere_alerte_auto[actif] < 900):
                     continue
                     
                 derniere_alerte_auto[actif] = maintenant
                 
-                # Création du bouton rapide intégré à l'alerte
                 markup = InlineKeyboardMarkup()
                 markup.add(InlineKeyboardButton(f"🔒 Verrouiller {actif[:3]}/{actif[3:]}", callback_data=f"set_{actif}"))
                 
@@ -259,10 +257,10 @@ def bienvenue(message):
 
 @bot.message_handler(func=lambda m: m.text == "📊 CHOISIR UNE DEVISE")
 def devises(message):
+    # Suppression de GBP/USD de l'interface
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
         InlineKeyboardButton("🇪🇺 EUR / USD", callback_data="set_EURUSD"),
-        InlineKeyboardButton("🇬🇧 GBP / USD", callback_data="set_GBPUSD"),
         InlineKeyboardButton("🇯🇵 USD / JPY", callback_data="set_USDJPY"),
         InlineKeyboardButton("🇦🇺 AUD / USD", callback_data="set_AUDUSD"),
         InlineKeyboardButton("🇨🇭 USD / CHF", callback_data="set_USDCHF"),
@@ -327,13 +325,16 @@ def lancer(message):
     action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
     trades_en_cours[message.chat.id] = {'symbole': actif, 'action': action_simplifiee}
     
-    Timer(120, relever_prix_entree, args=[message.chat.id, actif]).start()
+    # CORRECTION DE LA SYNCHRONISATION DU CHRONOMÈTRE
+    delai_attente_entree = (heure_entree_dt - datetime.datetime.now()).total_seconds()
+    delai_attente_entree = max(0, delai_attente_entree) # Sécurité pour ne pas avoir de délai négatif
     
-    delai_verification = 120 + duree_secondes
+    Timer(delai_attente_entree, relever_prix_entree, args=[message.chat.id, actif]).start()
+    
+    delai_verification = delai_attente_entree + duree_secondes
     Timer(delai_verification, verifier_resultat, args=[message.chat.id]).start()
 
 if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     bot.infinity_polling()
-    
