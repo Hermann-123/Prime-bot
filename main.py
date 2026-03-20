@@ -18,6 +18,7 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 CAPITAL_ACTUEL = 40650 
 user_prefs = {}
 trades_en_cours = {} # Mémoire vive du bot pour suivre les trades
+utilisateurs_actifs = set() # Mémoire pour savoir à qui envoyer les alertes de 25min
 
 app = Flask(__name__)
 
@@ -75,7 +76,7 @@ def verifier_resultat(chat_id):
 
     # Envoi du message final
     if gagne:
-        texte = f"✅ **VICTOIRE (ITM) !** 🎉\n\nLe trade sur {symbole[:3]}/{symbole[3:]} est passé avec succès !\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`"
+        texte = f"✅ **VICTOIRE (ITM) !**\n\nSignal passé avec succès 🎉\nLe trade sur {symbole[:3]}/{symbole[3:]} a été validé !\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`"
     else:
         texte = f"❌ **PERTE (OTM)** ⚠️\n\nLe marché s'est retourné sur {symbole[:3]}/{symbole[3:]}.\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`\n\n*Garde ton sang-froid, respecte ton Money Management pour la prochaine opportunité.*"
     
@@ -95,7 +96,6 @@ def analyser_binaire_pro(symbole):
         prix_liste = donnees['chart']['result'][0]['indicators']['quote'][0]['close']
         prix_valides = [p for p in prix_liste if p is not None]
         
-        # CORRECTION DU BUG ICI (Ajout du 4ème 'None')
         if len(prix_valides) < 20: return "⚠️ Pas assez de données", None, None, None
 
         prix_actuel = prix_valides[-1]
@@ -149,12 +149,40 @@ def analyser_binaire_pro(symbole):
             action = "🟢 ACHAT (CALL)"
             confiance = random.randint(85, 91)
         else:
-            # CORRECTION DU BUG ICI AUSSI (Ajout du 4ème 'None')
             return "⚠️ Marché neutre (Attente de cassure)", None, None, None
             
         return action, confiance, expiration, duree_secondes
     except Exception as e:
         return None, None, None, None
+
+# --- SCANNER AUTOMATIQUE TOUTES LES 25 MINUTES ---
+def scanner_marche_auto():
+    devises_a_surveiller = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCHF", "USDCAD", "USDPKR"]
+    while True:
+        time.sleep(1500)  # Pause de 25 minutes (1500 secondes)
+        if not utilisateurs_actifs:
+            continue
+        
+        meilleur_actif = None
+        meilleure_confiance = 0
+        
+        # Le bot scanne chaque devise en silence
+        for actif in devises_a_surveiller:
+            action, confiance, exp, duree = analyser_binaire_pro(actif)
+            # Si le marché n'est pas neutre (pas de ⚠️) et qu'on a un signal
+            if action and action is not None and "⚠️" not in action and confiance:
+                if confiance > meilleure_confiance:
+                    meilleure_confiance = confiance
+                    meilleur_actif = actif
+        
+        # S'il a trouvé un bon setup, il prévient les utilisateurs
+        if meilleur_actif:
+            alerte_msg = f"🚨 **ALERTE MARCHÉ (Scan Auto)** 🚨\n\nJ'ai détecté un excellent momentum sur **{meilleur_actif[:3]}/{meilleur_actif[3:]}** (Confiance estimée : {meilleure_confiance}%).\n\nVa dans le menu, choisis cette devise et lance l'analyse pour confirmer et obtenir le signal précis !"
+            for chat_id in utilisateurs_actifs:
+                try:
+                    bot.send_message(chat_id, alerte_msg, parse_mode="Markdown")
+                except:
+                    pass
 
 # --- INTERFACE CLAVIER ---
 def obtenir_clavier():
@@ -164,14 +192,19 @@ def obtenir_clavier():
 
 @bot.message_handler(commands=['start'])
 def bienvenue(message):
+    utilisateurs_actifs.add(message.chat.id)
     bot.send_message(message.chat.id, "🏴‍☠️ **TERMINAL PRIME - ÉDITION BINAIRE** 🔥\n\nMoteur : **Bollinger Bands + Stochastique**\nFonctions : **Vérification ITM/OTM Automatique**", reply_markup=obtenir_clavier(), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "📊 CHOISIR UNE DEVISE")
 def devises(message):
-    markup = InlineKeyboardMarkup(row_width=1)
+    markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
         InlineKeyboardButton("🇪🇺 EUR / USD", callback_data="set_EURUSD"),
+        InlineKeyboardButton("🇬🇧 GBP / USD", callback_data="set_GBPUSD"),
         InlineKeyboardButton("🇯🇵 USD / JPY", callback_data="set_USDJPY"),
+        InlineKeyboardButton("🇦🇺 AUD / USD", callback_data="set_AUDUSD"),
+        InlineKeyboardButton("🇨🇭 USD / CHF", callback_data="set_USDCHF"),
+        InlineKeyboardButton("🇨🇦 USD / CAD", callback_data="set_USDCAD"),
         InlineKeyboardButton("🇵🇰 USD / PKR", callback_data="set_USDPKR")
     )
     bot.send_message(message.chat.id, "Sélectionne l'actif à scanner :", reply_markup=markup)
@@ -226,19 +259,22 @@ def lancer(message):
 ──────────────────
 💎 *Audit de résultat (ITM/OTM) activé en arrière-plan.*"""
 
-    bot.edit_message_text(signal, message.chat.id, msg.message_id, parse_mode="Markdown")
+    # Suppression du message de chargement et envoi d'un NOUVEAU message pour déclencher la notification
+    bot.delete_message(message.chat.id, msg.message_id)
+    bot.send_message(message.chat.id, signal, parse_mode="Markdown")
 
-    # --- CORRECTION DES CHRONOMÈTRES POUR LE SUIVI DE TRADE ---
+    # --- SUIVI DE TRADE ---
     action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
     trades_en_cours[message.chat.id] = {'symbole': actif, 'action': action_simplifiee}
     
-    # Le bot attend pile 120 secondes (2 minutes) pour relever le prix au moment où tu cliques sur entrer
     Timer(120, relever_prix_entree, args=[message.chat.id, actif]).start()
     
-    # Il attend 120 secondes + le temps d'expiration pour afficher s'il a gagné ou perdu
     delai_verification = 120 + duree_secondes
     Timer(delai_verification, verifier_resultat, args=[message.chat.id]).start()
 
 if __name__ == "__main__":
     keep_alive()
+    # Lancement du scanner en arrière-plan
+    Thread(target=scanner_marche_auto, daemon=True).start()
     bot.infinity_polling()
+                               
