@@ -18,8 +18,9 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 CAPITAL_ACTUEL = 40650 
 user_prefs = {}
-trades_en_cours = {} # Mémoire vive du bot pour suivre les trades
+trades_en_cours = {} # Mémoire pour suivre les trades
 utilisateurs_actifs = set() # Mémoire pour envoyer les alertes auto
+derniere_alerte_auto = {} # Mémoire Anti-Spam pour le scanner
 
 app = Flask(__name__)
 
@@ -48,13 +49,11 @@ def obtenir_prix_actuel(symbole):
 
 # --- VÉRIFICATION AUTOMATIQUE (ITM/OTM) ---
 def relever_prix_entree(chat_id, symbole):
-    """S'active exactement à l'heure d'entrée pour mémoriser le prix."""
     prix = obtenir_prix_actuel(symbole)
     if prix and chat_id in trades_en_cours:
         trades_en_cours[chat_id]['prix_entree'] = prix
 
 def verifier_resultat(chat_id):
-    """S'active à la fin de l'expiration pour juger la victoire ou la défaite."""
     trade = trades_en_cours.get(chat_id)
     if not trade or not trade.get('prix_entree'):
         bot.send_message(chat_id, "⚠️ **Trade terminé.** (Flux interrompu, résultat exact non vérifiable).", parse_mode="Markdown")
@@ -99,22 +98,18 @@ def analyser_binaire_pro(symbole):
             'close': quote['close'],
             'high': quote['high'],
             'low': quote['low']
-        })
+        }).dropna()
         
-        df = df.dropna()
         if len(df) < 50:
             return "⚠️ Pas assez de données", None, None, None
 
-        # 1. BANDES DE BOLLINGER (20, 2)
         indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
         df['bb_haute'] = indicateur_bb.bollinger_hband()
         df['bb_basse'] = indicateur_bb.bollinger_lband()
         
-        # 2. STOCHASTIQUE (14, 3, 3)
         indicateur_stoch = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3)
         df['stoch_k'] = indicateur_stoch.stoch()
         
-        # 3. RSI (14)
         indicateur_rsi = ta.momentum.RSIIndicator(close=df['close'], window=14)
         df['rsi'] = indicateur_rsi.rsi()
 
@@ -133,16 +128,13 @@ def analyser_binaire_pro(symbole):
             expiration = "2 MINUTES ⏱"
             duree_secondes = 120
         
-        # --- LOGIQUE SNIPER AVANCÉE (RSI Assoupli) ---
         action = None
         confiance = 0
         
-        # VENTE (PUT) : Touche la bande haute + Stochastique (>80) + RSI assoupli (>60 au lieu de 70)
         if prix_actuel >= derniere_bougie['bb_haute'] and derniere_bougie['stoch_k'] > 80 and derniere_bougie['rsi'] > 60:
             action = "🔴 VENTE (PUT)"
             confiance = random.randint(88, 95) 
             
-        # ACHAT (CALL) : Touche la bande basse + Stochastique (<20) + RSI assoupli (<40 au lieu de 30)
         elif prix_actuel <= derniere_bougie['bb_basse'] and derniere_bougie['stoch_k'] < 20 and derniere_bougie['rsi'] < 40:
             action = "🟢 ACHAT (CALL)"
             confiance = random.randint(88, 95)
@@ -153,34 +145,40 @@ def analyser_binaire_pro(symbole):
         return action, confiance, expiration, duree_secondes
         
     except Exception as e:
-        print(f"Erreur d'analyse : {e}")
         return None, None, None, None
 
 # --- SCANNER AUTOMATIQUE EN ARRIÈRE-PLAN ---
 def scanner_marche_auto():
     devises_a_surveiller = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCHF", "USDCAD", "USDPKR"]
     while True:
-        time.sleep(1500)  # Pause de 25 minutes
+        time.sleep(60)  # Le bot scanne désormais TOUTES LES MINUTES en silence !
         if not utilisateurs_actifs:
             continue
         
-        meilleur_actif = None
-        meilleure_confiance = 0
-        
         for actif in devises_a_surveiller:
             action, confiance, exp, duree = analyser_binaire_pro(actif)
+            
+            # Si un signal est trouvé sur une devise
             if action and "⚠️" not in action and confiance:
-                if confiance > meilleure_confiance:
-                    meilleure_confiance = confiance
-                    meilleur_actif = actif
-        
-        if meilleur_actif:
-            alerte_msg = f"🚨 **ALERTE MARCHÉ (Scan Auto)** 🚨\n\nJ'ai détecté un excellent momentum sur **{meilleur_actif[:3]}/{meilleur_actif[3:]}** (Confiance estimée : {meilleure_confiance}%).\n\nChoisis cette devise et lance l'analyse pour confirmer le signal !"
-            for chat_id in utilisateurs_actifs:
-                try:
-                    bot.send_message(chat_id, alerte_msg, parse_mode="Markdown")
-                except:
-                    pass
+                maintenant = time.time()
+                
+                # Vérification Anti-Spam (Pause de 15 minutes max par devise pour ne pas inonder de messages)
+                if actif in derniere_alerte_auto and (maintenant - derniere_alerte_auto[actif] < 900):
+                    continue
+                    
+                derniere_alerte_auto[actif] = maintenant
+                
+                # Création du bouton rapide intégré à l'alerte
+                markup = InlineKeyboardMarkup()
+                markup.add(InlineKeyboardButton(f"🔒 Verrouiller {actif[:3]}/{actif[3:]}", callback_data=f"set_{actif}"))
+                
+                alerte_msg = f"🚨 **NOUVELLE OPPORTUNITÉ DÉTECTÉE** 🚨\n\nL'algorithme vient de repérer une configuration Sniper sur **{actif[:3]}/{actif[3:]}** (Confiance : {confiance}%).\n\n👇 *Clique sur le bouton ci-dessous pour verrouiller la cible, puis lance l'analyse !*"
+                
+                for chat_id in utilisateurs_actifs:
+                    try:
+                        bot.send_message(chat_id, alerte_msg, reply_markup=markup, parse_mode="Markdown")
+                    except:
+                        pass
 
 # --- COMMANDE SECRÈTE : RADIOGRAPHIE DU MARCHÉ ---
 @bot.message_handler(commands=['vision'])
@@ -257,7 +255,7 @@ def obtenir_clavier():
 @bot.message_handler(commands=['start'])
 def bienvenue(message):
     utilisateurs_actifs.add(message.chat.id)
-    bot.send_message(message.chat.id, "🏴‍☠️ **TERMINAL PRIME - ÉDITION BINAIRE** 🔥\n\nMoteur : **Pandas + TA (BB, RSI, Stochastique)**\nFonctions : **Auto-Scan 25m & Audit ITM/OTM**", reply_markup=obtenir_clavier(), parse_mode="Markdown")
+    bot.send_message(message.chat.id, "🏴‍☠️ **TERMINAL PRIME - ÉDITION BINAIRE** 🔥\n\nMoteur : **Pandas + TA (BB, RSI, Stochastique)**\nFonctions : **Auto-Scan 1m & Audit ITM/OTM**", reply_markup=obtenir_clavier(), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "📊 CHOISIR UNE DEVISE")
 def devises(message):
@@ -286,15 +284,15 @@ def lancer(message):
         bot.send_message(message.chat.id, "⚠️ Choisis d'abord une devise !")
         return
 
-    msg = bot.send_message(message.chat.id, "⏳ *Initialisation du scan algorithmique (Temps requis : 1m 30s)...*", parse_mode="Markdown")
+    msg = bot.send_message(message.chat.id, "⏳ *Initialisation du scan algorithmique rapide...*", parse_mode="Markdown")
     
-    time.sleep(30)
+    time.sleep(2)
     bot.edit_message_text(f"📡 *Connexion au flux {actif[:3]}/{actif[3:]} et scan de la volatilité en cours...*", message.chat.id, msg.message_id, parse_mode="Markdown")
-    time.sleep(30)
+    time.sleep(2)
     bot.edit_message_text("⚙️ *Calcul des indicateurs avancés (BB, RSI, Stochastique)...*", message.chat.id, msg.message_id, parse_mode="Markdown")
-    time.sleep(25)
+    time.sleep(2)
     bot.edit_message_text("💎 *Triple confirmation et verrouillage Sniper...*", message.chat.id, msg.message_id, parse_mode="Markdown")
-    time.sleep(5)
+    time.sleep(1)
     
     action, confiance, exp, duree_secondes = analyser_binaire_pro(actif)
     
@@ -338,3 +336,4 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     bot.infinity_polling()
+    
