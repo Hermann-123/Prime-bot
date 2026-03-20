@@ -17,7 +17,7 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 CAPITAL_ACTUEL = 40650 
 user_prefs = {}
-trades_en_cours = {} # NOUVEAU : Mémoire vive du bot pour suivre les trades
+trades_en_cours = {} # Mémoire vive du bot pour suivre les trades
 
 app = Flask(__name__)
 
@@ -95,7 +95,8 @@ def analyser_binaire_pro(symbole):
         prix_liste = donnees['chart']['result'][0]['indicators']['quote'][0]['close']
         prix_valides = [p for p in prix_liste if p is not None]
         
-        if len(prix_valides) < 20: return "⚠️ Pas assez de données", None, None
+        # CORRECTION DU BUG ICI (Ajout du 4ème 'None')
+        if len(prix_valides) < 20: return "⚠️ Pas assez de données", None, None, None
 
         prix_actuel = prix_valides[-1]
         
@@ -148,7 +149,8 @@ def analyser_binaire_pro(symbole):
             action = "🟢 ACHAT (CALL)"
             confiance = random.randint(85, 91)
         else:
-            return "⚠️ Marché neutre (Attente de cassure)", None, None
+            # CORRECTION DU BUG ICI AUSSI (Ajout du 4ème 'None')
+            return "⚠️ Marché neutre (Attente de cassure)", None, None, None
             
         return action, confiance, expiration, duree_secondes
     except Exception as e:
@@ -226,17 +228,15 @@ def lancer(message):
 
     bot.edit_message_text(signal, message.chat.id, msg.message_id, parse_mode="Markdown")
 
-    # --- MÉMOIRE ET TIMERS POUR L'AUDIT ITM/OTM ---
-    
-    # 1. On enregistre le trade dans la mémoire du bot
+    # --- CORRECTION DES CHRONOMÈTRES POUR LE SUIVI DE TRADE ---
     action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
     trades_en_cours[message.chat.id] = {'symbole': actif, 'action': action_simplifiee}
     
-    # 2. Timer 1 : S'active dans 30 secondes (Pile à l'heure d'entrée fixée à +2 minutes, car on a déjà attendu 1m30)
-    Timer(30, relever_prix_entree, args=[message.chat.id, actif]).start()
+    # Le bot attend pile 120 secondes (2 minutes) pour relever le prix au moment où tu cliques sur entrer
+    Timer(120, relever_prix_entree, args=[message.chat.id, actif]).start()
     
-    # 3. Timer 2 : S'active à la fin de l'expiration pour donner le verdict final
-    delai_verification = 30 + duree_secondes
+    # Il attend 120 secondes + le temps d'expiration pour afficher s'il a gagné ou perdu
+    delai_verification = 120 + duree_secondes
     Timer(delai_verification, verifier_resultat, args=[message.chat.id]).start()
 
 if __name__ == "__main__":
