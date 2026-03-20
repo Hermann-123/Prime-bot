@@ -1,6 +1,6 @@
 import os
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
 import requests
 from dotenv import load_dotenv
 import datetime
@@ -43,23 +43,25 @@ def obtenir_donnees_marche(symbole):
         print(f"Erreur API Forex: {e}")
         return None, None
 
-# --- ÉTAPE 1 : MENU DE DÉMARRAGE ---
+# --- ÉTAPE 1 : MENU DE DÉMARRAGE ET NETTOYAGE DU CLAVIER ---
 @bot.message_handler(commands=['start'])
 def envoyer_menu(message):
+    # 1. Ordre de destruction de l'ancien clavier en bas (les boutons rouges)
+    supprimer_clavier = ReplyKeyboardRemove()
+    msg_nettoyage = bot.send_message(message.chat.id, "🔄 Mise à jour de l'interface...", reply_markup=supprimer_clavier)
+    bot.delete_message(message.chat.id, msg_nettoyage.message_id) # On efface ce message instantanément pour que ce soit invisible
+
+    # 2. Affichage du vrai menu
     markup = InlineKeyboardMarkup()
     btn_choisir = InlineKeyboardButton("📊 Choisir une devise", callback_data="menu_devises")
     markup.add(btn_choisir)
+    
     texte_accueil = (
         "🏴‍☠️ **TERMINAL SIGNAUX PRIME** 🤯\n\n"
         "Système Algorithmique HFT connecté au flux Forex.\n"
         "Clique ci-dessous pour commencer :"
     )
     bot.send_message(message.chat.id, texte_accueil, reply_markup=markup, parse_mode="Markdown")
-
-# --- AJOUT : RÉACTION AU GROS BOUTON DU CLAVIER ---
-@bot.message_handler(func=lambda message: message.text == "🎯 SIGNAL TRADING")
-def menu_via_clavier(message):
-    envoyer_menu(message)
 
 # --- ÉTAPE 2 : CHOIX DE LA DEVISE ---
 @bot.callback_query_handler(func=lambda call: call.data == "menu_devises")
@@ -75,14 +77,13 @@ def menu_devises(call):
                           call.message.message_id, 
                           reply_markup=markup)
 
-# --- ÉTAPE 3 : BOUTON D'ANALYSE SEUL ---
+# --- ÉTAPE 3 : BOUTON D'ANALYSE ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith("select_"))
 def confirmation_devise(call):
     actif_choisi = call.data.split("_")[1]
     actif_formate = f"{actif_choisi[:3]}/{actif_choisi[3:]}"
     
     markup = InlineKeyboardMarkup(row_width=1)
-    # J'ai retiré le bouton de retour ici pour que ce soit plus direct
     btn_analyser = InlineKeyboardButton(f"🚀 Analyser {actif_formate}", callback_data=f"analyse_{actif_choisi}")
     markup.add(btn_analyser)
     
@@ -129,11 +130,10 @@ def traitement_signal(call):
         
     confiance = random.randint(86, 98)
 
-    # NOUVEAU CALCUL DE L'HEURE (Garantit entre 1m et 1m50s de préparation)
+    # L'heure avec +2 minutes de préparation
     maintenant = datetime.datetime.now()
     heure_entree = (maintenant + datetime.timedelta(minutes=2)).replace(second=0, microsecond=0).strftime("%H:%M:00")
 
-    # FORMAT EXACT SANS LES CROCHETS AUTOUR DU POURCENTAGE
     signal_texte = f"""🚀 SIGNAL SNIPER GÉNÉRÉ 🚀
 ──────────────────
 🛰 ACTIF : {actif_formate}
@@ -145,15 +145,20 @@ def traitement_signal(call):
 ──────────────────
 💎 Prêt pour l'entrée à la seconde 00."""
 
-    # reply_markup=None supprime totalement les boutons en dessous du signal
+    # ON REMET LES BOUTONS SOUS LE SIGNAL (Zone Blanche)
+    markup = InlineKeyboardMarkup(row_width=1)
+    btn_relancer = InlineKeyboardButton("🎯 RELANCER L'ANALYSE", callback_data=f"analyse_{actif_choisi}")
+    btn_retour = InlineKeyboardButton("🔙 Changer de devise", callback_data="menu_devises")
+    markup.add(btn_relancer, btn_retour)
+
     bot.edit_message_text(signal_texte, 
                           call.message.chat.id, 
                           call.message.message_id, 
-                          reply_markup=None, 
+                          reply_markup=markup, 
                           parse_mode="Markdown")
 
 if __name__ == "__main__":
     keep_alive()
     print("Terminal Algorithmique HFT en ligne...")
     bot.infinity_polling()
-    
+                            
