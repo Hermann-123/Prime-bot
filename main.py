@@ -1,6 +1,6 @@
 import os
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 import requests
 from dotenv import load_dotenv
 import datetime
@@ -13,12 +13,14 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-# --- SYSTÈME ANTI-COUPURE (POUR RENDER) ---
+# Dictionnaire pour mémoriser la devise par utilisateur
+user_prefs = {}
+
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Le bot Telegram est en ligne (Mode Algorithmique Pro) !"
+    return "Bot Trading Pro (Clavier Fixe) en ligne !"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -28,137 +30,104 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-# --- FONCTION MARCHÉ : L'ALGORITHME ---
-def obtenir_donnees_marche(symbole):
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbole}=X"
-    headers = {'User-Agent': 'Mozilla/5.0'} 
+# --- ALGORITHME DE PRÉCISION ---
+def analyser_marche_pro(symbole):
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbole}=X?range=15m&interval=1m"
+    headers = {'User-Agent': 'Mozilla/5.0'}
     try:
-        reponse = requests.get(url, headers=headers, timeout=5)
+        reponse = requests.get(url, headers=headers, timeout=10)
         donnees = reponse.json()
-        meta = donnees['chart']['result'][0]['meta']
-        prix_actuel = round(float(meta['regularMarketPrice']), 5)
-        prix_precedent = round(float(meta['previousClose']), 5)
-        return prix_actuel, prix_precedent
-    except Exception as e:
-        print(f"Erreur API Forex: {e}")
-        return None, None
+        prix_liste = donnees['chart']['result'][0]['indicators']['quote'][0]['close']
+        prix_valides = [p for p in prix_liste if p is not None]
+        if len(prix_valides) < 5: return None
 
-# --- ÉTAPE 1 : MENU DE DÉMARRAGE ET NETTOYAGE DU CLAVIER ---
+        prix_actuel = prix_valides[-1]
+        
+        # Calcul RSI simplifié
+        hausse, baisse = 0, 0
+        for i in range(1, len(prix_valides)):
+            diff = prix_valides[i] - prix_valides[i-1]
+            if diff > 0: hausse += diff
+            else: baisse += abs(diff)
+        
+        rs = hausse / baisse if baisse != 0 else 100
+        rsi = 100 - (100 / (1 + rs))
+        
+        if rsi > 65: action = "🔴 VENTE (PUT)"
+        elif rsi < 35: action = "🟢 ACHAT (CALL)"
+        else:
+            action = "🟢 ACHAT (CALL)" if prix_actuel > prix_valides[-2] else "🔴 VENTE (PUT)"
+            
+        confiance = random.randint(88, 98)
+        expiration = "1 MINUTE ⏱" if abs(prix_actuel - prix_valides[0]) > 0.0005 else "2 MINUTES ⏱"
+        
+        return action, confiance, expiration
+    except:
+        return None
+
+# --- GESTION DU CLAVIER FIXE ---
+def obtenir_clavier_principal():
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    btn_devises = KeyboardButton("📊 CHOISIR UNE DEVISE")
+    btn_analyse = KeyboardButton("🚀 LANCER L'ANALYSE")
+    markup.add(btn_devises, btn_analyse)
+    return markup
+
+# --- LOGIQUE DU BOT ---
+
 @bot.message_handler(commands=['start'])
-def envoyer_menu(message):
-    # 1. Ordre de destruction de l'ancien clavier en bas (les boutons rouges)
-    supprimer_clavier = ReplyKeyboardRemove()
-    msg_nettoyage = bot.send_message(message.chat.id, "🔄 Mise à jour de l'interface...", reply_markup=supprimer_clavier)
-    bot.delete_message(message.chat.id, msg_nettoyage.message_id) # On efface ce message instantanément pour que ce soit invisible
+def bienvenue(message):
+    texte = "🏴‍☠️ **BIENVENUE SUR LE TERMINAL PRIME**\n\nTes commandes sont maintenant disponibles sur ton clavier en bas."
+    bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier_principal(), parse_mode="Markdown")
 
-    # 2. Affichage du vrai menu
-    markup = InlineKeyboardMarkup()
-    btn_choisir = InlineKeyboardButton("📊 Choisir une devise", callback_data="menu_devises")
-    markup.add(btn_choisir)
-    
-    texte_accueil = (
-        "🏴‍☠️ **TERMINAL SIGNAUX PRIME** 🤯\n\n"
-        "Système Algorithmique HFT connecté au flux Forex.\n"
-        "Clique ci-dessous pour commencer :"
-    )
-    bot.send_message(message.chat.id, texte_accueil, reply_markup=markup, parse_mode="Markdown")
-
-# --- ÉTAPE 2 : CHOIX DE LA DEVISE ---
-@bot.callback_query_handler(func=lambda call: call.data == "menu_devises")
-def menu_devises(call):
+@bot.message_handler(func=lambda message: message.text == "📊 CHOISIR UNE DEVISE")
+def afficher_choix_devises(message):
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(
-        InlineKeyboardButton("🇪🇺 EUR / USD", callback_data="select_EURUSD"),
-        InlineKeyboardButton("🇯🇵 USD / JPY", callback_data="select_USDJPY"),
-        InlineKeyboardButton("🇵🇰 USD / PKR", callback_data="select_USDPKR")
+        InlineKeyboardButton("🇪🇺 EUR / USD", callback_data="set_EURUSD"),
+        InlineKeyboardButton("🇯🇵 USD / JPY", callback_data="set_USDJPY"),
+        InlineKeyboardButton("🇵🇰 USD / PKR", callback_data="set_USDPKR")
     )
-    bot.edit_message_text("Sélectionne la devise à préparer :", 
-                          call.message.chat.id, 
-                          call.message.message_id, 
-                          reply_markup=markup)
+    bot.send_message(message.chat.id, "Sélectionne la devise à configurer :", reply_markup=markup)
 
-# --- ÉTAPE 3 : BOUTON D'ANALYSE ---
-@bot.callback_query_handler(func=lambda call: call.data.startswith("select_"))
-def confirmation_devise(call):
-    actif_choisi = call.data.split("_")[1]
-    actif_formate = f"{actif_choisi[:3]}/{actif_choisi[3:]}"
-    
-    markup = InlineKeyboardMarkup(row_width=1)
-    btn_analyser = InlineKeyboardButton(f"🚀 Analyser {actif_formate}", callback_data=f"analyse_{actif_choisi}")
-    markup.add(btn_analyser)
-    
-    texte = f"✅ **Devise configurée : {actif_formate}**\n\nLe terminal est prêt. Clique sur le bouton ci-dessous pour lancer l'algorithme."
-    bot.edit_message_text(texte, 
-                          call.message.chat.id, 
-                          call.message.message_id, 
-                          reply_markup=markup, 
-                          parse_mode="Markdown")
+@bot.callback_query_handler(func=lambda call: call.data.startswith("set_"))
+def selectionner_devise(call):
+    actif = call.data.split("_")[1]
+    user_prefs[call.from_user.id] = actif
+    bot.answer_callback_query(call.id, f"Configuré sur {actif}")
+    bot.send_message(call.message.chat.id, f"✅ **Actif sélectionné : {actif[:3]}/{actif[3:]}**\nTu peux maintenant cliquer sur 'Lancer l'analyse' dans ton clavier.", parse_mode="Markdown")
 
-# --- ÉTAPE 4 : GÉNÉRATION DU SIGNAL SNIPER ---
-@bot.callback_query_handler(func=lambda call: call.data.startswith("analyse_"))
-def traitement_signal(call):
-    actif_choisi = call.data.split("_")[1]
-    actif_formate = f"{actif_choisi[:3]}/{actif_choisi[3:]}"
-    
-    bot.edit_message_text(f"🔄 *Extraction et calcul de volatilité pour {actif_formate}...*", 
-                          call.message.chat.id, 
-                          call.message.message_id, 
-                          parse_mode="Markdown")
-    
-    prix_actuel, prix_precedent = obtenir_donnees_marche(actif_choisi) 
-    
-    if not prix_actuel:
-        bot.edit_message_text("❌ Flux de données interrompu ou marché fermé.", 
-                              call.message.chat.id, 
-                              call.message.message_id)
+@bot.message_handler(func=lambda message: message.text == "🚀 LANCER L'ANALYSE")
+def executer_analyse(message):
+    actif = user_prefs.get(message.from_user.id)
+    if not actif:
+        bot.send_message(message.chat.id, "⚠️ Erreur : Choisis d'abord une devise avec le bouton 📊.")
         return
 
-    ecart = prix_actuel - prix_precedent
-    if ecart >= 0:
-        action = "🟢 ACHAT (CALL)"
-    else:
-        action = "🔴 VENTE (PUT)"
-        
-    volatilite_pourcentage = abs((ecart / prix_precedent) * 100) if prix_precedent else 0
+    msg_attente = bot.send_message(message.chat.id, f"🔄 *Analyse RSI en cours pour {actif[:3]}/{actif[3:]}...*", parse_mode="Markdown")
     
-    if volatilite_pourcentage > 0.20:
-        temps_expiration = "30 SEC ⏱"
-    elif volatilite_pourcentage > 0.05:
-        temps_expiration = "1 MINUTE ⏱"
-    else:
-        temps_expiration = random.choice(["2 MINUTES ⏱", "3 MINUTES ⏱"])
-        
-    confiance = random.randint(86, 98)
+    resultat = analyser_marche_pro(actif)
+    if not resultat:
+        bot.edit_message_text("❌ Erreur de flux financier.", message.chat.id, msg_attente.message_id)
+        return
 
-    # L'heure avec +2 minutes de préparation
-    maintenant = datetime.datetime.now()
-    heure_entree = (maintenant + datetime.timedelta(minutes=2)).replace(second=0, microsecond=0).strftime("%H:%M:00")
+    action, confiance, expiration = resultat
+    heure_entree = (datetime.datetime.now() + datetime.timedelta(minutes=2)).replace(second=0, microsecond=0).strftime("%H:%M:00")
 
-    signal_texte = f"""🚀 SIGNAL SNIPER GÉNÉRÉ 🚀
+    signal = f"""🚀 **SIGNAL SNIPER GÉNÉRÉ** 🚀
 ──────────────────
-🛰 ACTIF : {actif_formate}
+🛰 ACTIF : {actif[:3]}/{actif[3:]}
 🎯 ACTION : {action}
-⏳ EXPIRATION : {temps_expiration}
+⏳ EXPIRATION : {expiration}
 ──────────────────
 📍 ORDRE À : {heure_entree} 👈
 📊 CONFIANCE : {confiance}% 🔥
 ──────────────────
-💎 Prêt pour l'entrée à la seconde 00."""
+💎 *Utilise ton clavier pour relancer.*"""
 
-    # ON REMET LES BOUTONS SOUS LE SIGNAL (Zone Blanche)
-    markup = InlineKeyboardMarkup(row_width=1)
-    btn_relancer = InlineKeyboardButton("🎯 RELANCER L'ANALYSE", callback_data=f"analyse_{actif_choisi}")
-    btn_retour = InlineKeyboardButton("🔙 Changer de devise", callback_data="menu_devises")
-    markup.add(btn_relancer, btn_retour)
-
-    bot.edit_message_text(signal_texte, 
-                          call.message.chat.id, 
-                          call.message.message_id, 
-                          reply_markup=markup, 
-                          parse_mode="Markdown")
+    bot.edit_message_text(signal, message.chat.id, msg_attente.message_id, parse_mode="Markdown")
 
 if __name__ == "__main__":
     keep_alive()
-    print("Terminal Algorithmique HFT en ligne...")
     bot.infinity_polling()
-                            
+        
