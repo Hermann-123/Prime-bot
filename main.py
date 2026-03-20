@@ -182,6 +182,72 @@ def scanner_marche_auto():
                 except:
                     pass
 
+# --- COMMANDE SECRÈTE : RADIOGRAPHIE DU MARCHÉ ---
+@bot.message_handler(commands=['vision'])
+def vision_marche(message):
+    commande = message.text.split()
+    if len(commande) < 2:
+        bot.send_message(message.chat.id, "⚠️ Précise la devise. Exemple : `/vision EURUSD`", parse_mode="Markdown")
+        return
+        
+    symbole = commande[1].upper()
+    msg = bot.send_message(message.chat.id, f"🔍 *Scan aux rayons X de {symbole}...*", parse_mode="Markdown")
+    
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbole}=X?range=2d&interval=1m"
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        reponse = requests.get(url, headers=headers, timeout=10)
+        donnees = reponse.json()
+        quote = donnees['chart']['result'][0]['indicators']['quote'][0]
+        
+        df = pd.DataFrame({
+            'close': quote['close'],
+            'high': quote['high'],
+            'low': quote['low']
+        }).dropna()
+        
+        if len(df) < 50:
+            bot.edit_message_text("⚠️ Impossible de scanner (manque de données).", message.chat.id, msg.message_id)
+            return
+
+        indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
+        bb_haute = indicateur_bb.bollinger_hband().iloc[-1]
+        bb_basse = indicateur_bb.bollinger_lband().iloc[-1]
+        
+        stoch_k = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch().iloc[-1]
+        rsi = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi().iloc[-1]
+        
+        prix_actuel = df['close'].iloc[-1]
+        
+        if prix_actuel >= bb_haute:
+            position_bb = "🔴 Au Plafond (Touche la bande haute)"
+        elif prix_actuel <= bb_basse:
+            position_bb = "🟢 Au Plancher (Touche la bande basse)"
+        else:
+            position_bb = "⚪ Au Milieu (Zone neutre)"
+
+        rapport = f"""👁️ **VISION RAYONS X : {symbole}** 👁️
+──────────────────
+💰 **Prix actuel :** `{prix_actuel:.5f}`
+📏 **Position Bollinger :** {position_bb}
+
+📊 **Niveau RSI :** `{rsi:.2f}` 
+*(Rappel: >60 = Surchauffe, <40 = Essoufflé)*
+
+📉 **Niveau Stochastique :** `{stoch_k:.2f}`
+*(Rappel: >80 = Surachat, <20 = Survente)*
+──────────────────"""
+        
+        if position_bb != "⚪ Au Milieu (Zone neutre)":
+            rapport += "\n⚠️ *Le prix teste les limites, tiens-toi prêt !*"
+        else:
+            rapport += "\n💤 *Le marché respire tranquillement.*"
+
+        bot.edit_message_text(rapport, message.chat.id, msg.message_id, parse_mode="Markdown")
+        
+    except Exception as e:
+        bot.edit_message_text(f"❌ Erreur lors du scan : {e}", message.chat.id, msg.message_id)
+
 # --- INTERFACE CLAVIER ---
 def obtenir_clavier():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -257,7 +323,6 @@ def lancer(message):
 ──────────────────
 💎 *Audit de résultat (ITM/OTM) activé en arrière-plan.*"""
 
-    # Suppression de l'ancien message et envoi du nouveau pour la NOTIFICATION SONORE
     bot.delete_message(message.chat.id, msg.message_id)
     bot.send_message(message.chat.id, signal, parse_mode="Markdown")
 
@@ -273,4 +338,3 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     bot.infinity_polling()
-    
