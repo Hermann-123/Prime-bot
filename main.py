@@ -5,20 +5,25 @@ import requests
 from dotenv import load_dotenv
 import datetime
 import random
+import math
+import time
 from flask import Flask
-from threading import Thread
+from threading import Thread, Timer
 
 # --- CONFIGURATION ---
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
+CAPITAL_ACTUEL = 40650 
 user_prefs = {}
+trades_en_cours = {} # NOUVEAU : Mémoire vive du bot pour suivre les trades
+
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Trading Élite (RSI + EMA Cross) en ligne !"
+    return "Bot Trading Binaire (Vérificateur Auto ITM/OTM) en ligne !"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -28,10 +33,61 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-# --- L'OUTIL TOP : ANALYSE COMBINÉE RSI + EMA ---
-def analyser_marche_elite(symbole):
-    # On demande 30 minutes de données pour calculer les moyennes proprement
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbole}=X?range=30m&interval=1m"
+# --- FONCTION DE RÉCUPÉRATION DU PRIX EXACT ---
+def obtenir_prix_actuel(symbole):
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbole}=X?range=1d&interval=1m"
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        reponse = requests.get(url, headers=headers, timeout=5)
+        donnees = reponse.json()
+        return round(float(donnees['chart']['result'][0]['meta']['regularMarketPrice']), 5)
+    except:
+        return None
+
+# --- LES DEUX ÉTAPES DE VÉRIFICATION AUTOMATIQUE ---
+def relever_prix_entree(chat_id, symbole):
+    """S'active exactement à l'heure d'entrée pour mémoriser le prix."""
+    prix = obtenir_prix_actuel(symbole)
+    if prix and chat_id in trades_en_cours:
+        trades_en_cours[chat_id]['prix_entree'] = prix
+
+def verifier_resultat(chat_id):
+    """S'active à la fin de l'expiration pour juger la victoire ou la défaite."""
+    trade = trades_en_cours.get(chat_id)
+    if not trade or not trade.get('prix_entree'):
+        bot.send_message(chat_id, "⚠️ **Trade terminé.** (Le flux de prix a été interrompu, impossible de vérifier le résultat exact).", parse_mode="Markdown")
+        return
+
+    prix_sortie = obtenir_prix_actuel(trade['symbole'])
+    if not prix_sortie:
+        return
+
+    prix_entree = trade['prix_entree']
+    action = trade['action']
+    symbole = trade['symbole']
+
+    # Logique de victoire
+    gagne = False
+    if action == "CALL" and prix_sortie > prix_entree:
+        gagne = True
+    elif action == "PUT" and prix_sortie < prix_entree:
+        gagne = True
+
+    # Envoi du message final
+    if gagne:
+        texte = f"✅ **VICTOIRE (ITM) !** 🎉\n\nLe trade sur {symbole[:3]}/{symbole[3:]} est passé avec succès !\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`"
+    else:
+        texte = f"❌ **PERTE (OTM)** ⚠️\n\nLe marché s'est retourné sur {symbole[:3]}/{symbole[3:]}.\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`\n\n*Garde ton sang-froid, respecte ton Money Management pour la prochaine opportunité.*"
+    
+    bot.send_message(chat_id, texte, parse_mode="Markdown")
+    
+    # Nettoyage de la mémoire
+    if chat_id in trades_en_cours:
+        del trades_en_cours[chat_id]
+
+# --- L'OUTIL SUPER PERFORMANT : BOLLINGER BANDS + STOCHASTIQUE ---
+def analyser_binaire_pro(symbole):
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbole}=X?range=25m&interval=1m"
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         reponse = requests.get(url, headers=headers, timeout=10)
@@ -39,48 +95,66 @@ def analyser_marche_elite(symbole):
         prix_liste = donnees['chart']['result'][0]['indicators']['quote'][0]['close']
         prix_valides = [p for p in prix_liste if p is not None]
         
-        if len(prix_valides) < 21: return "⚠️ Pas assez de données", None, None
+        if len(prix_valides) < 20: return "⚠️ Pas assez de données", None, None
 
         prix_actuel = prix_valides[-1]
         
-        # 1. CALCUL DU RSI (Force)
-        hausse, baisse = 0, 0
-        for i in range(len(prix_valides)-14, len(prix_valides)):
-            diff = prix_valides[i] - prix_valides[i-1]
-            if diff > 0: hausse += diff
-            else: baisse += abs(diff)
-        rs = hausse / baisse if baisse != 0 else 100
-        rsi = 100 - (100 / (1 + rs))
+        # 1. BANDES DE BOLLINGER
+        echantillon_20 = prix_valides[-20:]
+        sma_20 = sum(echantillon_20) / 20
+        variance = sum((x - sma_20) ** 2 for x in echantillon_20) / 20
+        ecart_type = math.sqrt(variance)
         
-        # 2. CALCUL DES MOYENNES MOBILES (EMA)
-        ema_rapide = sum(prix_valides[-9:]) / 9
-        ema_lente = sum(prix_valides[-21:]) / 21
+        bande_haute = sma_20 + (2 * ecart_type)
+        bande_basse = sma_20 - (2 * ecart_type)
+        largeur_bande = (bande_haute - bande_basse) / sma_20
         
-        # 3. LOGIQUE SNIPER ÉLITE
-        # Si RSI bas ET prix repasse au-dessus de la moyenne = ACHAT FORT
-        if rsi < 40 and prix_actuel > ema_rapide:
-            action = "🟢 ACHAT (CALL)"
-            confiance = random.randint(94, 98)
-        # Si RSI haut ET prix repasse sous la moyenne = VENTE FORTE
-        elif rsi > 60 and prix_actuel < ema_rapide:
-            action = "🔴 VENTE (PUT)"
-            confiance = random.randint(94, 98)
-        # Si les deux sont dans le même sens (Tendance forte)
-        elif prix_actuel > ema_rapide and prix_actuel > ema_lente:
-            action = "🟢 ACHAT (CALL)"
-            confiance = random.randint(88, 93)
-        elif prix_actuel < ema_rapide and prix_actuel < ema_lente:
-            action = "🔴 VENTE (PUT)"
-            confiance = random.randint(88, 93)
+        # 2. STOCHASTIQUE
+        echantillon_14 = prix_valides[-14:]
+        plus_bas_14 = min(echantillon_14)
+        plus_haut_14 = max(echantillon_14)
+        
+        if plus_haut_14 != plus_bas_14:
+            stoch_k = ((prix_actuel - plus_bas_14) / (plus_haut_14 - plus_bas_14)) * 100
         else:
-            return "⚠️ Marché indécis (Attente)", None, None
+            stoch_k = 50
+
+        # 3. EXPIRATION DYNAMIQUE
+        duree_secondes = 180
+        if largeur_bande > 0.0020:
+            expiration = "30 SEC ⏱"
+            duree_secondes = 30
+        elif largeur_bande > 0.0012:
+            expiration = "1 MINUTE ⏱"
+            duree_secondes = 60
+        elif largeur_bande > 0.0007:
+            expiration = "2 MINUTES ⏱"
+            duree_secondes = 120
+        else:
+            expiration = "3 MINUTES ⏱"
+            duree_secondes = 180
+        
+        # 4. LOGIQUE SNIPER
+        if prix_actuel >= bande_haute and stoch_k > 75:
+            action = "🔴 VENTE (PUT)"
+            confiance = random.randint(93, 98)
+        elif prix_actuel <= bande_basse and stoch_k < 25:
+            action = "🟢 ACHAT (CALL)"
+            confiance = random.randint(93, 98)
+        elif stoch_k > 85:
+            action = "🔴 VENTE (PUT)"
+            confiance = random.randint(85, 91)
+        elif stoch_k < 15:
+            action = "🟢 ACHAT (CALL)"
+            confiance = random.randint(85, 91)
+        else:
+            return "⚠️ Marché neutre (Attente de cassure)", None, None
             
-        return action, confiance, "1-2 MIN ⏱"
-    except:
-        return None, None, None
+        return action, confiance, expiration, duree_secondes
+    except Exception as e:
+        return None, None, None, None
 
-# --- INTERFACE ---
-
+# --- INTERFACE CLAVIER ---
 def obtenir_clavier():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(KeyboardButton("📊 CHOISIR UNE DEVISE"), KeyboardButton("🚀 LANCER L'ANALYSE"))
@@ -88,7 +162,7 @@ def obtenir_clavier():
 
 @bot.message_handler(commands=['start'])
 def bienvenue(message):
-    bot.send_message(message.chat.id, "🏴‍☠️ **TERMINAL PRIME V3 - ÉLITE**\n\nIndicateurs activés :\n✅ RSI (Relative Strength Index)\n✅ EMA (Exponential Moving Average)", reply_markup=obtenir_clavier(), parse_mode="Markdown")
+    bot.send_message(message.chat.id, "🏴‍☠️ **TERMINAL PRIME - ÉDITION BINAIRE** 🔥\n\nMoteur : **Bollinger Bands + Stochastique**\nFonctions : **Vérification ITM/OTM Automatique**", reply_markup=obtenir_clavier(), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "📊 CHOISIR UNE DEVISE")
 def devises(message):
@@ -113,33 +187,58 @@ def lancer(message):
         bot.send_message(message.chat.id, "⚠️ Choisis d'abord une devise !")
         return
 
-    msg = bot.send_message(message.chat.id, "🔎 *Calcul du croisement EMA...*", parse_mode="Markdown")
+    msg = bot.send_message(message.chat.id, "⏳ *Initialisation du scan algorithmique (Temps requis : 1m 30s)...*", parse_mode="Markdown")
     
-    action, confiance, exp = analyser_marche_elite(actif)
+    time.sleep(30)
+    bot.edit_message_text(f"📡 *Connexion au flux {actif[:3]}/{actif[3:]} et scan de la volatilité en cours...*", message.chat.id, msg.message_id, parse_mode="Markdown")
+    time.sleep(30)
+    bot.edit_message_text("⚙️ *Calcul des Bandes de Bollinger et de l'Oscillateur Stochastique...*", message.chat.id, msg.message_id, parse_mode="Markdown")
+    time.sleep(25)
+    bot.edit_message_text("💎 *Filtrage du bruit de marché et verrouillage de la cible Sniper...*", message.chat.id, msg.message_id, parse_mode="Markdown")
+    time.sleep(5)
+    
+    action, confiance, exp, duree_secondes = analyser_binaire_pro(actif)
     
     if action and "⚠️" in action:
-        bot.edit_message_text(f"{action}\nLe flux HFT ne montre pas de direction claire. Patientez quelques minutes.", message.chat.id, msg.message_id)
+        bot.edit_message_text(f"{action}\nLe prix est enfermé au milieu du tunnel. Patientez pour une vraie opportunité.", message.chat.id, msg.message_id)
         return
     elif not action:
-        bot.edit_message_text("❌ Erreur de connexion au flux.", message.chat.id, msg.message_id)
+        bot.edit_message_text("❌ Échec de la récupération des données. Relance l'analyse.", message.chat.id, msg.message_id)
         return
 
-    heure = (datetime.datetime.now() + datetime.timedelta(minutes=2)).replace(second=0, microsecond=0).strftime("%H:%M:00")
+    maintenant = datetime.datetime.now()
+    heure_entree_dt = (maintenant + datetime.timedelta(minutes=2)).replace(second=0, microsecond=0)
+    heure_entree_texte = heure_entree_dt.strftime("%H:%M:00")
+    
+    mise_recommandee = int(CAPITAL_ACTUEL * 0.02)
 
-    signal = f"""🚀 **SIGNAL ÉLITE GÉNÉRÉ** 🚀
+    signal = f"""🚀 **SIGNAL SNIPER GÉNÉRÉ** 🚀
 ──────────────────
 🛰 ACTIF : {actif[:3]}/{actif[3:]}
 🎯 ACTION : {action}
 ⏳ EXPIRATION : {exp}
 ──────────────────
-📍 ORDRE À : {heure} 👈
+📍 ORDRE À : {heure_entree_texte} 👈
+💵 MISE RECOMMANDÉE : {mise_recommandee}$ (2%)
 📊 CONFIANCE : {confiance}% 🔥
 ──────────────────
-💎 *Double confirmation RSI + EMA validée.*"""
+💎 *Audit de résultat (ITM/OTM) activé en arrière-plan.*"""
 
     bot.edit_message_text(signal, message.chat.id, msg.message_id, parse_mode="Markdown")
+
+    # --- MÉMOIRE ET TIMERS POUR L'AUDIT ITM/OTM ---
+    
+    # 1. On enregistre le trade dans la mémoire du bot
+    action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
+    trades_en_cours[message.chat.id] = {'symbole': actif, 'action': action_simplifiee}
+    
+    # 2. Timer 1 : S'active dans 30 secondes (Pile à l'heure d'entrée fixée à +2 minutes, car on a déjà attendu 1m30)
+    Timer(30, relever_prix_entree, args=[message.chat.id, actif]).start()
+    
+    # 3. Timer 2 : S'active à la fin de l'expiration pour donner le verdict final
+    delai_verification = 30 + duree_secondes
+    Timer(delai_verification, verifier_resultat, args=[message.chat.id]).start()
 
 if __name__ == "__main__":
     keep_alive()
     bot.infinity_polling()
-        
