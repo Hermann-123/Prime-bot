@@ -18,9 +18,9 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 CAPITAL_ACTUEL = 40650 
 user_prefs = {}
-trades_en_cours = {} # Mémoire pour suivre les trades
-utilisateurs_actifs = set() # Mémoire pour envoyer les alertes auto
-derniere_alerte_auto = {} # Mémoire Anti-Spam pour le scanner
+trades_en_cours = {}
+utilisateurs_actifs = set()
+derniere_alerte_auto = {}
 
 app = Flask(__name__)
 
@@ -47,7 +47,7 @@ def obtenir_prix_actuel(symbole):
     except:
         return None
 
-# --- VÉRIFICATION AUTOMATIQUE (ITM/OTM) CORRIGÉE ---
+# --- VÉRIFICATION AUTOMATIQUE (ITM/OTM) ---
 def relever_prix_entree(chat_id, symbole):
     prix = obtenir_prix_actuel(symbole)
     if prix and chat_id in trades_en_cours:
@@ -149,8 +149,7 @@ def analyser_binaire_pro(symbole):
 
 # --- SCANNER AUTOMATIQUE EN ARRIÈRE-PLAN ---
 def scanner_marche_auto():
-    # Suppression de GBPUSD ici
-    devises_a_surveiller = ["EURUSD", "USDJPY", "AUDUSD", "USDCHF", "USDCAD", "USDPKR"]
+    devises_a_surveiller = ["EURUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "EURJPY", "CHFJPY", "AUDJPY"]
     while True:
         time.sleep(60)
         if not utilisateurs_actifs:
@@ -244,28 +243,53 @@ def vision_marche(message):
     except Exception as e:
         bot.edit_message_text(f"❌ Erreur lors du scan : {e}", message.chat.id, msg.message_id)
 
-# --- INTERFACE CLAVIER ---
+# --- INTERFACE CLAVIER (MISE À JOUR) ---
 def obtenir_clavier():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(KeyboardButton("📊 CHOISIR UNE DEVISE"), KeyboardButton("🚀 LANCER L'ANALYSE"))
+    markup.row(KeyboardButton("📊 CHOISIR UNE DEVISE"), KeyboardButton("🚀 LANCER L'ANALYSE"))
+    markup.row(KeyboardButton("⏰ HEURES DE TRADING")) # Le nouveau bouton est ici !
     return markup
 
 @bot.message_handler(commands=['start'])
 def bienvenue(message):
     utilisateurs_actifs.add(message.chat.id)
-    bot.send_message(message.chat.id, "🏴‍☠️ **TERMINAL PRIME - ÉDITION BINAIRE** 🔥\n\nMoteur : **Pandas + TA (BB, RSI, Stochastique)**\nFonctions : **Auto-Scan 1m & Audit ITM/OTM**", reply_markup=obtenir_clavier(), parse_mode="Markdown")
+    bot.send_message(message.chat.id, "🏴‍☠️ **TERMINAL PRIME - ÉDITION BINAIRE** 🔥\n\nMoteur : **Pandas + TA (BB, RSI, Stochastique)**\nFonctions : **Auto-Scan 1m (Combattant Ultimate) & Audit ITM/OTM**", reply_markup=obtenir_clavier(), parse_mode="Markdown")
+
+# --- NOUVELLE FONCTION : HORAIRES DE TRADING ---
+@bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
+def horaires_trading(message):
+    texte = """🕒 **GUIDE DES HORAIRES DE TRADING (Heure GMT)** 🕒
+
+✅ **SESSION 1 : MATINÉE (08h00 - 11h00)**
+*Ouverture de l'Europe. Le vrai volume arrive sur les marchés.*
+👍 **Devises Favorites :** EUR/USD, EUR/JPY, CHF/JPY, USD/CHF
+👎 **À Éviter :** AUD/USD, AUD/JPY, USD/CAD (Marchés lents)
+
+🔥 **SESSION 2 : ZONE EN OR (13h30 - 16h30)**
+*Croisement Europe / New York. La volatilité est maximale et les tendances sont pures.*
+👍 **Devises Favorites :** EUR/USD, USD/CAD, AUD/USD
+👎 **À Éviter :** Paires en JPY (le marché asiatique est fermé)
+
+❌ **ZONE ROUGE : DANGER (22h00 - 07h00)**
+*Marché sans volume, mouvements manipulés ou OTC.*
+☠️ **À Fuir Absolument :** Toutes les devises. Laisse le bot se reposer.
+
+*Rappel de Discipline : Fixe-toi tes 2% de mise max et arrête-toi après 3 pertes dans la même session !*"""
+    
+    bot.send_message(message.chat.id, texte, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "📊 CHOISIR UNE DEVISE")
 def devises(message):
-    # Suppression de GBP/USD de l'interface
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
         InlineKeyboardButton("🇪🇺 EUR / USD", callback_data="set_EURUSD"),
         InlineKeyboardButton("🇯🇵 USD / JPY", callback_data="set_USDJPY"),
         InlineKeyboardButton("🇦🇺 AUD / USD", callback_data="set_AUDUSD"),
-        InlineKeyboardButton("🇨🇭 USD / CHF", callback_data="set_USDCHF"),
         InlineKeyboardButton("🇨🇦 USD / CAD", callback_data="set_USDCAD"),
-        InlineKeyboardButton("🇵🇰 USD / PKR", callback_data="set_USDPKR")
+        InlineKeyboardButton("🇨🇭 USD / CHF", callback_data="set_USDCHF"),
+        InlineKeyboardButton("🇪🇺 EUR / JPY", callback_data="set_EURJPY"),
+        InlineKeyboardButton("🇨🇭 CHF / JPY", callback_data="set_CHFJPY"),
+        InlineKeyboardButton("🇦🇺 AUD / JPY", callback_data="set_AUDJPY")
     )
     bot.send_message(message.chat.id, "Sélectionne l'actif à scanner :", reply_markup=markup)
 
@@ -325,9 +349,8 @@ def lancer(message):
     action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
     trades_en_cours[message.chat.id] = {'symbole': actif, 'action': action_simplifiee}
     
-    # CORRECTION DE LA SYNCHRONISATION DU CHRONOMÈTRE
     delai_attente_entree = (heure_entree_dt - datetime.datetime.now()).total_seconds()
-    delai_attente_entree = max(0, delai_attente_entree) # Sécurité pour ne pas avoir de délai négatif
+    delai_attente_entree = max(0, delai_attente_entree)
     
     Timer(delai_attente_entree, relever_prix_entree, args=[message.chat.id, actif]).start()
     
@@ -338,3 +361,4 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     bot.infinity_polling()
+        
