@@ -16,17 +16,21 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
+# 👑 L'ID DU FONDATEUR (TOI) 👑
+ADMIN_ID = 5968288964 
+
 CAPITAL_ACTUEL = 40650 
 user_prefs = {}
 trades_en_cours = {}
 utilisateurs_actifs = set()
+utilisateurs_autorises = {ADMIN_ID} # Le fondateur est toujours autorisé par défaut
 derniere_alerte_auto = {}
 
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Trading Binaire Prime en ligne !"
+    return "Bot Trading Binaire Prime VIP en ligne !"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -180,6 +184,9 @@ def scanner_marche_auto():
 # --- COMMANDE SECRÈTE : RADIOGRAPHIE DU MARCHÉ ---
 @bot.message_handler(commands=['vision'])
 def vision_marche(message):
+    if message.chat.id not in utilisateurs_autorises:
+        return
+        
     commande = message.text.split()
     if len(commande) < 2:
         bot.send_message(message.chat.id, "⚠️ Précise la devise. Exemple : `/vision EURUSD`", parse_mode="Markdown")
@@ -243,21 +250,80 @@ def vision_marche(message):
     except Exception as e:
         bot.edit_message_text(f"❌ Erreur lors du scan : {e}", message.chat.id, msg.message_id)
 
-# --- INTERFACE CLAVIER (MISE À JOUR) ---
+# --- INTERFACE CLAVIER ---
 def obtenir_clavier():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row(KeyboardButton("📊 CHOISIR UNE DEVISE"), KeyboardButton("🚀 LANCER L'ANALYSE"))
-    markup.row(KeyboardButton("⏰ HEURES DE TRADING")) # Le nouveau bouton est ici !
+    markup.row(KeyboardButton("⏰ HEURES DE TRADING"))
     return markup
 
+# --- GESTION DES APPROBATIONS D'ADMIN ---
+@bot.callback_query_handler(func=lambda c: c.data.startswith("admin_"))
+def gerer_acces(call):
+    if call.from_user.id != ADMIN_ID:
+        return
+        
+    action = call.data.split("_")[1]
+    user_id = int(call.data.split("_")[2])
+    
+    if action == "accepter":
+        utilisateurs_autorises.add(user_id)
+        bot.edit_message_text(f"✅ Accès accordé à l'utilisateur ID: `{user_id}`.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+        bot.send_message(user_id, "🎉 **FÉLICITATIONS !**\n\nLe fondateur a approuvé votre accès au Terminal Prime.\nTapez /start pour lancer l'algorithme.", parse_mode="Markdown")
+    elif action == "refuser":
+        bot.edit_message_text(f"❌ Accès refusé à l'utilisateur ID: `{user_id}`.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+        bot.send_message(user_id, "❌ **ACCÈS REFUSÉ**\n\nVous n'êtes pas autorisé à utiliser ce système de trading privé.", parse_mode="Markdown")
+
+# --- NOUVEAU MENU START + SÉCURITÉ INTRUS ---
 @bot.message_handler(commands=['start'])
 def bienvenue(message):
-    utilisateurs_actifs.add(message.chat.id)
-    bot.send_message(message.chat.id, "🏴‍☠️ **TERMINAL PRIME - ÉDITION BINAIRE** 🔥\n\nMoteur : **Pandas + TA (BB, RSI, Stochastique)**\nFonctions : **Auto-Scan 1m (Combattant Ultimate) & Audit ITM/OTM**", reply_markup=obtenir_clavier(), parse_mode="Markdown")
+    user_id = message.chat.id
+    username = message.from_user.username or message.from_user.first_name
+    
+    # Vérification de sécurité
+    if user_id not in utilisateurs_autorises:
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("✅ Accepter", callback_data=f"admin_accepter_{user_id}"),
+            InlineKeyboardButton("❌ Refuser", callback_data=f"admin_refuser_{user_id}")
+        )
+        
+        alerte_admin = f"🚨 **NOUVEL INTRUS DÉTECTÉ** 🚨\n\nUn inconnu tente d'accéder au bot.\n👤 Utilisateur : @{username}\n🆔 ID : `{user_id}`\n\nVeux-tu lui donner accès ?"
+        
+        try:
+            bot.send_message(ADMIN_ID, alerte_admin, reply_markup=markup, parse_mode="Markdown")
+        except:
+            pass
+            
+        bot.send_message(user_id, "🔒 **ACCÈS RESTREINT - BOT PRIVÉ** 🔒\n\nCe système est verrouillé. Une notification a été envoyée au fondateur pour valider votre entrée.\n\n*Veuillez patienter...*", parse_mode="Markdown")
+        return
 
-# --- NOUVELLE FONCTION : HORAIRES DE TRADING ---
+    # Si l'utilisateur est autorisé (ou si c'est toi, l'Admin)
+    utilisateurs_actifs.add(user_id)
+    
+    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION BINAIRE** 🔥
+    
+Bienvenue dans ton radar de trading ultime ! Ce bot est propulsé par un moteur d'intelligence mathématique (Pandas + TA) pour scanner les graphiques à la milliseconde.
+
+📖 **MODE D'EMPLOI :**
+1️⃣ **SÉLECTION :** Clique sur "📊 CHOISIR UNE DEVISE" et verrouille la paire que tu souhaites trader.
+2️⃣ **RADAR :** Clique sur "🚀 LANCER L'ANALYSE" pour déclencher le scan et le verrouillage Sniper.
+3️⃣ **STRATÉGIE :** Consulte les meilleures fenêtres de tir via le bouton "⏰ HEURES DE TRADING".
+4️⃣ **DISCIPLINE :** N'oublie pas : 2% de mise maximum et stop total après 3 pertes dans une session.
+
+💡 **LE MOT DU FONDATEUR :**
+*Le marché ne ressent rien, n'aie aucune émotion face à lui. Le succès ne vient pas de la chance, mais d'une discipline de fer. Laisse l'algorithme faire les calculs, ne force jamais un trade et protège ton capital comme un tireur d'élite. Bon profit !* 🎯💸
+
+👨‍💻 **SUPPORT TECHNIQUE :**
+À la moindre rencontre d'un problème ou d'un bug, veuillez contacter le fondateur du bot : **[@hermann1123](https://t.me/hermann1123)**"""
+
+    bot.send_message(message.chat.id, texte_bienvenue, reply_markup=obtenir_clavier(), parse_mode="Markdown", disable_web_page_preview=True)
+
+# --- SÉCURITÉ SUR LES AUTRES BOUTONS ---
 @bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
 def horaires_trading(message):
+    if message.chat.id not in utilisateurs_autorises: return
+    
     texte = """🕒 **GUIDE DES HORAIRES DE TRADING (Heure GMT)** 🕒
 
 ✅ **SESSION 1 : MATINÉE (08h00 - 11h00)**
@@ -280,6 +346,8 @@ def horaires_trading(message):
 
 @bot.message_handler(func=lambda m: m.text == "📊 CHOISIR UNE DEVISE")
 def devises(message):
+    if message.chat.id not in utilisateurs_autorises: return
+    
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
         InlineKeyboardButton("🇪🇺 EUR / USD", callback_data="set_EURUSD"),
@@ -295,12 +363,16 @@ def devises(message):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
 def save_devise(call):
+    if call.message.chat.id not in utilisateurs_autorises: return
+    
     actif = call.data.split("_")[1]
     user_prefs[call.from_user.id] = actif
     bot.send_message(call.message.chat.id, f"✅ **Cible verrouillée : {actif[:3]}/{actif[3:]}**")
 
 @bot.message_handler(func=lambda m: m.text == "🚀 LANCER L'ANALYSE")
 def lancer(message):
+    if message.chat.id not in utilisateurs_autorises: return
+    
     actif = user_prefs.get(message.from_user.id)
     if not actif:
         bot.send_message(message.chat.id, "⚠️ Choisis d'abord une devise !")
@@ -361,4 +433,3 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     bot.infinity_polling()
-        
