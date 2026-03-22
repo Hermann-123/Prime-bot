@@ -1,6 +1,7 @@
-pyTelegramBotAPI==4.14.0
-requests==2.31.0
-python-dotenv==1.0.0
-Flask==3.0.0
-pandas==2.2.0
-ta==0.11.0
+pyTelegramBotAPI
+pandas
+ta
+flask
+requests
+python-dotenv
+pyarrow
