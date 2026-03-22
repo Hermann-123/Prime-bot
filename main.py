@@ -11,10 +11,16 @@ from flask import Flask
 from threading import Thread, Timer
 import pandas as pd
 import ta
+import sys
 
 # --- CONFIGURATION ---
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+
+# BOÎTE NOIRE : Arrêt d'urgence si le Token est introuvable
+if not TELEGRAM_TOKEN:
+    print("⬛ BOÎTE NOIRE [ERREUR FATALE] : Le TELEGRAM_TOKEN est introuvable ! Vérifie l'onglet 'Environment' sur Render.")
+
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 # 👑 L'ID DU FONDATEUR (TOI) 👑
@@ -34,7 +40,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Trading Binaire Prime VIP en ligne !"
+    return "Bot Trading Binaire Prime VIP en ligne ! (Boîte Noire Active)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -184,31 +190,34 @@ def analyser_binaire_pro(symbole):
 def scanner_marche_auto():
     devises_a_surveiller = ["EURUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "EURJPY", "CHFJPY", "AUDJPY"]
     while True:
-        time.sleep(60)
-        utilisateurs_a_alerter = [uid for uid in utilisateurs_actifs if est_autorise(uid)]
-        if not utilisateurs_a_alerter: continue
-        
-        for actif in devises_a_surveiller:
-            action, confiance, exp, duree = analyser_binaire_pro(actif)
+        try:
+            time.sleep(60)
+            utilisateurs_a_alerter = [uid for uid in utilisateurs_actifs if est_autorise(uid)]
+            if not utilisateurs_a_alerter: continue
             
-            if action and "⚠️" not in action and confiance:
-                maintenant = time.time()
+            for actif in devises_a_surveiller:
+                action, confiance, exp, duree = analyser_binaire_pro(actif)
                 
-                if actif in derniere_alerte_auto and (maintenant - derniere_alerte_auto[actif] < 900):
-                    continue
+                if action and "⚠️" not in action and confiance:
+                    maintenant = time.time()
                     
-                derniere_alerte_auto[actif] = maintenant
-                
-                markup = InlineKeyboardMarkup()
-                markup.add(InlineKeyboardButton(f"🔒 Verrouiller {actif[:3]}/{actif[3:]}", callback_data=f"set_{actif}"))
-                
-                alerte_msg = f"🚨 **NOUVELLE OPPORTUNITÉ DÉTECTÉE** 🚨\n\nL'algorithme vient de repérer une configuration Sniper sur **{actif[:3]}/{actif[3:]}** (Confiance : {confiance}%).\n\n👇 *Clique sur le bouton ci-dessous pour verrouiller la cible, puis lance l'analyse !*"
-                
-                for chat_id in utilisateurs_a_alerter:
-                    try:
-                        bot.send_message(chat_id, alerte_msg, reply_markup=markup, parse_mode="Markdown")
-                    except:
-                        pass
+                    if actif in derniere_alerte_auto and (maintenant - derniere_alerte_auto[actif] < 900):
+                        continue
+                        
+                    derniere_alerte_auto[actif] = maintenant
+                    
+                    markup = InlineKeyboardMarkup()
+                    markup.add(InlineKeyboardButton(f"🔒 Verrouiller {actif[:3]}/{actif[3:]}", callback_data=f"set_{actif}"))
+                    
+                    alerte_msg = f"🚨 **NOUVELLE OPPORTUNITÉ DÉTECTÉE** 🚨\n\nL'algorithme vient de repérer une configuration Sniper sur **{actif[:3]}/{actif[3:]}** (Confiance : {confiance}%).\n\n👇 *Clique sur le bouton ci-dessous pour verrouiller la cible, puis lance l'analyse !*"
+                    
+                    for chat_id in utilisateurs_a_alerter:
+                        try:
+                            bot.send_message(chat_id, alerte_msg, reply_markup=markup, parse_mode="Markdown")
+                        except:
+                            pass
+        except Exception as e:
+            print(f"⬛ BOÎTE NOIRE [ERREUR SCANNER] : {e}")
 
 # --- ACTIVATION DE LA CLÉ PAR LE CLIENT (ANTI-PARTAGE) ---
 @bot.message_handler(func=lambda m: m.text and m.text.startswith("PRIME-"))
@@ -443,18 +452,4 @@ def lancer(message):
     Timer(delai_attente_entree, relever_prix_entree, args=[message.chat.id, actif]).start()
     
     delai_verification = delai_attente_entree + duree_secondes
-    Timer(delai_verification, verifier_resultat, args=[message.chat.id]).start()
-
-# --- COMMANDE SECRÈTE : RADIOGRAPHIE DU MARCHÉ ---
-@bot.message_handler(commands=['vision'])
-def vision_marche(message):
-    if not est_autorise(message.chat.id):
-        return
-        
-    commande = message.text.split()
-    if len(commande) < 2:
-        bot.send_message(message.chat.id, "⚠️ Précise la devise. Exemple : `/vision EURUSD`", parse_mode="Markdown")
-        return
-        
-    symbole = commande[1].upper()
- 
+    Timer(delai_verification, verifier_resultat, args=[message.c
