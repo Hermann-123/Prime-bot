@@ -41,7 +41,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Trading Binaire Prime VIP en ligne ! (Filtre EMA Actif)"
+    return "Bot Trading Binaire Prime VIP en ligne ! (Viseur Élargi)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -129,7 +129,7 @@ def verifier_resultat(chat_id):
     if chat_id in trades_en_cours:
         del trades_en_cours[chat_id]
 
-# --- MOTEUR D'ANALYSE PRO (PANDAS + TA + EMA 200 + BOUGIE FERMÉE) ---
+# --- MOTEUR D'ANALYSE PRO (VISEUR ÉLARGI + EMA 200 + BOUGIE FERMÉE) ---
 def analyser_binaire_pro(symbole):
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbole}=X?range=2d&interval=1m"
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -184,23 +184,23 @@ def analyser_binaire_pro(symbole):
         action = None
         confiance = 0
         
-        # DÉCISION FINALE (Basée sur la clôture et l'EMA 200)
-        if c >= bougie_fermee['bb_haute'] and bougie_fermee['stoch_k'] > 80 and bougie_fermee['rsi'] > 60:
-            if c < ema_200: # Vente uniquement si on est sous l'EMA 200 (tendance baissière)
+        # DÉCISION FINALE (Viseur élargi : RSI à 55/45, Stoch à 75/25)
+        if c >= bougie_fermee['bb_haute'] and bougie_fermee['stoch_k'] > 75 and bougie_fermee['rsi'] > 55:
+            if c < ema_200: 
                 action = "🔴 VENTE (PUT)"
-                confiance = random.randint(90, 96) 
+                confiance = random.randint(88, 93) # Légèrement baissé car on a élargi le viseur
             else:
-                return "⚠️ Tendance haussière trop forte (Attente)", None, None, None
+                return "⚠️ Tendance haussière forte (Bouclier EMA)", None, None, None
                 
-        elif c <= bougie_fermee['bb_basse'] and bougie_fermee['stoch_k'] < 20 and bougie_fermee['rsi'] < 40:
-            if c > ema_200: # Achat uniquement si on est au-dessus de l'EMA 200 (tendance haussière)
+        elif c <= bougie_fermee['bb_basse'] and bougie_fermee['stoch_k'] < 25 and bougie_fermee['rsi'] < 45:
+            if c > ema_200: 
                 action = "🟢 ACHAT (CALL)"
-                confiance = random.randint(90, 96)
+                confiance = random.randint(88, 93)
             else:
-                return "⚠️ Tendance baissière trop forte (Attente)", None, None, None
+                return "⚠️ Tendance baissière forte (Bouclier EMA)", None, None, None
             
         else:
-            return "⚠️ Marché neutre (Attente de cassure)", None, None, None
+            return "⚠️ Marché neutre (Attente d'opportunité)", None, None, None
             
         return action, confiance, expiration, duree_secondes
         
@@ -540,10 +540,10 @@ def vision_marche(message):
 📏 **Position Bollinger :** {position_bb}
 
 📊 **Niveau RSI :** `{rsi:.2f}` 
-*(Rappel: >60 = Surchauffe, <40 = Essoufflé)*
+*(Rappel: >55 = Surchauffe, <45 = Essoufflé)*
 
 📉 **Niveau Stochastique :** `{stoch_k:.2f}`
-*(Rappel: >80 = Surachat, <20 = Survente)*
+*(Rappel: >75 = Surachat, <25 = Survente)*
 ──────────────────"""
         
         if position_bb != "⚪ Au Milieu (Zone neutre)":
