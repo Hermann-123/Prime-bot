@@ -41,7 +41,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Trading Binaire Prime VIP en ligne ! (Filtres Bougie Fermée)"
+    return "Bot Trading Binaire Prime VIP en ligne ! (Filtre EMA Actif)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -129,7 +129,7 @@ def verifier_resultat(chat_id):
     if chat_id in trades_en_cours:
         del trades_en_cours[chat_id]
 
-# --- MOTEUR D'ANALYSE PRO (PANDAS + TA + BOUGIE FERMÉE) ---
+# --- MOTEUR D'ANALYSE PRO (PANDAS + TA + EMA 200 + BOUGIE FERMÉE) ---
 def analyser_binaire_pro(symbole):
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbole}=X?range=2d&interval=1m"
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -150,7 +150,6 @@ def analyser_binaire_pro(symbole):
         if len(df) < 50:
             return "⚠️ Pas assez de données", None, None, None
 
-        # INDICATEURS DE BASE
         indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
         df['bb_haute'] = indicateur_bb.bollinger_hband()
         df['bb_basse'] = indicateur_bb.bollinger_lband()
@@ -163,46 +162,11 @@ def analyser_binaire_pro(symbole):
 
         # ARME 1 : BOUCLIER ANTI-TENDANCE (EMA 200)
         df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
-
-        # ARME 2 : RADAR MULTI-TIMEFRAME (M5)
-        tendance_m5_haussiere = True
-        tendance_m5_baissiere = True
-        try:
-            url_m5 = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbole}=X?range=5d&interval=5m"
-            res_m5 = requests.get(url_m5, headers=headers, timeout=5).json()
-            c_m5 = res_m5['chart']['result'][0]['indicators']['quote'][0]['close']
-            df_m5 = pd.DataFrame({'close': c_m5}).dropna()
-            ema_50_m5 = ta.trend.EMAIndicator(close=df_m5['close'], window=50).ema_indicator().iloc[-1]
-            if df_m5['close'].iloc[-1] > ema_50_m5:
-                tendance_m5_baissiere = False 
-            else:
-                tendance_m5_haussiere = False 
-        except:
-            pass 
             
-        # --- LE SECRET : ON ANALYSE LA BOUGIE FERMÉE (-2) AU LIEU DE CELLE EN COURS (-1) ---
+        # ON ANALYSE LA BOUGIE FERMÉE (-2)
         bougie_fermee = df.iloc[-2]
-        prix_actuel_temps_reel = df.iloc[-1]['close'] # On garde le prix en temps réel juste pour l'affichage de l'entrée
-        
         ema_200 = bougie_fermee['ema_200']
-        
-        # ARME 3 : PRICE ACTION SUR LA BOUGIE FERMÉE
-        o = bougie_fermee['open']
         c = bougie_fermee['close']
-        h = bougie_fermee['high']
-        l = bougie_fermee['low']
-        
-        taille_totale = (h - l) if (h - l) > 0 else 0.00001
-        corps = abs(c - o)
-        meche_haute = h - max(o, c)
-        meche_basse = min(o, c) - l
-        
-        est_doji = corps <= (taille_totale * 0.15)
-        rejet_haussier = meche_basse >= (corps * 1.5) and meche_haute <= corps
-        rejet_baissier = meche_haute >= (corps * 1.5) and meche_basse <= corps
-        
-        confirmation_achat = est_doji or rejet_haussier
-        confirmation_vente = est_doji or rejet_baissier
 
         # CALCUL D'EXPIRATION
         largeur_bande = (bougie_fermee['bb_haute'] - bougie_fermee['bb_basse']) / c
@@ -220,20 +184,20 @@ def analyser_binaire_pro(symbole):
         action = None
         confiance = 0
         
-        # DÉCISION FINALE (Basée sur la clôture confirmée)
+        # DÉCISION FINALE (Basée sur la clôture et l'EMA 200)
         if c >= bougie_fermee['bb_haute'] and bougie_fermee['stoch_k'] > 80 and bougie_fermee['rsi'] > 60:
-            if c < ema_200 and tendance_m5_baissiere and confirmation_vente:
+            if c < ema_200: # Vente uniquement si on est sous l'EMA 200 (tendance baissière)
                 action = "🔴 VENTE (PUT)"
-                confiance = random.randint(95, 99) 
+                confiance = random.randint(90, 96) 
             else:
-                return "⚠️ Rejeté par le Bouclier Anti-Piège (Attente)", None, None, None
+                return "⚠️ Tendance haussière trop forte (Attente)", None, None, None
                 
         elif c <= bougie_fermee['bb_basse'] and bougie_fermee['stoch_k'] < 20 and bougie_fermee['rsi'] < 40:
-            if c > ema_200 and tendance_m5_haussiere and confirmation_achat:
+            if c > ema_200: # Achat uniquement si on est au-dessus de l'EMA 200 (tendance haussière)
                 action = "🟢 ACHAT (CALL)"
-                confiance = random.randint(95, 99)
+                confiance = random.randint(90, 96)
             else:
-                return "⚠️ Rejeté par le Bouclier Anti-Piège (Attente)", None, None, None
+                return "⚠️ Tendance baissière trop forte (Attente)", None, None, None
             
         else:
             return "⚠️ Marché neutre (Attente de cassure)", None, None, None
