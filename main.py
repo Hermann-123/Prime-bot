@@ -12,8 +12,19 @@ from threading import Thread, Timer
 import pandas as pd
 import ta
 
+# --- SÉCURITÉ DOTENV ---
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # --- CONFIGURATION DU TOKEN (INTÉGRÉ DIRECTEMENT) ---
 TELEGRAM_TOKEN = "8658287331:AAFJq993kMKhl6cRdiHgye_IdkYeLHEbor0"
+
+if not TELEGRAM_TOKEN:
+    print("⬛ BOÎTE NOIRE [ERREUR FATALE] : Le TELEGRAM_TOKEN est introuvable ! Vérifie l'onglet 'Environment' sur Render.", flush=True)
+    sys.exit(1)
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -34,7 +45,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Trading Binaire Prime VIP en ligne ! (Token Forcé)"
+    return "Bot Trading Binaire Prime VIP en ligne ! (Textes Courts)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -57,7 +68,7 @@ def est_autorise(user_id):
         else:
             del utilisateurs_autorises[user_id]
             try:
-                bot.send_message(user_id, "⚠️ **ABONNEMENT EXPIRÉ** ⚠️\n\nVotre accès au Terminal Prime est terminé. Veuillez contacter [@hermann1123](https://t.me/hermann1123) pour renouveler votre clé.", parse_mode="Markdown")
+                bot.send_message(user_id, "⚠️ **ABONNEMENT EXPIRÉ** ⚠️\n\nContacte [@hermann1123](https://t.me/hermann1123) pour renouveler ton accès.", parse_mode="Markdown")
             except:
                 pass
             return False
@@ -90,7 +101,7 @@ def verifier_resultat(chat_id):
     trade = trades_en_cours.get(chat_id)
     if not trade or not trade.get('prix_entree'):
         try:
-            bot.send_message(chat_id, "⚠️ **Trade terminé.** (Flux interrompu, résultat exact non vérifiable).", parse_mode="Markdown")
+            bot.send_message(chat_id, "⚠️ **Trade terminé.** (Résultat non vérifiable).", parse_mode="Markdown")
         except:
             pass
         return
@@ -110,9 +121,9 @@ def verifier_resultat(chat_id):
         gagne = True
 
     if gagne:
-        texte = f"✅ **VICTOIRE (ITM) !**\n\nSignal passé avec succès 🎉\nLe trade sur {symbole[:3]}/{symbole[3:]} a été validé !\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`"
+        texte = f"✅ **VICTOIRE (ITM) !** 🎉\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`"
     else:
-        texte = f"❌ **PERTE (OTM)** ⚠️\n\nLe marché s'est retourné sur {symbole[:3]}/{symbole[3:]}.\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`\n\n*Garde ton sang-froid, respecte ton Money Management.*"
+        texte = f"❌ **PERTE (OTM)** ⚠️\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`"
     
     try:
         bot.send_message(chat_id, texte, parse_mode="Markdown")
@@ -179,7 +190,7 @@ def analyser_binaire_pro(symbole):
             confiance = random.randint(88, 95)
             
         else:
-            return "⚠️ Marché neutre (Attente de cassure)", None, None, None
+            return "⚠️ Marché neutre", None, None, None
             
         return action, confiance, expiration, duree_secondes
         
@@ -209,7 +220,7 @@ def scanner_marche_auto():
                     markup = InlineKeyboardMarkup()
                     markup.add(InlineKeyboardButton(f"🔒 Verrouiller {actif[:3]}/{actif[3:]}", callback_data=f"set_{actif}"))
                     
-                    alerte_msg = f"🚨 **NOUVELLE OPPORTUNITÉ DÉTECTÉE** 🚨\n\nL'algorithme vient de repérer une configuration Sniper sur **{actif[:3]}/{actif[3:]}** (Confiance : {confiance}%).\n\n👇 *Clique sur le bouton ci-dessous pour verrouiller la cible, puis lance l'analyse !*"
+                    alerte_msg = f"🚨 **OPPORTUNITÉ SNIPER : {actif[:3]}/{actif[3:]}** 🚨\n\nConfiance : {confiance}%\n👇 *Clique pour verrouiller la cible !*"
                     
                     for chat_id in utilisateurs_a_alerter:
                         try:
@@ -219,7 +230,7 @@ def scanner_marche_auto():
         except Exception as e:
             print(f"⬛ BOÎTE NOIRE [ERREUR SCANNER] : {e}", flush=True)
 
-# --- ACTIVATION DE LA CLÉ PAR LE CLIENT (ANTI-PARTAGE) ---
+# --- ACTIVATION DE LA CLÉ ---
 @bot.message_handler(func=lambda m: m.text and m.text.startswith("PRIME-"))
 def activer_cle(message):
     cle = message.text.strip()
@@ -228,7 +239,7 @@ def activer_cle(message):
         infos_cle = cles_generees[cle]
         
         if infos_cle["user_id"] != message.chat.id:
-            bot.send_message(message.chat.id, "❌ **ACCÈS REFUSÉ** ❌\n\nCette clé d'activation a été générée pour un autre compte Telegram. Elle est personnelle et intransférable. Si vous souhaitez obtenir un accès, contactez le fondateur.", parse_mode="Markdown")
+            bot.send_message(message.chat.id, "❌ **Clé intransférable.** Contacte le fondateur.", parse_mode="Markdown")
             return
             
         jours = infos_cle["jours"]
@@ -239,15 +250,14 @@ def activer_cle(message):
         else:
             expiration = datetime.datetime.now() + datetime.timedelta(days=jours)
             utilisateurs_autorises[message.chat.id] = expiration
-            duree_texte = f"jusqu'au {expiration.strftime('%d/%m/%Y à %H:%M')}"
+            duree_texte = f"jusqu'au {expiration.strftime('%d/%m/%Y %H:%M')}"
             
         del cles_generees[cle] 
-        
-        bot.send_message(message.chat.id, f"✅ **CLÉ ACCEPTÉE !** 🎉\n\nVotre abonnement est activé {duree_texte}.\n\nTapez /start pour lancer le Terminal Prime.", parse_mode="Markdown")
+        bot.send_message(message.chat.id, f"✅ **CLÉ ACTIVÉE !** 🎉\nAccès valide {duree_texte}.\nTape /start", parse_mode="Markdown")
     else:
-        bot.send_message(message.chat.id, "❌ **Clé invalide, expirée ou déjà utilisée.**", parse_mode="Markdown")
+        bot.send_message(message.chat.id, "❌ **Clé invalide ou expirée.**", parse_mode="Markdown")
 
-# --- MENU D'ABONNEMENT POUR L'ADMIN ---
+# --- MENU ADMIN ---
 @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_"))
 def gerer_acces(call):
     if call.from_user.id != ADMIN_ID: return
@@ -264,12 +274,11 @@ def gerer_acces(call):
             InlineKeyboardButton("3 Mois", callback_data=f"gen_90_{user_id}"),
             InlineKeyboardButton("À Vie 👑", callback_data=f"gen_999_{user_id}")
         )
-        bot.edit_message_text(f"✅ Utilisateur `{user_id}` accepté en salle d'attente.\n\nChoisis la durée de son abonnement pour générer sa clé personnelle :", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
-        
+        bot.edit_message_text(f"✅ Choix de l'abonnement pour l'ID `{user_id}` :", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
     elif action == "refuser":
-        bot.edit_message_text(f"❌ Demande refusée/ignorée.", call.message.chat.id, call.message.message_id)
+        bot.edit_message_text(f"❌ Refusé.", call.message.chat.id, call.message.message_id)
 
-# --- GÉNÉRATION DE LA CLÉ LIÉE À L'INTRUS ---
+# --- GÉNÉRATION CLÉ ---
 @bot.callback_query_handler(func=lambda c: c.data.startswith("gen_"))
 def creer_cle(call):
     if call.from_user.id != ADMIN_ID: return
@@ -279,21 +288,19 @@ def creer_cle(call):
     
     cle = generer_cle()
     cles_generees[cle] = {"jours": jours, "user_id": user_id}
+    duree_texte = f"{jours} J" if jours != 999 else "À VIE"
     
-    duree_texte = f"{jours} Jours" if jours != 999 else "À VIE"
-    
-    msg_cle = f"🔑 **CLÉ PERSONNELLE GÉNÉRÉE** 🔑\n\n⏳ Durée : {duree_texte}\n👤 Pour l'ID : `{user_id}`\n\nCopie ce message et envoie-le à ton client :\n\n`{cle}`\n\n*(S'il donne cette clé à quelqu'un d'autre, elle sera refusée !)*"
-    
+    msg_cle = f"🔑 **CLÉ GÉNÉRÉE** ({duree_texte})\n👤 ID : `{user_id}`\n\n`{cle}`"
     bot.edit_message_text(msg_cle, call.message.chat.id, call.message.message_id, parse_mode="Markdown")
 
-# --- INTERFACE CLAVIER ---
+# --- CLAVIER ---
 def obtenir_clavier():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row(KeyboardButton("📊 CHOISIR UNE DEVISE"), KeyboardButton("🚀 LANCER L'ANALYSE"))
     markup.row(KeyboardButton("⏰ HEURES DE TRADING"))
     return markup
 
-# --- NOUVEAU MENU START + SÉCURITÉ INTRUS ---
+# --- MENU START (TEXTES COURTS) ---
 @bot.message_handler(commands=['start'])
 def bienvenue(message):
     user_id = message.chat.id
@@ -302,67 +309,60 @@ def bienvenue(message):
     if not est_autorise(user_id):
         markup = InlineKeyboardMarkup()
         markup.add(
-            InlineKeyboardButton("✅ Accepter (Créer Clé)", callback_data=f"admin_accepter_{user_id}"),
+            InlineKeyboardButton("✅ Créer Clé", callback_data=f"admin_accepter_{user_id}"),
             InlineKeyboardButton("❌ Ignorer", callback_data=f"admin_refuser_{user_id}")
         )
-        alerte_admin = f"🚨 **NOUVEAU CLIENT POTENTIEL** 🚨\n\nUn visiteur a cliqué sur /start.\n👤 Utilisateur : @{username}\n🆔 ID : `{user_id}`\n\nVeux-tu lui générer un abonnement ?"
+        alerte_admin = f"🚨 **NOUVEAU CLIENT** 🚨\n👤 @{username}\n🆔 `{user_id}`"
         try: bot.send_message(ADMIN_ID, alerte_admin, reply_markup=markup, parse_mode="Markdown")
         except: pass
             
-        texte_intrus = """🔒 **ACCÈS RESTREINT - TERMINAL PRIVÉ** 🔒
+        texte_intrus = """🔒 **ACCÈS VIP RESTREINT** 🔒
 
-Ce système est une intelligence artificielle de trading haute précision sous licence payante.
+Bot de trading algorithmique sous licence payante.
 
-📲 **Pour obtenir votre clé d'accès (Abonnement), veuillez contacter le fondateur : [@hermann1123](https://t.me/hermann1123)**
+📲 **Abonnement & Clé : [@hermann1123](https://t.me/hermann1123)**
 
-*(Si vous avez déjà acheté une clé, collez-la simplement ici).*"""
+*(Si tu as une clé, colle-la ici directement).*"""
         try: bot.send_message(user_id, texte_intrus, parse_mode="Markdown", disable_web_page_preview=True)
         except: pass
         return
 
     utilisateurs_actifs.add(user_id)
     
-    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION BINAIRE** 🔥
-    
-Bienvenue dans ton radar de trading ultime ! Ce bot est propulsé par un moteur d'intelligence mathématique (Pandas + TA) pour scanner les graphiques à la milliseconde.
+    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME VIP** 🔥
 
-📖 **MODE D'EMPLOI :**
-1️⃣ **SÉLECTION :** Clique sur "📊 CHOISIR UNE DEVISE" et verrouille la paire que tu souhaites trader.
-2️⃣ **RADAR :** Clique sur "🚀 LANCER L'ANALYSE" pour déclencher le scan et le verrouillage Sniper.
-3️⃣ **STRATÉGIE :** Consulte les meilleures fenêtres de tir via le bouton "⏰ HEURES DE TRADING".
-4️⃣ **DISCIPLINE :** N'oublie pas : 2% de mise maximum et stop total après 3 pertes dans une session.
+📖 **MODE D'EMPLOI EXPRESS :**
+1️⃣ **SÉLECTION 📊:** Choisis ta cible.
+2️⃣ **TIR 🚀:** Lance l'analyse Sniper.
+3️⃣ **TIMING ⏰:** Trade aux bonnes heures.
+4️⃣ **RÈGLE D'OR 🛡️:** Mise 2% max. Stop après 3 pertes.
 
-💡 **LE MOT DU FONDATEUR :**
-*Le marché ne ressent rien, n'aie aucune émotion face à lui. Le succès ne vient pas de la chance, mais d'une discipline de fer. Laisse l'algorithme faire les calculs, ne force jamais un trade et protège ton capital comme un tireur d'élite. Bon profit !* 🎯💸
+💡 *Zéro émotion, discipline de fer.* 🎯💸
 
-👨‍💻 **SUPPORT TECHNIQUE :**
-À la moindre rencontre d'un problème ou d'un bug, veuillez contacter le fondateur du bot : **[@hermann1123](https://t.me/hermann1123)**"""
+👨‍💻 **Support : [@hermann1123](https://t.me/hermann1123)**"""
 
     try: bot.send_message(message.chat.id, texte_bienvenue, reply_markup=obtenir_clavier(), parse_mode="Markdown", disable_web_page_preview=True)
     except: pass
 
-# --- SÉCURITÉ SUR LES AUTRES BOUTONS ---
+# --- HEURES DE TRADING (RACCOURCIES) ---
 @bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
 def horaires_trading(message):
     if not est_autorise(message.chat.id): return
     
-    texte = """🕒 **GUIDE DES HORAIRES DE TRADING (Heure GMT)** 🕒
+    texte = """🕒 **HORAIRES (GMT)** 🕒
 
-✅ **SESSION 1 : MATINÉE (08h00 - 11h00)**
-*Ouverture de l'Europe. Le vrai volume arrive sur les marchés.*
-👍 **Devises Favorites :** EUR/USD, EUR/JPY, CHF/JPY, USD/CHF
-👎 **À Éviter :** AUD/USD, AUD/JPY, USD/CAD (Marchés lents)
+✅ **MATIN (08h00 - 11h00)**
+👍 EUR/USD, EUR/JPY, CHF/JPY, USD/CHF
+👎 Éviter : AUD/USD, AUD/JPY, USD/CAD
 
-🔥 **SESSION 2 : ZONE EN OR (13h30 - 16h30)**
-*Croisement Europe / New York. La volatilité est maximale et les tendances sont pures.*
-👍 **Devises Favorites :** EUR/USD, USD/CAD, AUD/USD
-👎 **À Éviter :** Paires en JPY (le marché asiatique est fermé)
+🔥 **ZONE EN OR (13h30 - 16h30)**
+👍 EUR/USD, USD/CAD, AUD/USD
+👎 Éviter : Paires en JPY
 
-❌ **ZONE ROUGE : DANGER (22h00 - 07h00)**
-*Marché sans volume, mouvements manipulés ou OTC.*
-☠️ **À Fuir Absolument :** Toutes les devises. Laisse le bot se reposer.
+❌ **DANGER (22h00 - 07h00)**
+☠️ **À FUIR :** Marché mort ou manipulé.
 
-*Rappel de Discipline : Fixe-toi tes 2% de mise max et arrête-toi après 3 pertes dans la même session !*"""
+🛡️ *Rappel : Stop total après 3 pertes.*"""
     
     try: bot.send_message(message.chat.id, texte, parse_mode="Markdown")
     except: pass
@@ -381,7 +381,7 @@ def devises(message):
         InlineKeyboardButton("🇨🇭 CHF / JPY", callback_data="set_CHFJPY"),
         InlineKeyboardButton("🇦🇺 AUD / JPY", callback_data="set_AUDJPY")
     )
-    try: bot.send_message(message.chat.id, "Sélectionne l'actif à scanner :", reply_markup=markup)
+    try: bot.send_message(message.chat.id, "Sélectionne l'actif :", reply_markup=markup)
     except: pass
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
@@ -403,13 +403,11 @@ def lancer(message):
         return
 
     try:
-        msg = bot.send_message(message.chat.id, "⏳ *Initialisation du scan algorithmique rapide...*", parse_mode="Markdown")
+        msg = bot.send_message(message.chat.id, "⏳ *Scan algorithmique...*", parse_mode="Markdown")
         time.sleep(2)
-        bot.edit_message_text(f"📡 *Connexion au flux {actif[:3]}/{actif[3:]} et scan de la volatilité en cours...*", message.chat.id, msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text(f"📡 *Connexion {actif[:3]}/{actif[3:]}...*", message.chat.id, msg.message_id, parse_mode="Markdown")
         time.sleep(2)
-        bot.edit_message_text("⚙️ *Calcul des indicateurs avancés (BB, RSI, Stochastique)...*", message.chat.id, msg.message_id, parse_mode="Markdown")
-        time.sleep(2)
-        bot.edit_message_text("💎 *Triple confirmation et verrouillage Sniper...*", message.chat.id, msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text("⚙️ *Calcul des indicateurs...*", message.chat.id, msg.message_id, parse_mode="Markdown")
         time.sleep(1)
     except:
         return
@@ -417,31 +415,27 @@ def lancer(message):
     action, confiance, exp, duree_secondes = analyser_binaire_pro(actif)
     
     if action and "⚠️" in action:
-        try: bot.edit_message_text(f"{action}\nLe prix ne remplit pas les conditions strictes de l'algorithme. Patientez.", message.chat.id, msg.message_id)
+        try: bot.edit_message_text(f"{action}\nPatientez.", message.chat.id, msg.message_id)
         except: pass
         return
     elif not action:
-        try: bot.edit_message_text("❌ Échec de la récupération des données. Relance l'analyse.", message.chat.id, msg.message_id)
+        try: bot.edit_message_text("❌ Échec des données.", message.chat.id, msg.message_id)
         except: pass
         return
 
     maintenant = datetime.datetime.now()
     heure_entree_dt = (maintenant + datetime.timedelta(minutes=2)).replace(second=0, microsecond=0)
     heure_entree_texte = heure_entree_dt.strftime("%H:%M:00")
-    
-    mise_recommandee = int(CAPITAL_ACTUEL * 0.02)
 
-    signal = f"""🚀 **SIGNAL SNIPER GÉNÉRÉ** 🚀
+    signal = f"""🚀 **SIGNAL SNIPER** 🚀
 ──────────────────
 🛰 ACTIF : {actif[:3]}/{actif[3:]}
 🎯 ACTION : {action}
 ⏳ EXPIRATION : {exp}
 ──────────────────
 📍 ORDRE À : {heure_entree_texte} 👈
-💵 MISE RECOMMANDÉE : {mise_recommandee}$ (2%)
-📊 CONFIANCE : {confiance}% 🔥
-──────────────────
-💎 *Audit de résultat (ITM/OTM) activé en arrière-plan.*"""
+💵 MISE MAX : 2%
+📊 CONFIANCE : {confiance}% 🔥"""
 
     try:
         bot.delete_message(message.chat.id, msg.message_id)
@@ -456,10 +450,59 @@ def lancer(message):
     delai_attente_entree = max(0, delai_attente_entree)
     
     Timer(delai_attente_entree, relever_prix_entree, args=[message.chat.id, actif]).start()
-    
     delai_verification = delai_attente_entree + duree_secondes
     Timer(delai_verification, verifier_resultat, args=[message.chat.id]).start()
 
-# --- COMMANDE SECRÈTE : RADIOGRAPHIE DU MARCHÉ ---
+# --- VISION ---
 @bot.message_handler(commands=['vision'])
-def vision_marche(m
+def vision_marche(message):
+    if not est_autorise(message.chat.id): return
+    commande = message.text.split()
+    if len(commande) < 2:
+        try: bot.send_message(message.chat.id, "⚠️ Précise la devise. Ex : `/vision EURUSD`", parse_mode="Markdown")
+        except: pass
+        return
+        
+    symbole = commande[1].upper()
+    try: msg = bot.send_message(message.chat.id, f"🔍 *Scan de {symbole}...*", parse_mode="Markdown")
+    except: return
+    
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbole}=X?range=2d&interval=1m"
+    try:
+        reponse = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        donnees = reponse.json()
+        quote = donnees['chart']['result'][0]['indicators']['quote'][0]
+        
+        df = pd.DataFrame({'close': quote['close'], 'high': quote['high'], 'low': quote['low']}).dropna()
+        if len(df) < 50:
+            bot.edit_message_text("⚠️ Manque de données.", message.chat.id, msg.message_id)
+            return
+
+        indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
+        bb_haute = indicateur_bb.bollinger_hband().iloc[-1]
+        bb_basse = indicateur_bb.bollinger_lband().iloc[-1]
+        
+        stoch_k = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch().iloc[-1]
+        rsi = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi().iloc[-1]
+        prix_actuel = df['close'].iloc[-1]
+        
+        if prix_actuel >= bb_haute: position_bb = "🔴 Au Plafond"
+        elif prix_actuel <= bb_basse: position_bb = "🟢 Au Plancher"
+        else: position_bb = "⚪ Zone neutre"
+
+        rapport = f"👁️ **VISION : {symbole}** 👁️\n💰 Prix : `{prix_actuel:.5f}`\n📏 Bollinger : {position_bb}\n📊 RSI : `{rsi:.2f}`\n📉 Stochastique : `{stoch_k:.2f}`"
+        bot.edit_message_text(rapport, message.chat.id, msg.message_id, parse_mode="Markdown")
+    except Exception as e:
+        try: bot.edit_message_text("❌ Erreur de scan.", message.chat.id, msg.message_id)
+        except: pass
+
+if __name__ == "__main__":
+    print("⬛ BOÎTE NOIRE : Démarrage du système...", flush=True)
+    try:
+        keep_alive()
+        Thread(target=scanner_marche_auto, daemon=True).start()
+        print("⬛ BOÎTE NOIRE : Serveur Web et Scanner lancés avec succès.", flush=True)
+        bot.infinity_polling()
+    except Exception as e:
+        print(f"🚨 BOÎTE NOIRE [CRASH DÉTECTÉ] : {e}", flush=True)
+    
