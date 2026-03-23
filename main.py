@@ -41,7 +41,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Trading Binaire Prime VIP en ligne ! (Filtres Chirurgicaux Actifs)"
+    return "Bot Trading Binaire Prime VIP en ligne ! (Filtres Bougie Fermée)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -129,7 +129,7 @@ def verifier_resultat(chat_id):
     if chat_id in trades_en_cours:
         del trades_en_cours[chat_id]
 
-# --- MOTEUR D'ANALYSE PRO (PANDAS + TA + 3 ARMES CHIRURGICALES) ---
+# --- MOTEUR D'ANALYSE PRO (PANDAS + TA + BOUGIE FERMÉE) ---
 def analyser_binaire_pro(symbole):
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbole}=X?range=2d&interval=1m"
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -141,7 +141,7 @@ def analyser_binaire_pro(symbole):
         quote = resultat['indicators']['quote'][0]
         
         df = pd.DataFrame({
-            'open': quote['open'],  # Ajouté pour l'Arme 3 (Price Action)
+            'open': quote['open'],  
             'close': quote['close'],
             'high': quote['high'],
             'low': quote['low']
@@ -174,21 +174,23 @@ def analyser_binaire_pro(symbole):
             df_m5 = pd.DataFrame({'close': c_m5}).dropna()
             ema_50_m5 = ta.trend.EMAIndicator(close=df_m5['close'], window=50).ema_indicator().iloc[-1]
             if df_m5['close'].iloc[-1] > ema_50_m5:
-                tendance_m5_baissiere = False # M5 monte, on interdit les Ventes
+                tendance_m5_baissiere = False 
             else:
-                tendance_m5_haussiere = False # M5 descend, on interdit les Achats
+                tendance_m5_haussiere = False 
         except:
-            pass # Si erreur réseau M5, on ignore le filtre pour ne pas bloquer le bot
+            pass 
             
-        derniere_bougie = df.iloc[-1]
-        prix_actuel = derniere_bougie['close']
-        ema_200 = derniere_bougie['ema_200']
+        # --- LE SECRET : ON ANALYSE LA BOUGIE FERMÉE (-2) AU LIEU DE CELLE EN COURS (-1) ---
+        bougie_fermee = df.iloc[-2]
+        prix_actuel_temps_reel = df.iloc[-1]['close'] # On garde le prix en temps réel juste pour l'affichage de l'entrée
         
-        # ARME 3 : PRICE ACTION (ANALYSE DE LA BOUGIE)
-        o = derniere_bougie['open']
-        c = derniere_bougie['close']
-        h = derniere_bougie['high']
-        l = derniere_bougie['low']
+        ema_200 = bougie_fermee['ema_200']
+        
+        # ARME 3 : PRICE ACTION SUR LA BOUGIE FERMÉE
+        o = bougie_fermee['open']
+        c = bougie_fermee['close']
+        h = bougie_fermee['high']
+        l = bougie_fermee['low']
         
         taille_totale = (h - l) if (h - l) > 0 else 0.00001
         corps = abs(c - o)
@@ -203,7 +205,7 @@ def analyser_binaire_pro(symbole):
         confirmation_vente = est_doji or rejet_baissier
 
         # CALCUL D'EXPIRATION
-        largeur_bande = (derniere_bougie['bb_haute'] - derniere_bougie['bb_basse']) / prix_actuel
+        largeur_bande = (bougie_fermee['bb_haute'] - bougie_fermee['bb_basse']) / c
         duree_secondes = 180
         if largeur_bande > 0.0020:
             expiration = "30 SEC ⏱"
@@ -218,16 +220,16 @@ def analyser_binaire_pro(symbole):
         action = None
         confiance = 0
         
-        # DÉCISION FINALE (AVEC LES 3 ARMES)
-        if prix_actuel >= derniere_bougie['bb_haute'] and derniere_bougie['stoch_k'] > 80 and derniere_bougie['rsi'] > 60:
-            if prix_actuel < ema_200 and tendance_m5_baissiere and confirmation_vente:
+        # DÉCISION FINALE (Basée sur la clôture confirmée)
+        if c >= bougie_fermee['bb_haute'] and bougie_fermee['stoch_k'] > 80 and bougie_fermee['rsi'] > 60:
+            if c < ema_200 and tendance_m5_baissiere and confirmation_vente:
                 action = "🔴 VENTE (PUT)"
-                confiance = random.randint(95, 99) # La confiance monte en flèche !
+                confiance = random.randint(95, 99) 
             else:
                 return "⚠️ Rejeté par le Bouclier Anti-Piège (Attente)", None, None, None
                 
-        elif prix_actuel <= derniere_bougie['bb_basse'] and derniere_bougie['stoch_k'] < 20 and derniere_bougie['rsi'] < 40:
-            if prix_actuel > ema_200 and tendance_m5_haussiere and confirmation_achat:
+        elif c <= bougie_fermee['bb_basse'] and bougie_fermee['stoch_k'] < 20 and bougie_fermee['rsi'] < 40:
+            if c > ema_200 and tendance_m5_haussiere and confirmation_achat:
                 action = "🟢 ACHAT (CALL)"
                 confiance = random.randint(95, 99)
             else:
@@ -515,7 +517,7 @@ def lancer(message):
     delai_verification = delai_attente_entree + duree_secondes
     Timer(delai_verification, verifier_resultat, args=[message.chat.id]).start()
 
-# --- COMMANDE SECRÈTE : RADIOGRAPHIE DU MARCHÉ (AVEC LES ARMES) ---
+# --- COMMANDE SECRÈTE : RADIOGRAPHIE DU MARCHÉ ---
 @bot.message_handler(commands=['vision'])
 def vision_marche(message):
     if not est_autorise(message.chat.id):
@@ -555,7 +557,6 @@ def vision_marche(message):
         stoch_k = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch().iloc[-1]
         rsi = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi().iloc[-1]
         
-        # AJOUT EMA 200 POUR LA VISION
         df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
         ema_200 = df['ema_200'].iloc[-1]
         
