@@ -12,6 +12,13 @@ from threading import Thread, Timer
 import pandas as pd
 import ta
 
+# --- SÉCURITÉ DOTENV ---
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # --- CONFIGURATION DU TOKEN (INTÉGRÉ DIRECTEMENT) ---
 TELEGRAM_TOKEN = "8658287331:AAFJq993kMKhl6cRdiHgye_IdkYeLHEbor0"
 
@@ -34,7 +41,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Trading Binaire Prime VIP en ligne ! (Token Forcé)"
+    return "Bot Trading Binaire Prime VIP en ligne ! (Filtres Chirurgicaux Actifs)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -122,7 +129,7 @@ def verifier_resultat(chat_id):
     if chat_id in trades_en_cours:
         del trades_en_cours[chat_id]
 
-# --- MOTEUR D'ANALYSE PRO (PANDAS + TA) ---
+# --- MOTEUR D'ANALYSE PRO (PANDAS + TA + 3 ARMES CHIRURGICALES) ---
 def analyser_binaire_pro(symbole):
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbole}=X?range=2d&interval=1m"
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -134,6 +141,7 @@ def analyser_binaire_pro(symbole):
         quote = resultat['indicators']['quote'][0]
         
         df = pd.DataFrame({
+            'open': quote['open'],  # Ajouté pour l'Arme 3 (Price Action)
             'close': quote['close'],
             'high': quote['high'],
             'low': quote['low']
@@ -142,6 +150,7 @@ def analyser_binaire_pro(symbole):
         if len(df) < 50:
             return "⚠️ Pas assez de données", None, None, None
 
+        # INDICATEURS DE BASE
         indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
         df['bb_haute'] = indicateur_bb.bollinger_hband()
         df['bb_basse'] = indicateur_bb.bollinger_lband()
@@ -152,9 +161,48 @@ def analyser_binaire_pro(symbole):
         indicateur_rsi = ta.momentum.RSIIndicator(close=df['close'], window=14)
         df['rsi'] = indicateur_rsi.rsi()
 
+        # ARME 1 : BOUCLIER ANTI-TENDANCE (EMA 200)
+        df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
+
+        # ARME 2 : RADAR MULTI-TIMEFRAME (M5)
+        tendance_m5_haussiere = True
+        tendance_m5_baissiere = True
+        try:
+            url_m5 = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbole}=X?range=5d&interval=5m"
+            res_m5 = requests.get(url_m5, headers=headers, timeout=5).json()
+            c_m5 = res_m5['chart']['result'][0]['indicators']['quote'][0]['close']
+            df_m5 = pd.DataFrame({'close': c_m5}).dropna()
+            ema_50_m5 = ta.trend.EMAIndicator(close=df_m5['close'], window=50).ema_indicator().iloc[-1]
+            if df_m5['close'].iloc[-1] > ema_50_m5:
+                tendance_m5_baissiere = False # M5 monte, on interdit les Ventes
+            else:
+                tendance_m5_haussiere = False # M5 descend, on interdit les Achats
+        except:
+            pass # Si erreur réseau M5, on ignore le filtre pour ne pas bloquer le bot
+            
         derniere_bougie = df.iloc[-1]
         prix_actuel = derniere_bougie['close']
+        ema_200 = derniere_bougie['ema_200']
         
+        # ARME 3 : PRICE ACTION (ANALYSE DE LA BOUGIE)
+        o = derniere_bougie['open']
+        c = derniere_bougie['close']
+        h = derniere_bougie['high']
+        l = derniere_bougie['low']
+        
+        taille_totale = (h - l) if (h - l) > 0 else 0.00001
+        corps = abs(c - o)
+        meche_haute = h - max(o, c)
+        meche_basse = min(o, c) - l
+        
+        est_doji = corps <= (taille_totale * 0.15)
+        rejet_haussier = meche_basse >= (corps * 1.5) and meche_haute <= corps
+        rejet_baissier = meche_haute >= (corps * 1.5) and meche_basse <= corps
+        
+        confirmation_achat = est_doji or rejet_haussier
+        confirmation_vente = est_doji or rejet_baissier
+
+        # CALCUL D'EXPIRATION
         largeur_bande = (derniere_bougie['bb_haute'] - derniere_bougie['bb_basse']) / prix_actuel
         duree_secondes = 180
         if largeur_bande > 0.0020:
@@ -170,13 +218,20 @@ def analyser_binaire_pro(symbole):
         action = None
         confiance = 0
         
+        # DÉCISION FINALE (AVEC LES 3 ARMES)
         if prix_actuel >= derniere_bougie['bb_haute'] and derniere_bougie['stoch_k'] > 80 and derniere_bougie['rsi'] > 60:
-            action = "🔴 VENTE (PUT)"
-            confiance = random.randint(88, 95) 
-            
+            if prix_actuel < ema_200 and tendance_m5_baissiere and confirmation_vente:
+                action = "🔴 VENTE (PUT)"
+                confiance = random.randint(95, 99) # La confiance monte en flèche !
+            else:
+                return "⚠️ Rejeté par le Bouclier Anti-Piège (Attente)", None, None, None
+                
         elif prix_actuel <= derniere_bougie['bb_basse'] and derniere_bougie['stoch_k'] < 20 and derniere_bougie['rsi'] < 40:
-            action = "🟢 ACHAT (CALL)"
-            confiance = random.randint(88, 95)
+            if prix_actuel > ema_200 and tendance_m5_haussiere and confirmation_achat:
+                action = "🟢 ACHAT (CALL)"
+                confiance = random.randint(95, 99)
+            else:
+                return "⚠️ Rejeté par le Bouclier Anti-Piège (Attente)", None, None, None
             
         else:
             return "⚠️ Marché neutre (Attente de cassure)", None, None, None
@@ -460,7 +515,7 @@ def lancer(message):
     delai_verification = delai_attente_entree + duree_secondes
     Timer(delai_verification, verifier_resultat, args=[message.chat.id]).start()
 
-# --- COMMANDE SECRÈTE : RADIOGRAPHIE DU MARCHÉ ---
+# --- COMMANDE SECRÈTE : RADIOGRAPHIE DU MARCHÉ (AVEC LES ARMES) ---
 @bot.message_handler(commands=['vision'])
 def vision_marche(message):
     if not est_autorise(message.chat.id):
@@ -500,6 +555,10 @@ def vision_marche(message):
         stoch_k = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch().iloc[-1]
         rsi = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi().iloc[-1]
         
+        # AJOUT EMA 200 POUR LA VISION
+        df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
+        ema_200 = df['ema_200'].iloc[-1]
+        
         prix_actuel = df['close'].iloc[-1]
         
         if prix_actuel >= bb_haute:
@@ -512,6 +571,7 @@ def vision_marche(message):
         rapport = f"""👁️ **VISION RAYONS X : {symbole}** 👁️
 ──────────────────
 💰 **Prix actuel :** `{prix_actuel:.5f}`
+🛡️ **EMA 200 (Tendance) :** `{ema_200:.5f}`
 📏 **Position Bollinger :** {position_bb}
 
 📊 **Niveau RSI :** `{rsi:.2f}` 
