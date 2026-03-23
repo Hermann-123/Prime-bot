@@ -12,19 +12,18 @@ from threading import Thread, Timer
 import pandas as pd
 import ta
 
-# --- CORRECTION DE LA LIGNE 9 (SÉCURITÉ DOTENV) ---
+# --- SÉCURITÉ DOTENV ---
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    # Si Render ne trouve pas dotenv, on ignore car tu as mis le token dans l'onglet Environment
     pass
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION DU TOKEN ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 if not TELEGRAM_TOKEN:
-    print("⬛ BOÎTE NOIRE [ERREUR FATALE] : Le TELEGRAM_TOKEN est introuvable ! Vérifie l'onglet 'Environment' sur Render.")
+    print("⬛ BOÎTE NOIRE [ERREUR FATALE] : Le TELEGRAM_TOKEN est introuvable ! Vérifie l'onglet 'Environment' sur Render.", flush=True)
     sys.exit(1)
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
@@ -46,7 +45,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Trading Binaire Prime VIP en ligne !"
+    return "Bot Trading Binaire Prime VIP en ligne ! (Boîte Noire Active)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -101,7 +100,10 @@ def relever_prix_entree(chat_id, symbole):
 def verifier_resultat(chat_id):
     trade = trades_en_cours.get(chat_id)
     if not trade or not trade.get('prix_entree'):
-        bot.send_message(chat_id, "⚠️ **Trade terminé.** (Flux interrompu, résultat exact non vérifiable).", parse_mode="Markdown")
+        try:
+            bot.send_message(chat_id, "⚠️ **Trade terminé.** (Flux interrompu, résultat exact non vérifiable).", parse_mode="Markdown")
+        except:
+            pass
         return
 
     prix_sortie = obtenir_prix_actuel(trade['symbole'])
@@ -123,7 +125,10 @@ def verifier_resultat(chat_id):
     else:
         texte = f"❌ **PERTE (OTM)** ⚠️\n\nLe marché s'est retourné sur {symbole[:3]}/{symbole[3:]}.\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`\n\n*Garde ton sang-froid, respecte ton Money Management.*"
     
-    bot.send_message(chat_id, texte, parse_mode="Markdown")
+    try:
+        bot.send_message(chat_id, texte, parse_mode="Markdown")
+    except:
+        pass
     
     if chat_id in trades_en_cours:
         del trades_en_cours[chat_id]
@@ -223,7 +228,7 @@ def scanner_marche_auto():
                         except:
                             pass
         except Exception as e:
-            print(f"⬛ BOÎTE NOIRE [ERREUR SCANNER] : {e}")
+            print(f"⬛ BOÎTE NOIRE [ERREUR SCANNER] : {e}", flush=True)
 
 # --- ACTIVATION DE LA CLÉ PAR LE CLIENT (ANTI-PARTAGE) ---
 @bot.message_handler(func=lambda m: m.text and m.text.startswith("PRIME-"))
@@ -306,7 +311,6 @@ def bienvenue(message):
     username = message.from_user.username or message.from_user.first_name
     
     if not est_autorise(user_id):
-        # Alerte à l'admin
         markup = InlineKeyboardMarkup()
         markup.add(
             InlineKeyboardButton("✅ Accepter (Créer Clé)", callback_data=f"admin_accepter_{user_id}"),
@@ -316,7 +320,6 @@ def bienvenue(message):
         try: bot.send_message(ADMIN_ID, alerte_admin, reply_markup=markup, parse_mode="Markdown")
         except: pass
             
-        # Message à l'intrus
         texte_intrus = """🔒 **ACCÈS RESTREINT - TERMINAL PRIVÉ** 🔒
 
 Ce système est une intelligence artificielle de trading haute précision sous licence payante.
@@ -324,13 +327,12 @@ Ce système est une intelligence artificielle de trading haute précision sous l
 📲 **Pour obtenir votre clé d'accès (Abonnement), veuillez contacter le fondateur : [@hermann1123](https://t.me/hermann1123)**
 
 *(Si vous avez déjà acheté une clé, collez-la simplement ici).*"""
-        bot.send_message(user_id, texte_intrus, parse_mode="Markdown", disable_web_page_preview=True)
+        try: bot.send_message(user_id, texte_intrus, parse_mode="Markdown", disable_web_page_preview=True)
+        except: pass
         return
 
-    # Si l'utilisateur est autorisé (Toi, ou un abonné)
     utilisateurs_actifs.add(user_id)
     
-    # Design magnifique conservé
     texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION BINAIRE** 🔥
     
 Bienvenue dans ton radar de trading ultime ! Ce bot est propulsé par un moteur d'intelligence mathématique (Pandas + TA) pour scanner les graphiques à la milliseconde.
@@ -347,7 +349,8 @@ Bienvenue dans ton radar de trading ultime ! Ce bot est propulsé par un moteur 
 👨‍💻 **SUPPORT TECHNIQUE :**
 À la moindre rencontre d'un problème ou d'un bug, veuillez contacter le fondateur du bot : **[@hermann1123](https://t.me/hermann1123)**"""
 
-    bot.send_message(message.chat.id, texte_bienvenue, reply_markup=obtenir_clavier(), parse_mode="Markdown", disable_web_page_preview=True)
+    try: bot.send_message(message.chat.id, texte_bienvenue, reply_markup=obtenir_clavier(), parse_mode="Markdown", disable_web_page_preview=True)
+    except: pass
 
 # --- SÉCURITÉ SUR LES AUTRES BOUTONS ---
 @bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
@@ -372,7 +375,8 @@ def horaires_trading(message):
 
 *Rappel de Discipline : Fixe-toi tes 2% de mise max et arrête-toi après 3 pertes dans la même session !*"""
     
-    bot.send_message(message.chat.id, texte, parse_mode="Markdown")
+    try: bot.send_message(message.chat.id, texte, parse_mode="Markdown")
+    except: pass
 
 @bot.message_handler(func=lambda m: m.text == "📊 CHOISIR UNE DEVISE")
 def devises(message):
@@ -388,14 +392,16 @@ def devises(message):
         InlineKeyboardButton("🇨🇭 CHF / JPY", callback_data="set_CHFJPY"),
         InlineKeyboardButton("🇦🇺 AUD / JPY", callback_data="set_AUDJPY")
     )
-    bot.send_message(message.chat.id, "Sélectionne l'actif à scanner :", reply_markup=markup)
+    try: bot.send_message(message.chat.id, "Sélectionne l'actif à scanner :", reply_markup=markup)
+    except: pass
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
 def save_devise(call):
     if not est_autorise(call.message.chat.id): return
     actif = call.data.split("_")[1]
     user_prefs[call.from_user.id] = actif
-    bot.send_message(call.message.chat.id, f"✅ **Cible verrouillée : {actif[:3]}/{actif[3:]}**")
+    try: bot.send_message(call.message.chat.id, f"✅ **Cible verrouillée : {actif[:3]}/{actif[3:]}**")
+    except: pass
 
 @bot.message_handler(func=lambda m: m.text == "🚀 LANCER L'ANALYSE")
 def lancer(message):
@@ -403,26 +409,31 @@ def lancer(message):
     
     actif = user_prefs.get(message.from_user.id)
     if not actif:
-        bot.send_message(message.chat.id, "⚠️ Choisis d'abord une devise !")
+        try: bot.send_message(message.chat.id, "⚠️ Choisis d'abord une devise !")
+        except: pass
         return
 
-    msg = bot.send_message(message.chat.id, "⏳ *Initialisation du scan algorithmique rapide...*", parse_mode="Markdown")
-    
-    time.sleep(2)
-    bot.edit_message_text(f"📡 *Connexion au flux {actif[:3]}/{actif[3:]} et scan de la volatilité en cours...*", message.chat.id, msg.message_id, parse_mode="Markdown")
-    time.sleep(2)
-    bot.edit_message_text("⚙️ *Calcul des indicateurs avancés (BB, RSI, Stochastique)...*", message.chat.id, msg.message_id, parse_mode="Markdown")
-    time.sleep(2)
-    bot.edit_message_text("💎 *Triple confirmation et verrouillage Sniper...*", message.chat.id, msg.message_id, parse_mode="Markdown")
-    time.sleep(1)
-    
+    try:
+        msg = bot.send_message(message.chat.id, "⏳ *Initialisation du scan algorithmique rapide...*", parse_mode="Markdown")
+        time.sleep(2)
+        bot.edit_message_text(f"📡 *Connexion au flux {actif[:3]}/{actif[3:]} et scan de la volatilité en cours...*", message.chat.id, msg.message_id, parse_mode="Markdown")
+        time.sleep(2)
+        bot.edit_message_text("⚙️ *Calcul des indicateurs avancés (BB, RSI, Stochastique)...*", message.chat.id, msg.message_id, parse_mode="Markdown")
+        time.sleep(2)
+        bot.edit_message_text("💎 *Triple confirmation et verrouillage Sniper...*", message.chat.id, msg.message_id, parse_mode="Markdown")
+        time.sleep(1)
+    except:
+        return
+        
     action, confiance, exp, duree_secondes = analyser_binaire_pro(actif)
     
     if action and "⚠️" in action:
-        bot.edit_message_text(f"{action}\nLe prix ne remplit pas les conditions strictes de l'algorithme. Patientez.", message.chat.id, msg.message_id)
+        try: bot.edit_message_text(f"{action}\nLe prix ne remplit pas les conditions strictes de l'algorithme. Patientez.", message.chat.id, msg.message_id)
+        except: pass
         return
     elif not action:
-        bot.edit_message_text("❌ Échec de la récupération des données. Relance l'analyse.", message.chat.id, msg.message_id)
+        try: bot.edit_message_text("❌ Échec de la récupération des données. Relance l'analyse.", message.chat.id, msg.message_id)
+        except: pass
         return
 
     maintenant = datetime.datetime.now()
@@ -443,8 +454,11 @@ def lancer(message):
 ──────────────────
 💎 *Audit de résultat (ITM/OTM) activé en arrière-plan.*"""
 
-    bot.delete_message(message.chat.id, msg.message_id)
-    bot.send_message(message.chat.id, signal, parse_mode="Markdown")
+    try:
+        bot.delete_message(message.chat.id, msg.message_id)
+        bot.send_message(message.chat.id, signal, parse_mode="Markdown")
+    except:
+        pass
 
     action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
     trades_en_cours[message.chat.id] = {'symbole': actif, 'action': action_simplifiee}
@@ -453,8 +467,3 @@ def lancer(message):
     delai_attente_entree = max(0, delai_attente_entree)
     
     Timer(delai_attente_entree, relever_prix_entree, args=[message.chat.id, actif]).start()
-    
-    delai_verification = delai_attente_entree + duree_secondes
-    Timer(delai_verification, verifier_resultat, args=[message.chat.id]).start()
-
-# --- COMMANDE SECRÈTE : RADIOGRA
