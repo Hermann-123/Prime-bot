@@ -12,19 +12,8 @@ from threading import Thread, Timer
 import pandas as pd
 import ta
 
-# --- SÉCURITÉ DOTENV ---
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
-# --- CONFIGURATION DU TOKEN ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-
-if not TELEGRAM_TOKEN:
-    print("⬛ BOÎTE NOIRE [ERREUR FATALE] : Le TELEGRAM_TOKEN est introuvable ! Vérifie l'onglet 'Environment' sur Render.", flush=True)
-    sys.exit(1)
+# --- CONFIGURATION DU TOKEN (INTÉGRÉ DIRECTEMENT) ---
+TELEGRAM_TOKEN = "8658287331:AAFJq993kMKhl6cRdiHgye_IdkYeLHEbor0"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -45,7 +34,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Trading Binaire Prime VIP en ligne ! (Boîte Noire Active)"
+    return "Bot Trading Binaire Prime VIP en ligne ! (Token Forcé)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -467,3 +456,10 @@ def lancer(message):
     delai_attente_entree = max(0, delai_attente_entree)
     
     Timer(delai_attente_entree, relever_prix_entree, args=[message.chat.id, actif]).start()
+    
+    delai_verification = delai_attente_entree + duree_secondes
+    Timer(delai_verification, verifier_resultat, args=[message.chat.id]).start()
+
+# --- COMMANDE SECRÈTE : RADIOGRAPHIE DU MARCHÉ ---
+@bot.message_handler(commands=['vision'])
+def vision_marche(m
