@@ -37,11 +37,15 @@ derniere_alerte_auto = {}
 utilisateurs_autorises = {ADMIN_ID: "LIFETIME"}
 cles_generees = {}
 
+# --- VARIABLES DU BILAN JOURNALIER ---
+stats_journee = {'ITM': 0, 'OTM': 0, 'details': []}
+bilan_envoye_aujourdhui = False
+
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Trading Prime VIP en ligne ! (Moteur Chirurgical + Esthétique Réparée)"
+    return "Bot Trading Prime VIP en ligne ! (Bilan 22h Actif + Esthétique Intacte)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -87,13 +91,14 @@ def obtenir_prix_actuel(symbole):
     except:
         return None
 
-# --- VÉRIFICATION AUTOMATIQUE (ITM/OTM) ---
+# --- VÉRIFICATION AUTOMATIQUE (ITM/OTM) + ENREGISTREMENT BILAN ---
 def relever_prix_entree(chat_id, symbole):
     prix = obtenir_prix_actuel(symbole)
     if prix and chat_id in trades_en_cours:
         trades_en_cours[chat_id]['prix_entree'] = prix
 
 def verifier_resultat(chat_id):
+    global stats_journee
     trade = trades_en_cours.get(chat_id)
     if not trade or not trade.get('prix_entree'):
         try:
@@ -116,10 +121,16 @@ def verifier_resultat(chat_id):
     elif "PUT" in action and prix_sortie < prix_entree:
         gagne = True
 
+    nom_paire = f"{symbole[:3]}/{symbole[3:]}"
+    
     if gagne:
-        texte = f"✅ **VICTOIRE (ITM) !**\n\nSignal passé avec succès 🎉\nLe trade sur {symbole[:3]}/{symbole[3:]} a été validé !\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`"
+        texte = f"✅ **VICTOIRE (ITM) !**\n\nSignal passé avec succès 🎉\nLe trade sur {nom_paire} a été validé !\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`"
+        stats_journee['ITM'] += 1
+        stats_journee['details'].append(f"✅ {nom_paire} ({action})")
     else:
-        texte = f"❌ **PERTE (OTM)** ⚠️\n\nLe marché s'est retourné sur {symbole[:3]}/{symbole[3:]}.\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`\n\n*Garde ton sang-froid, respecte ton Money Management.*"
+        texte = f"❌ **PERTE (OTM)** ⚠️\n\nLe marché s'est retourné sur {nom_paire}.\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`\n\n*Garde ton sang-froid, respecte ton Money Management.*"
+        stats_journee['OTM'] += 1
+        stats_journee['details'].append(f"❌ {nom_paire} ({action})")
     
     try:
         bot.send_message(chat_id, texte, parse_mode="Markdown")
@@ -276,6 +287,50 @@ def scanner_marche_auto():
                             pass
         except Exception as e:
             print(f"⬛ BOÎTE NOIRE [ERREUR SCANNER] : {e}", flush=True)
+
+# --- BILAN JOURNALIER (22H00) ---
+def routine_bilan_journalier():
+    global stats_journee, bilan_envoye_aujourdhui
+    while True:
+        try:
+            maintenant = datetime.datetime.now()
+            
+            # Déclenchement à 22h00 exact
+            if maintenant.hour == 22 and maintenant.minute == 0 and not bilan_envoye_aujourdhui:
+                total_trades = stats_journee['ITM'] + stats_journee['OTM']
+                
+                if total_trades > 0:
+                    winrate = round((stats_journee['ITM'] / total_trades) * 100)
+                    
+                    texte_bilan = f"📊 **BILAN VIP DE LA JOURNÉE** 📊\n──────────────────\n"
+                    texte_bilan += f"🎯 **Total Signaux :** {total_trades}\n"
+                    texte_bilan += f"✅ **Victoires (ITM) :** {stats_journee['ITM']}\n"
+                    texte_bilan += f"❌ **Pertes (OTM) :** {stats_journee['OTM']}\n"
+                    texte_bilan += f"📈 **Winrate :** {winrate}%\n──────────────────\n"
+                    texte_bilan += "📝 **Détail des tirs :**\n"
+                    
+                    for detail in stats_journee['details']:
+                        texte_bilan += f"{detail}\n"
+                        
+                    texte_bilan += "\n💤 *Le Terminal Prime entre dans la zone rouge. Le radar est en veille. Excellente nuit à tous les VIP !*"
+                    
+                    utilisateurs_a_alerter = [uid for uid in utilisateurs_actifs if est_autorise(uid)]
+                    for chat_id in utilisateurs_a_alerter:
+                        try: bot.send_message(chat_id, texte_bilan, parse_mode="Markdown")
+                        except: pass
+                
+                # Réinitialisation pour le lendemain
+                stats_journee = {'ITM': 0, 'OTM': 0, 'details': []}
+                bilan_envoye_aujourdhui = True
+                
+            # Remise à zéro du verrou à 23h pour le jour suivant
+            elif maintenant.hour == 23:
+                bilan_envoye_aujourdhui = False
+                
+            time.sleep(30) # Vérifie l'heure toutes les 30 secondes
+        except Exception as e:
+            print(f"Erreur Bilan: {e}", flush=True)
+            time.sleep(60)
 
 # --- ACTIVATION DE LA CLÉ PAR LE CLIENT (ANTI-PARTAGE) ---
 @bot.message_handler(func=lambda m: m.text and m.text.startswith("PRIME-"))
@@ -629,6 +684,7 @@ if __name__ == "__main__":
     try:
         keep_alive()
         Thread(target=scanner_marche_auto, daemon=True).start()
+        Thread(target=routine_bilan_journalier, daemon=True).start()
         print("⬛ BOÎTE NOIRE : Serveur Web et Scanner lancés avec succès.", flush=True)
         bot.infinity_polling()
     except Exception as e:
