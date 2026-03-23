@@ -1,8 +1,8 @@
 import os
+import sys
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 import requests
-from dotenv import load_dotenv
 import datetime
 import random
 import time
@@ -11,15 +11,21 @@ from flask import Flask
 from threading import Thread, Timer
 import pandas as pd
 import ta
-import sys
+
+# --- CORRECTION DE LA LIGNE 9 (SÉCURITÉ DOTENV) ---
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # Si Render ne trouve pas dotenv, on ignore car tu as mis le token dans l'onglet Environment
+    pass
 
 # --- CONFIGURATION ---
-load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-# BOÎTE NOIRE : Arrêt d'urgence si le Token est introuvable
 if not TELEGRAM_TOKEN:
     print("⬛ BOÎTE NOIRE [ERREUR FATALE] : Le TELEGRAM_TOKEN est introuvable ! Vérifie l'onglet 'Environment' sur Render.")
+    sys.exit(1)
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -40,7 +46,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Trading Binaire Prime VIP en ligne ! (Boîte Noire Active)"
+    return "Bot Trading Binaire Prime VIP en ligne !"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -310,7 +316,7 @@ def bienvenue(message):
         try: bot.send_message(ADMIN_ID, alerte_admin, reply_markup=markup, parse_mode="Markdown")
         except: pass
             
-        # Message à l'intrus (Aesthétique conservée)
+        # Message à l'intrus
         texte_intrus = """🔒 **ACCÈS RESTREINT - TERMINAL PRIVÉ** 🔒
 
 Ce système est une intelligence artificielle de trading haute précision sous licence payante.
@@ -324,7 +330,7 @@ Ce système est une intelligence artificielle de trading haute précision sous l
     # Si l'utilisateur est autorisé (Toi, ou un abonné)
     utilisateurs_actifs.add(user_id)
     
-    # Restauration de l'ancien design magnifique
+    # Design magnifique conservé
     texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION BINAIRE** 🔥
     
 Bienvenue dans ton radar de trading ultime ! Ce bot est propulsé par un moteur d'intelligence mathématique (Pandas + TA) pour scanner les graphiques à la milliseconde.
@@ -348,7 +354,6 @@ Bienvenue dans ton radar de trading ultime ! Ce bot est propulsé par un moteur 
 def horaires_trading(message):
     if not est_autorise(message.chat.id): return
     
-    # Restauration du design des heures
     texte = """🕒 **GUIDE DES HORAIRES DE TRADING (Heure GMT)** 🕒
 
 ✅ **SESSION 1 : MATINÉE (08h00 - 11h00)**
@@ -401,7 +406,6 @@ def lancer(message):
         bot.send_message(message.chat.id, "⚠️ Choisis d'abord une devise !")
         return
 
-    # Restauration de la belle animation de chargement
     msg = bot.send_message(message.chat.id, "⏳ *Initialisation du scan algorithmique rapide...*", parse_mode="Markdown")
     
     time.sleep(2)
@@ -427,7 +431,6 @@ def lancer(message):
     
     mise_recommandee = int(CAPITAL_ACTUEL * 0.02)
 
-    # Restauration du gros ticket de signal
     signal = f"""🚀 **SIGNAL SNIPER GÉNÉRÉ** 🚀
 ──────────────────
 🛰 ACTIF : {actif[:3]}/{actif[3:]}
@@ -452,4 +455,6 @@ def lancer(message):
     Timer(delai_attente_entree, relever_prix_entree, args=[message.chat.id, actif]).start()
     
     delai_verification = delai_attente_entree + duree_secondes
-    Timer(delai_verification, verifier_resultat, args=[message.c
+    Timer(delai_verification, verifier_resultat, args=[message.chat.id]).start()
+
+# --- COMMANDE SECRÈTE : RADIOGRA
