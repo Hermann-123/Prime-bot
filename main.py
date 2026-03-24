@@ -19,7 +19,7 @@ try:
 except ImportError:
     pass
 
-# --- CONFIGURATION DE LA NOUVELLE CLÉ TOKEN ---
+# --- CONFIGURATION DE LA CLÉ TOKEN ---
 TELEGRAM_TOKEN = "8658287331:AAFqpouJVHo6SJtXOoQ6qlCToYXPv3oR8H4"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
@@ -45,7 +45,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Trading Prime VIP en ligne ! (Nouvelle Clé Sécurisée + Lancement direct)"
+    return "Bot Trading Prime VIP en ligne ! (Mise à jour Jauge Visuelle VIP)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -140,6 +140,14 @@ def verifier_resultat(chat_id):
     if chat_id in trades_en_cours:
         del trades_en_cours[chat_id]
 
+# --- GÉNÉRATEUR DE JAUGE VISUELLE ---
+def generer_jauge(pourcentage):
+    if pourcentage == 99:
+        return "[██████████] 👑 MAX"
+    pleins = int(pourcentage / 10)
+    vides = 10 - pleins
+    return f"[{'█' * pleins}{'░' * vides}] {pourcentage}%"
+
 # --- MOTEUR D'ANALYSE VIP (RATIO 1.5x + RSI 60/40 + EMA 200) ---
 def analyser_binaire_pro(symbole):
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbole}=X?range=2d&interval=1m"
@@ -159,7 +167,7 @@ def analyser_binaire_pro(symbole):
         }).dropna()
         
         if len(df) < 50:
-            return "⚠️ Pas assez de données", None, None, None
+            return "⚠️ Pas assez de données", None, None, None, None, None, None
 
         indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
         df['bb_haute'] = indicateur_bb.bollinger_hband()
@@ -191,20 +199,14 @@ def analyser_binaire_pro(symbole):
         meche_haute = h - max(o, c)
         meche_basse = min(o, c) - l
         
-        # Le Marteau (Hammer) 
         est_marteau = meche_basse >= (corps * 1.5) and meche_haute <= corps
-        
-        # L'Etoile Filante (Shooting Star)
         est_etoile = meche_haute >= (corps * 1.5) and meche_basse <= corps
         
-        # L'Avalement (Engulfing)
         bullish_engulfing = (prev_c < prev_o) and (c > o) and (c >= prev_o) and (o <= prev_c)
         bearish_engulfing = (prev_c > prev_o) and (c < o) and (c <= prev_o) and (o >= prev_c)
 
-        # DÉTECTION DE L'INSIDE BAR (TITAN)
         est_inside_bar = (h < bougie_mere['high']) and (l > bougie_mere['low'])
 
-        # EXPIRATION LONGUE SÉCURISÉE
         largeur_bande = (bougie_enfant['bb_haute'] - bougie_enfant['bb_basse']) / c
         if largeur_bande > 0.0025:
             expiration = "5 MINUTES ⏱"
@@ -216,8 +218,14 @@ def analyser_binaire_pro(symbole):
         action = None
         confiance = 0
         
+        # VARIABLES POUR LE DESIGN VISUEL
+        rsi_val = round(bougie_enfant['rsi'], 1)
+        stoch_val = round(bougie_enfant['stoch_k'], 1)
+        bb_status = ""
+        
         # DÉCISION FINALE (RSI 60/40 + BOUGIES DE RETOURNEMENT)
         if c >= bougie_enfant['bb_haute'] and bougie_enfant['stoch_k'] >= 80 and bougie_enfant['rsi'] >= 60:
+            bb_status = "🔴 Rejet au Plafond"
             if c < ema_200: 
                 if est_inside_bar:
                     action = "🔴 VENTE (PUT) 👑 [TITAN INSIDE BAR]"
@@ -226,11 +234,12 @@ def analyser_binaire_pro(symbole):
                     action = "🔴 VENTE (PUT) ☄️ [PRICE ACTION VIP]"
                     confiance = random.randint(94, 98)
                 else:
-                    return "⚠️ Rejeté : Pas de bougie de retournement (Attente)", None, None, None
+                    return "⚠️ Rejeté : Pas de bougie de retournement (Attente)", None, None, None, None, None, None
             else:
-                return "⚠️ Tendance haussière forte (Attente)", None, None, None
+                return "⚠️ Tendance haussière forte (Attente)", None, None, None, None, None, None
                 
         elif c <= bougie_enfant['bb_basse'] and bougie_enfant['stoch_k'] <= 20 and bougie_enfant['rsi'] <= 40:
+            bb_status = "🟢 Rejet au Plancher"
             if c > ema_200: 
                 if est_inside_bar:
                     action = "🟢 ACHAT (CALL) 👑 [TITAN INSIDE BAR]"
@@ -239,17 +248,17 @@ def analyser_binaire_pro(symbole):
                     action = "🟢 ACHAT (CALL) 🔨 [PRICE ACTION VIP]"
                     confiance = random.randint(94, 98)
                 else:
-                    return "⚠️ Rejeté : Pas de bougie de retournement (Attente)", None, None, None
+                    return "⚠️ Rejeté : Pas de bougie de retournement (Attente)", None, None, None, None, None, None
             else:
-                return "⚠️ Tendance baissière forte (Attente)", None, None, None
+                return "⚠️ Tendance baissière forte (Attente)", None, None, None, None, None, None
             
         else:
-            return "⚠️ Marché neutre (Attente d'opportunité)", None, None, None
+            return "⚠️ Marché neutre (Attente d'opportunité)", None, None, None, None, None, None
             
-        return action, confiance, expiration, duree_secondes
+        return action, confiance, expiration, duree_secondes, rsi_val, stoch_val, bb_status
         
     except Exception as e:
-        return None, None, None, None
+        return None, None, None, None, None, None, None
 
 # --- SCANNER AUTOMATIQUE EN ARRIÈRE-PLAN ---
 def scanner_marche_auto():
@@ -262,7 +271,7 @@ def scanner_marche_auto():
                 continue
             
             for actif in devises_a_surveiller:
-                action, confiance, exp, duree = analyser_binaire_pro(actif)
+                action, confiance, exp, duree, rsi_val, stoch_val, bb_status = analyser_binaire_pro(actif)
                 
                 if action and "⚠️" not in action and confiance:
                     maintenant = time.time()
@@ -295,7 +304,6 @@ def routine_bilan_journalier():
         try:
             maintenant = datetime.datetime.now()
             
-            # Déclenchement à 22h00 exact
             if maintenant.hour == 22 and maintenant.minute == 0 and not bilan_envoye_aujourdhui:
                 total_trades = stats_journee['ITM'] + stats_journee['OTM']
                 
@@ -319,15 +327,13 @@ def routine_bilan_journalier():
                         try: bot.send_message(chat_id, texte_bilan, parse_mode="Markdown")
                         except: pass
                 
-                # Réinitialisation pour le lendemain
                 stats_journee = {'ITM': 0, 'OTM': 0, 'details': []}
                 bilan_envoye_aujourdhui = True
                 
-            # Remise à zéro du verrou à 23h pour le jour suivant
             elif maintenant.hour == 23:
                 bilan_envoye_aujourdhui = False
                 
-            time.sleep(30) # Vérifie l'heure toutes les 30 secondes
+            time.sleep(30)
         except Exception as e:
             print(f"Erreur Bilan: {e}", flush=True)
             time.sleep(60)
@@ -460,7 +466,6 @@ Bienvenue dans ton radar de trading ultime ! Ce bot est propulsé par un moteur 
     except: 
         pass
 
-# --- SÉCURITÉ SUR LES AUTRES BOUTONS ---
 @bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
 def horaires_trading(message):
     if not est_autorise(message.chat.id): 
@@ -510,7 +515,7 @@ def devises(message):
     except: 
         pass
 
-# Clic sur le bouton de devise = Lancement immédiat de l'analyse !
+# --- LANCEMENT DE L'ANALYSE (Bouton Auto + Manuel avec le nouveau design de jauge) ---
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
 def save_devise(call):
     chat_id = call.message.chat.id
@@ -532,7 +537,7 @@ def save_devise(call):
     except:
         return
         
-    action, confiance, exp, duree_secondes = analyser_binaire_pro(actif)
+    action, confiance, exp, duree_secondes, rsi_val, stoch_val, bb_status = analyser_binaire_pro(actif)
     
     if action and "⚠️" in action:
         try: 
@@ -550,20 +555,32 @@ def save_devise(call):
     maintenant = datetime.datetime.now()
     heure_entree_dt = (maintenant + datetime.timedelta(minutes=2)).replace(second=0, microsecond=0)
     heure_entree_texte = heure_entree_dt.strftime("%H:%M:00")
-    
     mise_recommandee = int(CAPITAL_ACTUEL * 0.02)
+
+    jauge = generer_jauge(confiance)
+    rsi_emoji = "🟢" if "ACHAT" in action else "🔴"
+    rsi_text = f"Essoufflé à {rsi_val}" if "ACHAT" in action else f"Surchauffe à {rsi_val}"
+    stoch_text = "Survente" if "ACHAT" in action else "Surachat"
 
     signal = f"""🚀 **SIGNAL SNIPER GÉNÉRÉ** 🚀
 ──────────────────
-🛰 ACTIF : {actif[:3]}/{actif[3:]}
-🎯 ACTION : {action}
-⏳ EXPIRATION : {exp}
+🛰 **ACTIF :** {actif[:3]}/{actif[3:]}
+🎯 **ACTION :** {action}
+⏳ **EXPIRATION :** {exp}
 ──────────────────
-📍 ORDRE À : {heure_entree_texte} 👈
-💵 MISE RECOMMANDÉE : {mise_recommandee}$ (2%)
-📊 CONFIANCE : {confiance}% 🔥
+🌡️ **FORCE DU SIGNAL (ALGORITHME) :**
+{jauge}
+
+📊 **VALIDATION DES INDICATEURS :**
+➤ **RSI :** {rsi_emoji} Validé ({rsi_text})
+➤ **Stochastique :** {rsi_emoji} Validé ({stoch_text})
+➤ **Bollinger :** {rsi_emoji} {bb_status}
 ──────────────────
-💎 *Audit de résultat (ITM/OTM) activé en arrière-plan.*"""
+📍 **ORDRE À :** {heure_entree_texte} 👈
+💵 **MISE RECOMMANDÉE :** {mise_recommandee}$ (2%)
+🔥 **CONFIANCE GLOBALE :** {confiance}%
+──────────────────
+💎 *Audit de résultat (ITM/OTM) activé.*"""
 
     try:
         bot.delete_message(chat_id, msg.message_id)
@@ -582,7 +599,6 @@ def save_devise(call):
     delai_verification = delai_attente_entree + duree_secondes
     Timer(delai_verification, verifier_resultat, args=[chat_id]).start()
 
-# L'ancien bouton garde quand même sa fonction si le client l'utilise manuellement
 @bot.message_handler(func=lambda m: m.text == "🚀 LANCER L'ANALYSE")
 def lancer(message):
     if not est_autorise(message.chat.id): 
@@ -608,7 +624,7 @@ def lancer(message):
     except:
         return
         
-    action, confiance, exp, duree_secondes = analyser_binaire_pro(actif)
+    action, confiance, exp, duree_secondes, rsi_val, stoch_val, bb_status = analyser_binaire_pro(actif)
     
     if action and "⚠️" in action:
         try: 
@@ -626,20 +642,32 @@ def lancer(message):
     maintenant = datetime.datetime.now()
     heure_entree_dt = (maintenant + datetime.timedelta(minutes=2)).replace(second=0, microsecond=0)
     heure_entree_texte = heure_entree_dt.strftime("%H:%M:00")
-    
     mise_recommandee = int(CAPITAL_ACTUEL * 0.02)
+
+    jauge = generer_jauge(confiance)
+    rsi_emoji = "🟢" if "ACHAT" in action else "🔴"
+    rsi_text = f"Essoufflé à {rsi_val}" if "ACHAT" in action else f"Surchauffe à {rsi_val}"
+    stoch_text = "Survente" if "ACHAT" in action else "Surachat"
 
     signal = f"""🚀 **SIGNAL SNIPER GÉNÉRÉ** 🚀
 ──────────────────
-🛰 ACTIF : {actif[:3]}/{actif[3:]}
-🎯 ACTION : {action}
-⏳ EXPIRATION : {exp}
+🛰 **ACTIF :** {actif[:3]}/{actif[3:]}
+🎯 **ACTION :** {action}
+⏳ **EXPIRATION :** {exp}
 ──────────────────
-📍 ORDRE À : {heure_entree_texte} 👈
-💵 MISE RECOMMANDÉE : {mise_recommandee}$ (2%)
-📊 CONFIANCE : {confiance}% 🔥
+🌡️ **FORCE DU SIGNAL (ALGORITHME) :**
+{jauge}
+
+📊 **VALIDATION DES INDICATEURS :**
+➤ **RSI :** {rsi_emoji} Validé ({rsi_text})
+➤ **Stochastique :** {rsi_emoji} Validé ({stoch_text})
+➤ **Bollinger :** {rsi_emoji} {bb_status}
 ──────────────────
-💎 *Audit de résultat (ITM/OTM) activé en arrière-plan.*"""
+📍 **ORDRE À :** {heure_entree_texte} 👈
+💵 **MISE RECOMMANDÉE :** {mise_recommandee}$ (2%)
+🔥 **CONFIANCE GLOBALE :** {confiance}%
+──────────────────
+💎 *Audit de résultat (ITM/OTM) activé.*"""
 
     try:
         bot.delete_message(message.chat.id, msg.message_id)
