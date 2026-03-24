@@ -20,7 +20,7 @@ except ImportError:
     pass
 
 # --- CONFIGURATION DE LA CLÉ TOKEN ---
-TELEGRAM_TOKEN = "8658287331:AAGXESrbHM-NB9QODQrMdDZbinueHEdngBA"
+TELEGRAM_TOKEN = "8658287331:AAGxo2mryCakfYLRwHZ6QnYUs6L5iucc7xQ"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -37,15 +37,17 @@ derniere_alerte_auto = {}
 utilisateurs_autorises = {ADMIN_ID: "LIFETIME"}
 cles_generees = {}
 
-# --- VARIABLES DU BILAN JOURNALIER ---
+# --- VARIABLES DES HORAIRES ET BILAN ---
 stats_journee = {'ITM': 0, 'OTM': 0, 'details': []}
 bilan_envoye_aujourdhui = False
+transition_nuit_envoyee = False
+transition_jour_envoyee = False
 
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Trading Prime VIP en ligne ! (Mise à jour Jauge Visuelle VIP)"
+    return "Bot Trading Prime VIP en ligne ! (Esthétique VIP Restaurée + Pocket Broker)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -91,7 +93,7 @@ def obtenir_prix_actuel(symbole):
     except:
         return None
 
-# --- VÉRIFICATION AUTOMATIQUE (ITM/OTM) + ENREGISTREMENT BILAN ---
+# --- VÉRIFICATION AUTOMATIQUE (ITM/OTM) ---
 def relever_prix_entree(chat_id, symbole):
     prix = obtenir_prix_actuel(symbole)
     if prix and chat_id in trades_en_cours:
@@ -148,7 +150,7 @@ def generer_jauge(pourcentage):
     vides = 10 - pleins
     return f"[{'█' * pleins}{'░' * vides}] {pourcentage}%"
 
-# --- MOTEUR D'ANALYSE VIP (RATIO 1.5x + RSI 60/40 + EMA 200) ---
+# --- MOTEUR D'ANALYSE VIP ---
 def analyser_binaire_pro(symbole):
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbole}=X?range=2d&interval=1m"
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -180,7 +182,6 @@ def analyser_binaire_pro(symbole):
         df['rsi'] = indicateur_rsi.rsi()
         df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
             
-        # EXTRACTION DES BOUGIES 
         bougie_mere = df.iloc[-3]
         bougie_enfant = df.iloc[-2] 
         
@@ -193,7 +194,6 @@ def analyser_binaire_pro(symbole):
         prev_o = bougie_mere['open']
         prev_c = bougie_mere['close']
 
-        # DÉTECTION MATHÉMATIQUE DES BOUGIES (RATIO 1.5x)
         taille_totale = (h - l) if (h - l) > 0 else 0.00001
         corps = abs(c - o)
         meche_haute = h - max(o, c)
@@ -218,12 +218,10 @@ def analyser_binaire_pro(symbole):
         action = None
         confiance = 0
         
-        # VARIABLES POUR LE DESIGN VISUEL
         rsi_val = round(bougie_enfant['rsi'], 1)
         stoch_val = round(bougie_enfant['stoch_k'], 1)
         bb_status = ""
         
-        # DÉCISION FINALE (RSI 60/40 + BOUGIES DE RETOURNEMENT)
         if c >= bougie_enfant['bb_haute'] and bougie_enfant['stoch_k'] >= 80 and bougie_enfant['rsi'] >= 60:
             bb_status = "🔴 Rejet au Plafond"
             if c < ema_200: 
@@ -260,15 +258,22 @@ def analyser_binaire_pro(symbole):
     except Exception as e:
         return None, None, None, None, None, None, None
 
-# --- SCANNER AUTOMATIQUE EN ARRIÈRE-PLAN ---
+# --- SCANNER AUTOMATIQUE DYNAMIQUE (POCKET BROKER 100%) ---
 def scanner_marche_auto():
-    devises_a_surveiller = ["EURUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "EURJPY", "CHFJPY", "AUDJPY"]
     while True:
         try:
             time.sleep(60)
             utilisateurs_a_alerter = [uid for uid in utilisateurs_actifs if est_autorise(uid)]
             if not utilisateurs_a_alerter: 
                 continue
+            
+            heure_actuelle = datetime.datetime.now().hour
+            if 8 <= heure_actuelle < 20:
+                # MODE JOUR : Plus de GBP. USD/CAD remplace.
+                devises_a_surveiller = ["EURUSD", "USDCAD", "USDCHF", "EURJPY", "AUDUSD", "USDJPY", "AUDJPY"]
+            else:
+                # MODE NUIT : Plus de GBP ni de NZD. Focus JPY et AUD.
+                devises_a_surveiller = ["AUDJPY", "USDJPY", "CHFJPY", "CADJPY", "AUDCAD", "EURAUD"]
             
             for actif in devises_a_surveiller:
                 action, confiance, exp, duree, rsi_val, stoch_val, bb_status = analyser_binaire_pro(actif)
@@ -285,9 +290,9 @@ def scanner_marche_auto():
                     markup.add(InlineKeyboardButton(f"📊 Analyser {actif[:3]}/{actif[3:]}", callback_data=f"set_{actif}"))
                     
                     if "TITAN" in action:
-                        alerte_msg = f"👑 **ALERTE TITAN DÉTECTÉE** 👑\n\nUne compression de marché (Inside Bar) rarissime vient d'apparaître sur **{actif[:3]}/{actif[3:]}** (Confiance : {confiance}%).\n\n👇 *Clique sur le bouton ci-dessous pour lancer l'analyse !*"
+                        alerte_msg = f"👑 **ALERTE TITAN DÉTECTÉE** 👑\n\nUne compression de marché rarissime vient d'apparaître sur **{actif[:3]}/{actif[3:]}** (Confiance : {confiance}%).\n\n👇 *Clique sur le bouton ci-dessous pour lancer l'analyse !*"
                     else:
-                        alerte_msg = f"🚨 **NOUVELLE OPPORTUNITÉ VIP** 🚨\n\nL'algorithme a validé une figure de retournement (Price Action) sur **{actif[:3]}/{actif[3:]}** (Confiance : {confiance}%).\n\n👇 *Clique sur le bouton ci-dessous pour lancer l'analyse !*"
+                        alerte_msg = f"🚨 **NOUVELLE OPPORTUNITÉ VIP** 🚨\n\nL'algorithme a validé une figure de retournement sur **{actif[:3]}/{actif[3:]}** (Confiance : {confiance}%).\n\n👇 *Clique sur le bouton ci-dessous pour lancer l'analyse !*"
                     
                     for chat_id in utilisateurs_a_alerter:
                         try:
@@ -297,32 +302,41 @@ def scanner_marche_auto():
         except Exception as e:
             print(f"⬛ BOÎTE NOIRE [ERREUR SCANNER] : {e}", flush=True)
 
-# --- BILAN JOURNALIER (22H00) ---
-def routine_bilan_journalier():
-    global stats_journee, bilan_envoye_aujourdhui
+# --- GESTION DES HORAIRES (TRANSITIONS & BILAN) ---
+def gestion_horaires_et_bilan():
+    global stats_journee, bilan_envoye_aujourdhui, transition_nuit_envoyee, transition_jour_envoyee
     while True:
         try:
             maintenant = datetime.datetime.now()
+            heure = maintenant.hour
+            minute = maintenant.minute
             
-            if maintenant.hour == 22 and maintenant.minute == 0 and not bilan_envoye_aujourdhui:
+            utilisateurs_a_alerter = [uid for uid in utilisateurs_actifs if est_autorise(uid)]
+
+            if heure == 20 and minute == 0 and not transition_nuit_envoyee:
+                texte_nuit = "🌉 **TRANSITION DE SESSION : MODE ASIATIQUE ACTIVÉ** 🌉\n\nLes volumes s'effondrent sur l'Europe et l'Amérique. Pour protéger votre capital, le Terminal Prime bascule ses radars sur l'Asie (Focus spécial JPY & AUD).\n\n*La chasse continue de nuit. Restez concentrés.* 🥷"
+                for chat_id in utilisateurs_a_alerter:
+                    try: bot.send_message(chat_id, texte_nuit, parse_mode="Markdown")
+                    except: pass
+                transition_nuit_envoyee = True
+                transition_jour_envoyee = False
+
+            elif heure == 8 and minute == 0 and not transition_jour_envoyee:
+                texte_jour = "☀️ **TRANSITION DE SESSION : MODE EUROPE/US ACTIVÉ** ☀️\n\nOuverture des marchés majeurs. La volatilité est de retour sur l'EUR et l'USD. Le Terminal Prime repasse en mode offensif classique.\n\n*Bonne journée de trading à tous les VIP !* 🚀"
+                for chat_id in utilisateurs_a_alerter:
+                    try: bot.send_message(chat_id, texte_jour, parse_mode="Markdown")
+                    except: pass
+                transition_jour_envoyee = True
+                transition_nuit_envoyee = False
+
+            elif heure == 22 and minute == 0 and not bilan_envoye_aujourdhui:
                 total_trades = stats_journee['ITM'] + stats_journee['OTM']
-                
                 if total_trades > 0:
                     winrate = round((stats_journee['ITM'] / total_trades) * 100)
-                    
-                    texte_bilan = f"📊 **BILAN VIP DE LA JOURNÉE** 📊\n──────────────────\n"
-                    texte_bilan += f"🎯 **Total Signaux :** {total_trades}\n"
-                    texte_bilan += f"✅ **Victoires (ITM) :** {stats_journee['ITM']}\n"
-                    texte_bilan += f"❌ **Pertes (OTM) :** {stats_journee['OTM']}\n"
-                    texte_bilan += f"📈 **Winrate :** {winrate}%\n──────────────────\n"
-                    texte_bilan += "📝 **Détail des tirs :**\n"
-                    
+                    texte_bilan = f"📊 **BILAN VIP DE LA JOURNÉE** 📊\n──────────────────\n🎯 **Total Signaux :** {total_trades}\n✅ **Victoires (ITM) :** {stats_journee['ITM']}\n❌ **Pertes (OTM) :** {stats_journee['OTM']}\n📈 **Winrate :** {winrate}%\n──────────────────\n📝 **Détail des tirs :**\n"
                     for detail in stats_journee['details']:
                         texte_bilan += f"{detail}\n"
-                        
-                    texte_bilan += "\n💤 *Le Terminal Prime entre dans la zone rouge. Le radar est en veille. Excellente nuit à tous les VIP !*"
-                    
-                    utilisateurs_a_alerter = [uid for uid in utilisateurs_actifs if est_autorise(uid)]
+                    texte_bilan += "\n💤 *Le radar continue sa surveillance nocturne. Excellente nuit à tous les VIP !*"
                     for chat_id in utilisateurs_a_alerter:
                         try: bot.send_message(chat_id, texte_bilan, parse_mode="Markdown")
                         except: pass
@@ -330,15 +344,14 @@ def routine_bilan_journalier():
                 stats_journee = {'ITM': 0, 'OTM': 0, 'details': []}
                 bilan_envoye_aujourdhui = True
                 
-            elif maintenant.hour == 23:
+            elif heure == 23:
                 bilan_envoye_aujourdhui = False
                 
             time.sleep(30)
         except Exception as e:
-            print(f"Erreur Bilan: {e}", flush=True)
             time.sleep(60)
 
-# --- ACTIVATION DE LA CLÉ PAR LE CLIENT (ANTI-PARTAGE) ---
+# --- ACTIVATION DE LA CLÉ ---
 @bot.message_handler(func=lambda m: m.text and m.text.startswith("PRIME-"))
 def activer_cle(message):
     cle = message.text.strip()
@@ -347,7 +360,7 @@ def activer_cle(message):
         infos_cle = cles_generees[cle]
         
         if infos_cle["user_id"] != message.chat.id:
-            bot.send_message(message.chat.id, "❌ **ACCÈS REFUSÉ** ❌\n\nCette clé d'activation a été générée pour un autre compte Telegram. Elle est personnelle et intransférable. Si vous souhaitez obtenir un accès, contactez le fondateur.", parse_mode="Markdown")
+            bot.send_message(message.chat.id, "❌ **ACCÈS REFUSÉ** ❌\n\nCette clé d'activation a été générée pour un autre compte Telegram.", parse_mode="Markdown")
             return
             
         jours = infos_cle["jours"]
@@ -361,12 +374,11 @@ def activer_cle(message):
             duree_texte = f"jusqu'au {expiration.strftime('%d/%m/%Y à %H:%M')}"
             
         del cles_generees[cle] 
-        
         bot.send_message(message.chat.id, f"✅ **CLÉ ACCEPTÉE !** 🎉\n\nVotre abonnement est activé {duree_texte}.\n\nTapez /start pour lancer le Terminal Prime.", parse_mode="Markdown")
     else:
         bot.send_message(message.chat.id, "❌ **Clé invalide, expirée ou déjà utilisée.**", parse_mode="Markdown")
 
-# --- MENU D'ABONNEMENT POUR L'ADMIN ---
+# --- MENU D'ABONNEMENT ADMIN ---
 @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_"))
 def gerer_acces(call):
     if call.from_user.id != ADMIN_ID: return
@@ -383,12 +395,11 @@ def gerer_acces(call):
             InlineKeyboardButton("3 Mois", callback_data=f"gen_90_{user_id}"),
             InlineKeyboardButton("À Vie 👑", callback_data=f"gen_999_{user_id}")
         )
-        bot.edit_message_text(f"✅ Utilisateur `{user_id}` accepté en salle d'attente.\n\nChoisis la durée de son abonnement pour générer sa clé personnelle :", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+        bot.edit_message_text(f"✅ Utilisateur `{user_id}` accepté.\nChoisis la durée :", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
         
     elif action == "refuser":
-        bot.edit_message_text(f"❌ Demande refusée/ignorée.", call.message.chat.id, call.message.message_id)
+        bot.edit_message_text(f"❌ Demande refusée.", call.message.chat.id, call.message.message_id)
 
-# --- GÉNÉRATION DE LA CLÉ LIÉE À L'INTRUS ---
 @bot.callback_query_handler(func=lambda c: c.data.startswith("gen_"))
 def creer_cle(call):
     if call.from_user.id != ADMIN_ID: return
@@ -401,18 +412,16 @@ def creer_cle(call):
     
     duree_texte = f"{jours} Jours" if jours != 999 else "À VIE"
     
-    msg_cle = f"🔑 **CLÉ PERSONNELLE GÉNÉRÉE** 🔑\n\n⏳ Durée : {duree_texte}\n👤 Pour l'ID : `{user_id}`\n\nCopie ce message et envoie-le à ton client :\n\n`{cle}`\n\n*(S'il donne cette clé à quelqu'un d'autre, elle sera refusée !)*"
+    msg_cle = f"🔑 **CLÉ GÉNÉRÉE** 🔑\n\n⏳ Durée : {duree_texte}\n👤 ID : `{user_id}`\n\nCopie ce message à ton client :\n\n`{cle}`"
     
     bot.edit_message_text(msg_cle, call.message.chat.id, call.message.message_id, parse_mode="Markdown")
 
-# --- INTERFACE CLAVIER ---
 def obtenir_clavier():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row(KeyboardButton("📊 CHOISIR UNE DEVISE"), KeyboardButton("🚀 LANCER L'ANALYSE"))
     markup.row(KeyboardButton("⏰ HEURES DE TRADING"))
     return markup
 
-# --- NOUVEAU MENU START + SÉCURITÉ INTRUS ---
 @bot.message_handler(commands=['start'])
 def bienvenue(message):
     user_id = message.chat.id
@@ -421,12 +430,11 @@ def bienvenue(message):
     if not est_autorise(user_id):
         markup = InlineKeyboardMarkup()
         markup.add(
-            InlineKeyboardButton("✅ Accepter (Créer Clé)", callback_data=f"admin_accepter_{user_id}"),
+            InlineKeyboardButton("✅ Accepter", callback_data=f"admin_accepter_{user_id}"),
             InlineKeyboardButton("❌ Ignorer", callback_data=f"admin_refuser_{user_id}")
         )
-        alerte_admin = f"🚨 **NOUVEAU CLIENT POTENTIEL** 🚨\n\nUn visiteur a cliqué sur /start.\n👤 Utilisateur : @{username}\n🆔 ID : `{user_id}`\n\nVeux-tu lui générer un abonnement ?"
         try: 
-            bot.send_message(ADMIN_ID, alerte_admin, reply_markup=markup, parse_mode="Markdown")
+            bot.send_message(ADMIN_ID, f"🚨 **NOUVEAU CLIENT POTENTIEL** 🚨\n\n👤 @{username}\n🆔 `{user_id}`\n\nGénérer un abonnement ?", reply_markup=markup, parse_mode="Markdown")
         except: 
             pass
             
@@ -456,13 +464,10 @@ Bienvenue dans ton radar de trading ultime ! Ce bot est propulsé par un moteur 
 4️⃣ **DISCIPLINE :** N'oublie pas : 2% de mise maximum et stop total après 3 pertes dans une session.
 
 💡 **LE MOT DU FONDATEUR :**
-*Le marché ne ressent rien, n'aie aucune émotion face à lui. Le succès ne vient pas de la chance, mais d'une discipline de fer. Laisse l'algorithme faire les calculs, ne force jamais un trade et protège ton capital comme un tireur d'élite. Bon profit !* 🎯💸
-
-👨‍💻 **SUPPORT TECHNIQUE :**
-À la moindre rencontre d'un problème ou d'un bug, veuillez contacter le fondateur du bot : **[@hermann1123](https://t.me/hermann1123)**"""
+*Le marché ne ressent rien, n'aie aucune émotion face à lui. Le succès ne vient pas de la chance, mais d'une discipline de fer. Laisse l'algorithme faire les calculs, ne force jamais un trade et protège ton capital comme un tireur d'élite. Bon profit !* 🎯💸"""
 
     try: 
-        bot.send_message(message.chat.id, texte_bienvenue, reply_markup=obtenir_clavier(), parse_mode="Markdown", disable_web_page_preview=True)
+        bot.send_message(message.chat.id, texte_bienvenue, reply_markup=obtenir_clavier(), parse_mode="Markdown")
     except: 
         pass
 
@@ -475,17 +480,16 @@ def horaires_trading(message):
 
 ✅ **SESSION 1 : MATINÉE (08h00 - 11h00)**
 *Ouverture de l'Europe. Le vrai volume arrive sur les marchés.*
-👍 **Devises Favorites :** EUR/USD, EUR/JPY, CHF/JPY, USD/CHF
-👎 **À Éviter :** AUD/USD, AUD/JPY, USD/CAD (Marchés lents)
+👍 **Devises Favorites :** EUR/USD, USD/JPY, AUD/USD
+👎 **À Éviter :** Marchés lents
 
 🔥 **SESSION 2 : ZONE EN OR (13h30 - 16h30)**
 *Croisement Europe / New York. La volatilité est maximale et les tendances sont pures.*
 👍 **Devises Favorites :** EUR/USD, USD/CAD, AUD/USD
-👎 **À Éviter :** Paires en JPY (le marché asiatique est fermé)
 
-❌ **ZONE ROUGE : DANGER (22h00 - 07h00)**
-*Marché sans volume, mouvements manipulés ou OTC.*
-☠️ **À Fuir Absolument :** Toutes les devises. Laisse le bot se reposer.
+🌉 **SESSION 3 : MODE NUIT (20h00 - 08h00)**
+*L'Europe s'endort, l'Asie se réveille. Le bot bascule automatiquement en mode sécurité pour éviter les marchés plats.*
+👍 **Devises Favorites :** AUD/JPY, USD/JPY, CAD/JPY, CHF/JPY
 
 *Rappel de Discipline : Fixe-toi tes 2% de mise max et arrête-toi après 3 pertes dans la même session !*"""
     
@@ -500,22 +504,31 @@ def devises(message):
         return
     
     markup = InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        InlineKeyboardButton("🇪🇺 EUR / USD", callback_data="set_EURUSD"),
-        InlineKeyboardButton("🇯🇵 USD / JPY", callback_data="set_USDJPY"),
-        InlineKeyboardButton("🇦🇺 AUD / USD", callback_data="set_AUDUSD"),
-        InlineKeyboardButton("🇨🇦 USD / CAD", callback_data="set_USDCAD"),
-        InlineKeyboardButton("🇨🇭 USD / CHF", callback_data="set_USDCHF"),
-        InlineKeyboardButton("🇪🇺 EUR / JPY", callback_data="set_EURJPY"),
-        InlineKeyboardButton("🇨🇭 CHF / JPY", callback_data="set_CHFJPY"),
-        InlineKeyboardButton("🇦🇺 AUD / JPY", callback_data="set_AUDJPY")
-    )
+    heure = datetime.datetime.now().hour
+    
+    if 8 <= heure < 20:
+        markup.add(
+            InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="set_EURUSD"),
+            InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY"),
+            InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD"),
+            InlineKeyboardButton("🇦🇺 AUD/JPY", callback_data="set_AUDJPY"),
+            InlineKeyboardButton("🇨🇦 USD/CAD", callback_data="set_USDCAD"),
+            InlineKeyboardButton("🇪🇺 EUR/JPY", callback_data="set_EURJPY")
+        )
+    else:
+        markup.add(
+            InlineKeyboardButton("🇦🇺 AUD/JPY", callback_data="set_AUDJPY"),
+            InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY"),
+            InlineKeyboardButton("🇨🇦 CAD/JPY", callback_data="set_CADJPY"),
+            InlineKeyboardButton("🇨🇭 CHF/JPY", callback_data="set_CHFJPY"),
+            InlineKeyboardButton("🇦🇺 AUD/CAD", callback_data="set_AUDCAD"),
+            InlineKeyboardButton("🇪🇺 EUR/AUD", callback_data="set_EURAUD")
+        )
     try: 
         bot.send_message(message.chat.id, "Sélectionne l'actif à scanner :", reply_markup=markup)
     except: 
         pass
 
-# --- LANCEMENT DE L'ANALYSE (Bouton Auto + Manuel avec le nouveau design de jauge) ---
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
 def save_devise(call):
     chat_id = call.message.chat.id
@@ -580,7 +593,7 @@ def save_devise(call):
 💵 **MISE RECOMMANDÉE :** {mise_recommandee}$ (2%)
 🔥 **CONFIANCE GLOBALE :** {confiance}%
 ──────────────────
-💎 *Audit de résultat (ITM/OTM) activé.*"""
+💎 *Audit de résultat (ITM/OTM) activé en arrière-plan.*"""
 
     try:
         bot.delete_message(chat_id, msg.message_id)
@@ -611,82 +624,10 @@ def lancer(message):
         except: 
             pass
         return
+    call_mock = type('obj', (object,), {'data': f"set_{actif}", 'message': message, 'from_user': message.from_user})()
+    save_devise(call_mock)
 
-    try:
-        msg = bot.send_message(message.chat.id, "⏳ *Initialisation du scan algorithmique rapide...*", parse_mode="Markdown")
-        time.sleep(2)
-        bot.edit_message_text(f"📡 *Connexion au flux {actif[:3]}/{actif[3:]} et scan de la volatilité en cours...*", message.chat.id, msg.message_id, parse_mode="Markdown")
-        time.sleep(2)
-        bot.edit_message_text("⚙️ *Calcul des indicateurs avancés (BB, RSI, Stochastique)...*", message.chat.id, msg.message_id, parse_mode="Markdown")
-        time.sleep(2)
-        bot.edit_message_text("💎 *Triple confirmation et analyse Sniper...*", message.chat.id, msg.message_id, parse_mode="Markdown")
-        time.sleep(1)
-    except:
-        return
-        
-    action, confiance, exp, duree_secondes, rsi_val, stoch_val, bb_status = analyser_binaire_pro(actif)
-    
-    if action and "⚠️" in action:
-        try: 
-            bot.edit_message_text(f"{action}\nLe prix ne remplit pas les conditions strictes de l'algorithme. Patientez.", message.chat.id, msg.message_id)
-        except: 
-            pass
-        return
-    elif not action:
-        try: 
-            bot.edit_message_text("❌ Échec de la récupération des données. Relance l'analyse.", message.chat.id, msg.message_id)
-        except: 
-            pass
-        return
-
-    maintenant = datetime.datetime.now()
-    heure_entree_dt = (maintenant + datetime.timedelta(minutes=2)).replace(second=0, microsecond=0)
-    heure_entree_texte = heure_entree_dt.strftime("%H:%M:00")
-    mise_recommandee = int(CAPITAL_ACTUEL * 0.02)
-
-    jauge = generer_jauge(confiance)
-    rsi_emoji = "🟢" if "ACHAT" in action else "🔴"
-    rsi_text = f"Essoufflé à {rsi_val}" if "ACHAT" in action else f"Surchauffe à {rsi_val}"
-    stoch_text = "Survente" if "ACHAT" in action else "Surachat"
-
-    signal = f"""🚀 **SIGNAL SNIPER GÉNÉRÉ** 🚀
-──────────────────
-🛰 **ACTIF :** {actif[:3]}/{actif[3:]}
-🎯 **ACTION :** {action}
-⏳ **EXPIRATION :** {exp}
-──────────────────
-🌡️ **FORCE DU SIGNAL (ALGORITHME) :**
-{jauge}
-
-📊 **VALIDATION DES INDICATEURS :**
-➤ **RSI :** {rsi_emoji} Validé ({rsi_text})
-➤ **Stochastique :** {rsi_emoji} Validé ({stoch_text})
-➤ **Bollinger :** {rsi_emoji} {bb_status}
-──────────────────
-📍 **ORDRE À :** {heure_entree_texte} 👈
-💵 **MISE RECOMMANDÉE :** {mise_recommandee}$ (2%)
-🔥 **CONFIANCE GLOBALE :** {confiance}%
-──────────────────
-💎 *Audit de résultat (ITM/OTM) activé.*"""
-
-    try:
-        bot.delete_message(message.chat.id, msg.message_id)
-        bot.send_message(message.chat.id, signal, parse_mode="Markdown")
-    except:
-        pass
-
-    action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
-    trades_en_cours[message.chat.id] = {'symbole': actif, 'action': action_simplifiee}
-    
-    delai_attente_entree = (heure_entree_dt - datetime.datetime.now()).total_seconds()
-    delai_attente_entree = max(0, delai_attente_entree)
-    
-    Timer(delai_attente_entree, relever_prix_entree, args=[message.chat.id, actif]).start()
-    
-    delai_verification = delai_attente_entree + duree_secondes
-    Timer(delai_verification, verifier_resultat, args=[message.chat.id]).start()
-
-# --- COMMANDE SECRÈTE : RADIOGRAPHIE DU MARCHÉ ---
+# --- COMMANDE SECRÈTE : RADIOGRAPHIE DU MARCHÉ (RESTAURÉE) ---
 @bot.message_handler(commands=['vision'])
 def vision_marche(message):
     if not est_autorise(message.chat.id):
@@ -773,8 +714,8 @@ if __name__ == "__main__":
     try:
         keep_alive()
         Thread(target=scanner_marche_auto, daemon=True).start()
-        Thread(target=routine_bilan_journalier, daemon=True).start()
-        print("⬛ BOÎTE NOIRE : Serveur Web et Scanner lancés avec succès.", flush=True)
+        Thread(target=gestion_horaires_et_bilan, daemon=True).start()
+        print("⬛ BOÎTE NOIRE : Serveur et Scanner lancés.", flush=True)
         bot.infinity_polling()
     except Exception as e:
-        print(f"🚨 BOÎTE NOIRE [CRASH DÉTECTÉ] : {e}", flush=True)
+        print(f"🚨 BOÎTE NOIRE [CRASH] : {e}", flush=True)
