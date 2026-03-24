@@ -19,8 +19,8 @@ try:
 except ImportError:
     pass
 
-# --- CONFIGURATION DU TOKEN (INTÉGRÉ DIRECTEMENT) ---
-TELEGRAM_TOKEN = "8658287331:AAFJq993kMKhl6cRdiHgye_IdkYeLHEbor0"
+# --- CONFIGURATION DE LA NOUVELLE CLÉ TOKEN ---
+TELEGRAM_TOKEN = "8658287331:AAFqpouJVHo6SJtXOoQ6qlCToYXPv3oR8H4"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -45,7 +45,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Trading Prime VIP en ligne ! (Lancement direct de l'analyse)"
+    return "Bot Trading Prime VIP en ligne ! (Nouvelle Clé Sécurisée + Lancement direct)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -510,7 +510,7 @@ def devises(message):
     except: 
         pass
 
-# 💡 MODIFICATION ICI : Clic sur le bouton de devise = Lancement immédiat de l'analyse !
+# Clic sur le bouton de devise = Lancement immédiat de l'analyse !
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
 def save_devise(call):
     chat_id = call.message.chat.id
