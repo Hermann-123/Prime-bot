@@ -45,7 +45,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Trading Prime VIP en ligne ! (Bilan 22h Actif + Esthétique Intacte)"
+    return "Bot Trading Prime VIP en ligne ! (Lancement direct de l'analyse)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -140,7 +140,7 @@ def verifier_resultat(chat_id):
     if chat_id in trades_en_cours:
         del trades_en_cours[chat_id]
 
-# --- MOTEUR D'ANALYSE VIP (RATIO 1.5x + EMA 200 + INSIDE BAR) ---
+# --- MOTEUR D'ANALYSE VIP (RATIO 1.5x + RSI 60/40 + EMA 200) ---
 def analyser_binaire_pro(symbole):
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbole}=X?range=2d&interval=1m"
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -216,8 +216,8 @@ def analyser_binaire_pro(symbole):
         action = None
         confiance = 0
         
-        # DÉCISION FINALE (RSI 65/35 + BOUGIES DE RETOURNEMENT)
-        if c >= bougie_enfant['bb_haute'] and bougie_enfant['stoch_k'] >= 80 and bougie_enfant['rsi'] >= 65:
+        # DÉCISION FINALE (RSI 60/40 + BOUGIES DE RETOURNEMENT)
+        if c >= bougie_enfant['bb_haute'] and bougie_enfant['stoch_k'] >= 80 and bougie_enfant['rsi'] >= 60:
             if c < ema_200: 
                 if est_inside_bar:
                     action = "🔴 VENTE (PUT) 👑 [TITAN INSIDE BAR]"
@@ -230,7 +230,7 @@ def analyser_binaire_pro(symbole):
             else:
                 return "⚠️ Tendance haussière forte (Attente)", None, None, None
                 
-        elif c <= bougie_enfant['bb_basse'] and bougie_enfant['stoch_k'] <= 20 and bougie_enfant['rsi'] <= 35:
+        elif c <= bougie_enfant['bb_basse'] and bougie_enfant['stoch_k'] <= 20 and bougie_enfant['rsi'] <= 40:
             if c > ema_200: 
                 if est_inside_bar:
                     action = "🟢 ACHAT (CALL) 👑 [TITAN INSIDE BAR]"
@@ -273,12 +273,12 @@ def scanner_marche_auto():
                     derniere_alerte_auto[actif] = maintenant
                     
                     markup = InlineKeyboardMarkup()
-                    markup.add(InlineKeyboardButton(f"🔒 Verrouiller {actif[:3]}/{actif[3:]}", callback_data=f"set_{actif}"))
+                    markup.add(InlineKeyboardButton(f"📊 Analyser {actif[:3]}/{actif[3:]}", callback_data=f"set_{actif}"))
                     
                     if "TITAN" in action:
-                        alerte_msg = f"👑 **ALERTE TITAN DÉTECTÉE** 👑\n\nUne compression de marché (Inside Bar) rarissime vient d'apparaître sur **{actif[:3]}/{actif[3:]}** (Confiance : {confiance}%).\n\n👇 *Cible verrouillée au millimètre, lance l'analyse immédiatement !*"
+                        alerte_msg = f"👑 **ALERTE TITAN DÉTECTÉE** 👑\n\nUne compression de marché (Inside Bar) rarissime vient d'apparaître sur **{actif[:3]}/{actif[3:]}** (Confiance : {confiance}%).\n\n👇 *Clique sur le bouton ci-dessous pour lancer l'analyse !*"
                     else:
-                        alerte_msg = f"🚨 **NOUVELLE OPPORTUNITÉ VIP** 🚨\n\nL'algorithme a validé une figure de retournement (Price Action) sur **{actif[:3]}/{actif[3:]}** (Confiance : {confiance}%).\n\n👇 *Clique pour verrouiller la cible !*"
+                        alerte_msg = f"🚨 **NOUVELLE OPPORTUNITÉ VIP** 🚨\n\nL'algorithme a validé une figure de retournement (Price Action) sur **{actif[:3]}/{actif[3:]}** (Confiance : {confiance}%).\n\n👇 *Clique sur le bouton ci-dessous pour lancer l'analyse !*"
                     
                     for chat_id in utilisateurs_a_alerter:
                         try:
@@ -510,18 +510,79 @@ def devises(message):
     except: 
         pass
 
+# 💡 MODIFICATION ICI : Clic sur le bouton de devise = Lancement immédiat de l'analyse !
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
 def save_devise(call):
-    if not est_autorise(call.message.chat.id): 
+    chat_id = call.message.chat.id
+    if not est_autorise(chat_id): 
         return
     
     actif = call.data.split("_")[1]
     user_prefs[call.from_user.id] = actif
-    try: 
-        bot.send_message(call.message.chat.id, f"✅ **Cible verrouillée : {actif[:3]}/{actif[3:]}**")
-    except: 
+    
+    try:
+        msg = bot.send_message(chat_id, "⏳ *Initialisation du scan algorithmique rapide...*", parse_mode="Markdown")
+        time.sleep(2)
+        bot.edit_message_text(f"📡 *Connexion au flux {actif[:3]}/{actif[3:]} et scan de la volatilité en cours...*", chat_id, msg.message_id, parse_mode="Markdown")
+        time.sleep(2)
+        bot.edit_message_text("⚙️ *Calcul des indicateurs avancés (BB, RSI, Stochastique)...*", chat_id, msg.message_id, parse_mode="Markdown")
+        time.sleep(2)
+        bot.edit_message_text("💎 *Triple confirmation et analyse Sniper...*", chat_id, msg.message_id, parse_mode="Markdown")
+        time.sleep(1)
+    except:
+        return
+        
+    action, confiance, exp, duree_secondes = analyser_binaire_pro(actif)
+    
+    if action and "⚠️" in action:
+        try: 
+            bot.edit_message_text(f"{action}\nLe prix ne remplit pas les conditions strictes de l'algorithme. Patientez.", chat_id, msg.message_id)
+        except: 
+            pass
+        return
+    elif not action:
+        try: 
+            bot.edit_message_text("❌ Échec de la récupération des données. Relance l'analyse.", chat_id, msg.message_id)
+        except: 
+            pass
+        return
+
+    maintenant = datetime.datetime.now()
+    heure_entree_dt = (maintenant + datetime.timedelta(minutes=2)).replace(second=0, microsecond=0)
+    heure_entree_texte = heure_entree_dt.strftime("%H:%M:00")
+    
+    mise_recommandee = int(CAPITAL_ACTUEL * 0.02)
+
+    signal = f"""🚀 **SIGNAL SNIPER GÉNÉRÉ** 🚀
+──────────────────
+🛰 ACTIF : {actif[:3]}/{actif[3:]}
+🎯 ACTION : {action}
+⏳ EXPIRATION : {exp}
+──────────────────
+📍 ORDRE À : {heure_entree_texte} 👈
+💵 MISE RECOMMANDÉE : {mise_recommandee}$ (2%)
+📊 CONFIANCE : {confiance}% 🔥
+──────────────────
+💎 *Audit de résultat (ITM/OTM) activé en arrière-plan.*"""
+
+    try:
+        bot.delete_message(chat_id, msg.message_id)
+        bot.send_message(chat_id, signal, parse_mode="Markdown")
+    except:
         pass
 
+    action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
+    trades_en_cours[chat_id] = {'symbole': actif, 'action': action_simplifiee}
+    
+    delai_attente_entree = (heure_entree_dt - datetime.datetime.now()).total_seconds()
+    delai_attente_entree = max(0, delai_attente_entree)
+    
+    Timer(delai_attente_entree, relever_prix_entree, args=[chat_id, actif]).start()
+    
+    delai_verification = delai_attente_entree + duree_secondes
+    Timer(delai_verification, verifier_resultat, args=[chat_id]).start()
+
+# L'ancien bouton garde quand même sa fonction si le client l'utilise manuellement
 @bot.message_handler(func=lambda m: m.text == "🚀 LANCER L'ANALYSE")
 def lancer(message):
     if not est_autorise(message.chat.id): 
@@ -542,7 +603,7 @@ def lancer(message):
         time.sleep(2)
         bot.edit_message_text("⚙️ *Calcul des indicateurs avancés (BB, RSI, Stochastique)...*", message.chat.id, msg.message_id, parse_mode="Markdown")
         time.sleep(2)
-        bot.edit_message_text("💎 *Triple confirmation et verrouillage Sniper...*", message.chat.id, msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text("💎 *Triple confirmation et analyse Sniper...*", message.chat.id, msg.message_id, parse_mode="Markdown")
         time.sleep(1)
     except:
         return
@@ -660,7 +721,7 @@ def vision_marche(message):
 📏 **Position Bollinger :** {position_bb}
 
 📊 **Niveau RSI :** `{rsi:.2f}` 
-*(Rappel: >65 = Surchauffe, <35 = Essoufflé)*
+*(Rappel: >60 = Surchauffe, <40 = Essoufflé)*
 
 📉 **Niveau Stochastique :** `{stoch_k:.2f}`
 *(Rappel: >80 = Surachat, <20 = Survente)*
