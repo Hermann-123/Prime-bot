@@ -21,7 +21,7 @@ except ImportError:
     pass
 
 # --- CONFIGURATION DES CLÉS ---
-TELEGRAM_TOKEN = "8658287331:AAHDTitIkmd0MiwYz1O7PHmE8sMFKCTy1Bk"
+TELEGRAM_TOKEN = "8658287331:AAGPCEJhPM-lttuU8p2ilW4I3TZVjEDYhcY"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -222,10 +222,10 @@ def analyser_binaire_pro(symbole):
         bb_status = ""
 
         # --- DÉCISION DU TIR (Seuil à 80/100) ---
-        if score_achat >= 75:
+        if score_achat >= 50:
             action = "🟢 ACHAT (CALL) 👑 [TITAN HYBRIDE VIP]"
             bb_status = f"{smc_status} | Note: {score_achat}/100"
-        elif score_vente >= 75:
+        elif score_vente >= 50:
             action = "🔴 VENTE (PUT) 👑 [TITAN HYBRIDE VIP]"
             bb_status = f"{smc_status} | Note: {score_vente}/100"
         else:
