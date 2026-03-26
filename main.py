@@ -222,10 +222,10 @@ def analyser_binaire_pro(symbole):
         bb_status = ""
 
         # --- DÉCISION DU TIR (Seuil à 80/100) ---
-        if score_achat >= 80:
+        if score_achat >= 75:
             action = "🟢 ACHAT (CALL) 👑 [TITAN HYBRIDE VIP]"
             bb_status = f"{smc_status} | Note: {score_achat}/100"
-        elif score_vente >= 80:
+        elif score_vente >= 75:
             action = "🔴 VENTE (PUT) 👑 [TITAN HYBRIDE VIP]"
             bb_status = f"{smc_status} | Note: {score_vente}/100"
         else:
