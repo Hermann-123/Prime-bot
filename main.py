@@ -21,7 +21,7 @@ except ImportError:
     pass
 
 # --- CONFIGURATION DES CLÉS ---
-TELEGRAM_TOKEN = "8658287331:AAGxo2mryCakfYLRwHZ6QnYUs6L5iucc7xQ"
+TELEGRAM_TOKEN = "8658287331:AAHDTitIkmd0MiwYz1O7PHmE8sMFKCTy1Bk"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
