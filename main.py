@@ -21,9 +21,7 @@ except ImportError:
     pass
 
 # --- CONFIGURATION DES CLÉS ---
-TELEGRAM_TOKEN = "8658287331:AAEGT2L1EAFdjD9Z-sjc5fvrdNOu6JX7xhM"
-DERIV_APP_ID = "32Oh8ivJRXsJrKUqVgYhR"
-DERIV_TOKEN = "Pat_bce6212fed8822198177d25cf3c73000d2897aa4772a8e8bdb566b525f51dbe5"
+TELEGRAM_TOKEN = "8658287331:AAHdWG_cPCo2lMJp7MejJGrznchA8xp0qls"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -50,7 +48,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Trading Prime VIP en ligne ! (Esthétique VIP Restaurée + Moteur Deriv)"
+    return "Bot Trading Prime VIP en ligne ! (Correction Flux Deriv Validée)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -72,10 +70,8 @@ def est_autorise(user_id):
             return True
         else:
             del utilisateurs_autorises[user_id]
-            try:
-                bot.send_message(user_id, "⚠️ **ABONNEMENT EXPIRÉ** ⚠️\n\nVotre accès au Terminal Prime est terminé. Veuillez contacter [@hermann1123](https://t.me/hermann1123) pour renouveler votre clé.", parse_mode="Markdown")
-            except:
-                pass
+            try: bot.send_message(user_id, "⚠️ **ABONNEMENT EXPIRÉ** ⚠️\n\nVotre accès au Terminal Prime est terminé. Veuillez contacter [@hermann1123](https://t.me/hermann1123).", parse_mode="Markdown")
+            except: pass
             return False
     return False
 
@@ -85,33 +81,47 @@ def generer_cle():
     aleatoire = ''.join(random.choice(caracteres) for _ in range(8))
     return f"PRIME-{aleatoire}"
 
-# --- RÉCUPÉRATION DES PRIX (DERIV) ---
+# --- RÉCUPÉRATION DES PRIX (DERIV CORRIGÉ) ---
 def obtenir_donnees_deriv(symbole_brut):
     symbole = f"frx{symbole_brut}" 
     ws = websocket.WebSocket()
     try:
-        ws.connect(f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}", timeout=10)
-        ws.send(json.dumps({"authorize": DERIV_TOKEN}))
-        auth = json.loads(ws.recv())
-        if "error" in auth: return None
+        # On utilise l'accès public (app_id=1089) pour éviter le blocage de Token
+        ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=5)
         
-        ws.send(json.dumps({"ticks_history": symbole, "end": "latest", "count": 50, "style": "candles", "granularity": 60}))
+        req = {
+            "ticks_history": symbole, 
+            "end": "latest", 
+            "count": 50, 
+            "style": "candles", 
+            "granularity": 60
+        }
+        ws.send(json.dumps(req))
         history = json.loads(ws.recv())
         ws.close()
         
-        if "error" in history or "candles" not in history: return None
+        if "error" in history or "candles" not in history: 
+            return None
         return history['candles']
-    except Exception:
+    except Exception as e:
+        print(f"Erreur API Deriv (Bougies) : {e}", flush=True)
         return None
 
 def obtenir_prix_actuel_deriv(symbole_brut):
     symbole = f"frx{symbole_brut}"
     ws = websocket.WebSocket()
     try:
-        ws.connect(f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}", timeout=5)
-        ws.send(json.dumps({"ticks_history": symbole, "end": "latest", "count": 1, "style": "ticks"}))
+        ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=5)
+        req = {
+            "ticks_history": symbole, 
+            "end": "latest", 
+            "count": 1, 
+            "style": "ticks"
+        }
+        ws.send(json.dumps(req))
         res = json.loads(ws.recv())
         ws.close()
+        
         if "history" in res and "prices" in res["history"]:
             return float(res["history"]["prices"][0])
     except: pass
@@ -158,8 +168,7 @@ def verifier_resultat(chat_id):
 
 # --- GÉNÉRATEUR DE JAUGE VISUELLE ---
 def generer_jauge(pourcentage):
-    if pourcentage == 99:
-        return "[██████████] 👑 MAX"
+    if pourcentage >= 99: return "[██████████] 👑 MAX"
     pleins = int(pourcentage / 10)
     vides = 10 - pleins
     return f"[{'█' * pleins}{'░' * vides}] {pourcentage}%"
@@ -276,10 +285,8 @@ def scanner_marche_auto():
                         alerte_msg = f"🚨 **NOUVELLE OPPORTUNITÉ VIP** 🚨\n\nL'algorithme a validé une figure de retournement sur **{actif[:3]}/{actif[3:]}** (Confiance : {confiance}%).\n\n👇 *Clique sur le bouton ci-dessous pour lancer l'analyse !*"
                     
                     for chat_id in utilisateurs_a_alerter:
-                        try:
-                            bot.send_message(chat_id, alerte_msg, reply_markup=markup, parse_mode="Markdown")
-                        except:
-                            pass
+                        try: bot.send_message(chat_id, alerte_msg, reply_markup=markup, parse_mode="Markdown")
+                        except: pass
         except Exception as e:
             print(f"⬛ BOÎTE NOIRE [ERREUR SCANNER] : {e}", flush=True)
 
@@ -414,10 +421,8 @@ def bienvenue(message):
             InlineKeyboardButton("✅ Accepter", callback_data=f"admin_accepter_{user_id}"),
             InlineKeyboardButton("❌ Ignorer", callback_data=f"admin_refuser_{user_id}")
         )
-        try: 
-            bot.send_message(ADMIN_ID, f"🚨 **NOUVEAU CLIENT POTENTIEL** 🚨\n\n👤 @{username}\n🆔 `{user_id}`\n\nGénérer un abonnement ?", reply_markup=markup, parse_mode="Markdown")
-        except: 
-            pass
+        try: bot.send_message(ADMIN_ID, f"🚨 **NOUVEAU CLIENT POTENTIEL** 🚨\n\n👤 @{username}\n🆔 `{user_id}`\n\nGénérer un abonnement ?", reply_markup=markup, parse_mode="Markdown")
+        except: pass
             
         texte_intrus = """🔒 **ACCÈS RESTREINT - TERMINAL PRIVÉ** 🔒
 
@@ -426,10 +431,8 @@ Ce système est une intelligence artificielle de trading haute précision sous l
 📲 **Pour obtenir votre clé d'accès (Abonnement), veuillez contacter le fondateur : [@hermann1123](https://t.me/hermann1123)**
 
 *(Si vous avez déjà acheté une clé, collez-la simplement ici).*"""
-        try: 
-            bot.send_message(user_id, texte_intrus, parse_mode="Markdown", disable_web_page_preview=True)
-        except: 
-            pass
+        try: bot.send_message(user_id, texte_intrus, parse_mode="Markdown", disable_web_page_preview=True)
+        except: pass
         return
 
     utilisateurs_actifs.add(user_id)
@@ -447,15 +450,12 @@ Bienvenue dans ton radar de trading ultime ! Ce bot est propulsé par un moteur 
 💡 **LE MOT DU FONDATEUR :**
 *Le marché ne ressent rien, n'aie aucune émotion face à lui. Le succès ne vient pas de la chance, mais d'une discipline de fer. Laisse l'algorithme faire les calculs, ne force jamais un trade et protège ton capital comme un tireur d'élite. Bon profit !* 🎯💸"""
 
-    try: 
-        bot.send_message(message.chat.id, texte_bienvenue, reply_markup=obtenir_clavier(), parse_mode="Markdown")
-    except: 
-        pass
+    try: bot.send_message(message.chat.id, texte_bienvenue, reply_markup=obtenir_clavier(), parse_mode="Markdown")
+    except: pass
 
 @bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
 def horaires_trading(message):
-    if not est_autorise(message.chat.id): 
-        return
+    if not est_autorise(message.chat.id): return
     
     texte = """🕒 **GUIDE DES HORAIRES DE TRADING (Heure GMT)** 🕒
 
@@ -474,47 +474,35 @@ def horaires_trading(message):
 
 *Rappel de Discipline : Fixe-toi tes 2% de mise max et arrête-toi après 3 pertes dans la même session !*"""
     
-    try: 
-        bot.send_message(message.chat.id, texte, parse_mode="Markdown")
-    except: 
-        pass
+    try: bot.send_message(message.chat.id, texte, parse_mode="Markdown")
+    except: pass
 
 @bot.message_handler(func=lambda m: m.text == "📊 CHOISIR UNE DEVISE")
 def devises(message):
-    if not est_autorise(message.chat.id): 
-        return
+    if not est_autorise(message.chat.id): return
     
     markup = InlineKeyboardMarkup(row_width=2)
     heure = datetime.datetime.now().hour
     
     if 8 <= heure < 20:
         markup.add(
-            InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="set_EURUSD"),
-            InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY"),
-            InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD"),
-            InlineKeyboardButton("🇦🇺 AUD/JPY", callback_data="set_AUDJPY"),
-            InlineKeyboardButton("🇨🇦 USD/CAD", callback_data="set_USDCAD"),
-            InlineKeyboardButton("🇪🇺 EUR/JPY", callback_data="set_EURJPY")
+            InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="set_EURUSD"), InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY"),
+            InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD"), InlineKeyboardButton("🇦🇺 AUD/JPY", callback_data="set_AUDJPY"),
+            InlineKeyboardButton("🇨🇦 USD/CAD", callback_data="set_USDCAD"), InlineKeyboardButton("🇪🇺 EUR/JPY", callback_data="set_EURJPY")
         )
     else:
         markup.add(
-            InlineKeyboardButton("🇦🇺 AUD/JPY", callback_data="set_AUDJPY"),
-            InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY"),
-            InlineKeyboardButton("🇨🇦 CAD/JPY", callback_data="set_CADJPY"),
-            InlineKeyboardButton("🇨🇭 CHF/JPY", callback_data="set_CHFJPY"),
-            InlineKeyboardButton("🇦🇺 AUD/CAD", callback_data="set_AUDCAD"),
-            InlineKeyboardButton("🇪🇺 EUR/AUD", callback_data="set_EURAUD")
+            InlineKeyboardButton("🇦🇺 AUD/JPY", callback_data="set_AUDJPY"), InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY"),
+            InlineKeyboardButton("🇨🇦 CAD/JPY", callback_data="set_CADJPY"), InlineKeyboardButton("🇨🇭 CHF/JPY", callback_data="set_CHFJPY"),
+            InlineKeyboardButton("🇦🇺 AUD/CAD", callback_data="set_AUDCAD"), InlineKeyboardButton("🇪🇺 EUR/AUD", callback_data="set_EURAUD")
         )
-    try: 
-        bot.send_message(message.chat.id, "Sélectionne l'actif à scanner :", reply_markup=markup)
-    except: 
-        pass
+    try: bot.send_message(message.chat.id, "Sélectionne l'actif à scanner :", reply_markup=markup)
+    except: pass
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
 def save_devise(call):
     chat_id = call.message.chat.id
-    if not est_autorise(chat_id): 
-        return
+    if not est_autorise(chat_id): return
     
     actif = call.data.split("_")[1]
     user_prefs[call.from_user.id] = actif
@@ -528,22 +516,17 @@ def save_devise(call):
         time.sleep(2)
         bot.edit_message_text("💎 *Triple confirmation et analyse Sniper...*", chat_id, msg.message_id, parse_mode="Markdown")
         time.sleep(1)
-    except:
-        return
+    except: return
         
     action, confiance, exp, duree_secondes, rsi_val, stoch_val, bb_status = analyser_binaire_pro(actif)
     
     if action and "⚠️" in action:
-        try: 
-            bot.edit_message_text(f"{action}\nLe prix ne remplit pas les conditions strictes de l'algorithme. Patientez.", chat_id, msg.message_id)
-        except: 
-            pass
+        try: bot.edit_message_text(f"{action}\nLe prix ne remplit pas les conditions strictes de l'algorithme. Patientez.", chat_id, msg.message_id)
+        except: pass
         return
     elif not action:
-        try: 
-            bot.edit_message_text("❌ Échec de la récupération des données. Relance l'analyse.", chat_id, msg.message_id)
-        except: 
-            pass
+        try: bot.edit_message_text("❌ Échec de la récupération des données Deriv. Relance l'analyse.", chat_id, msg.message_id)
+        except: pass
         return
 
     maintenant = datetime.datetime.now()
@@ -579,15 +562,12 @@ def save_devise(call):
     try:
         bot.delete_message(chat_id, msg.message_id)
         bot.send_message(chat_id, signal, parse_mode="Markdown")
-    except:
-        pass
+    except: pass
 
     action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
     trades_en_cours[chat_id] = {'symbole': actif, 'action': action_simplifiee}
     
-    delai_attente_entree = (heure_entree_dt - datetime.datetime.now()).total_seconds()
-    delai_attente_entree = max(0, delai_attente_entree)
-    
+    delai_attente_entree = max(0, (heure_entree_dt - datetime.datetime.now()).total_seconds())
     Timer(delai_attente_entree, relever_prix_entree, args=[chat_id, actif]).start()
     
     delai_verification = delai_attente_entree + duree_secondes
@@ -595,38 +575,30 @@ def save_devise(call):
 
 @bot.message_handler(func=lambda m: m.text == "🚀 LANCER L'ANALYSE")
 def lancer(message):
-    if not est_autorise(message.chat.id): 
-        return
+    if not est_autorise(message.chat.id): return
     
     actif = user_prefs.get(message.from_user.id)
     if not actif:
-        try: 
-            bot.send_message(message.chat.id, "⚠️ Choisis d'abord une devise !")
-        except: 
-            pass
+        try: bot.send_message(message.chat.id, "⚠️ Choisis d'abord une devise !")
+        except: pass
         return
     call_mock = type('obj', (object,), {'data': f"set_{actif}", 'message': message, 'from_user': message.from_user})()
     save_devise(call_mock)
 
-# --- COMMANDE SECRÈTE : RADIOGRAPHIE DU MARCHÉ (RESTAURÉE) ---
+# --- COMMANDE SECRÈTE : RADIOGRAPHIE DU MARCHÉ ---
 @bot.message_handler(commands=['vision'])
 def vision_marche(message):
-    if not est_autorise(message.chat.id):
-        return
+    if not est_autorise(message.chat.id): return
         
     commande = message.text.split()
     if len(commande) < 2:
-        try: 
-            bot.send_message(message.chat.id, "⚠️ Précise la devise. Exemple : `/vision EURUSD`", parse_mode="Markdown")
-        except: 
-            pass
+        try: bot.send_message(message.chat.id, "⚠️ Précise la devise. Exemple : `/vision EURUSD`", parse_mode="Markdown")
+        except: pass
         return
         
     symbole = commande[1].upper()
-    try: 
-        msg = bot.send_message(message.chat.id, f"🔍 *Scan aux rayons X de {symbole}...*", parse_mode="Markdown")
-    except: 
-        return
+    try: msg = bot.send_message(message.chat.id, f"🔍 *Scan aux rayons X de {symbole}...*", parse_mode="Markdown")
+    except: return
     
     candles = obtenir_donnees_deriv(symbole)
     if not candles:
@@ -682,10 +654,8 @@ def vision_marche(message):
         bot.edit_message_text(rapport, message.chat.id, msg.message_id, parse_mode="Markdown")
         
     except Exception as e:
-        try: 
-            bot.edit_message_text(f"❌ Erreur lors du scan : {e}", message.chat.id, msg.message_id)
-        except: 
-            pass
+        try: bot.edit_message_text(f"❌ Erreur lors du scan : {e}", message.chat.id, msg.message_id)
+        except: pass
 
 if __name__ == "__main__":
     print("⬛ BOÎTE NOIRE : Démarrage du système...", flush=True)
