@@ -21,7 +21,7 @@ except ImportError:
     pass
 
 # --- CONFIGURATION DES CLÉS ---
-TELEGRAM_TOKEN = "8658287331:AAHdWG_cPCo2lMJp7MejJGrznchA8xp0qls"
+TELEGRAM_TOKEN = "8658287331:AAGxo2mryCakfYLRwHZ6QnYUs6L5iucc7xQ"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -48,7 +48,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Trading Prime VIP en ligne ! (Correction Flux Deriv Validée)"
+    return "Bot Trading Prime VIP en ligne ! (Moteur Hybride SMC+PDF à 100 Points)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -81,21 +81,13 @@ def generer_cle():
     aleatoire = ''.join(random.choice(caracteres) for _ in range(8))
     return f"PRIME-{aleatoire}"
 
-# --- RÉCUPÉRATION DES PRIX (DERIV CORRIGÉ) ---
+# --- RÉCUPÉRATION DES PRIX (DERIV 1089) ---
 def obtenir_donnees_deriv(symbole_brut):
     symbole = f"frx{symbole_brut}" 
     ws = websocket.WebSocket()
     try:
-        # On utilise l'accès public (app_id=1089) pour éviter le blocage de Token
         ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=5)
-        
-        req = {
-            "ticks_history": symbole, 
-            "end": "latest", 
-            "count": 50, 
-            "style": "candles", 
-            "granularity": 60
-        }
+        req = {"ticks_history": symbole, "end": "latest", "count": 50, "style": "candles", "granularity": 60}
         ws.send(json.dumps(req))
         history = json.loads(ws.recv())
         ws.close()
@@ -104,7 +96,6 @@ def obtenir_donnees_deriv(symbole_brut):
             return None
         return history['candles']
     except Exception as e:
-        print(f"Erreur API Deriv (Bougies) : {e}", flush=True)
         return None
 
 def obtenir_prix_actuel_deriv(symbole_brut):
@@ -112,12 +103,7 @@ def obtenir_prix_actuel_deriv(symbole_brut):
     ws = websocket.WebSocket()
     try:
         ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=5)
-        req = {
-            "ticks_history": symbole, 
-            "end": "latest", 
-            "count": 1, 
-            "style": "ticks"
-        }
+        req = {"ticks_history": symbole, "end": "latest", "count": 1, "style": "ticks"}
         ws.send(json.dumps(req))
         res = json.loads(ws.recv())
         ws.close()
@@ -160,90 +146,90 @@ def verifier_resultat(chat_id):
         stats_journee['OTM'] += 1
         stats_journee['details'].append(f"❌ {nom_paire} ({action})")
     
-    # Message envoyé UNIQUEMENT à l'admin
     try: bot.send_message(ADMIN_ID, texte, parse_mode="Markdown")
     except: pass
     
     if chat_id in trades_en_cours: del trades_en_cours[chat_id]
 
-# --- GÉNÉRATEUR DE JAUGE VISUELLE ---
 def generer_jauge(pourcentage):
     if pourcentage >= 99: return "[██████████] 👑 MAX"
     pleins = int(pourcentage / 10)
     vides = 10 - pleins
     return f"[{'█' * pleins}{'░' * vides}] {pourcentage}%"
 
-# --- MOTEUR D'ANALYSE VIP ---
+# --- MOTEUR D'ANALYSE HYBRIDE (SMC + PDF SCORING) ---
 def analyser_binaire_pro(symbole):
     candles = obtenir_donnees_deriv(symbole)
     if not candles: return "⚠️ Impossible de se connecter au marché (Deriv)", None, None, None, None, None, None
     
     try:
-        df = pd.DataFrame([{
-            'open': c['open'], 'close': c['close'], 'high': c['high'], 'low': c['low']
-        } for c in candles])
-        
-        if len(df) < 50:
-            return "⚠️ Pas assez de données", None, None, None, None, None, None
+        df = pd.DataFrame([{'open': c['open'], 'close': c['close'], 'high': c['high'], 'low': c['low']} for c in candles])
+        if len(df) < 50: return "⚠️ Pas assez de données", None, None, None, None, None, None
 
+        # 1. Calcul des indicateurs PDF (Bollinger, RSI, Stochastique)
         indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
         df['bb_haute'] = indicateur_bb.bollinger_hband()
         df['bb_basse'] = indicateur_bb.bollinger_lband()
-        
-        indicateur_stoch = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3)
-        df['stoch_k'] = indicateur_stoch.stoch()
-        
-        indicateur_rsi = ta.momentum.RSIIndicator(close=df['close'], window=14)
-        df['rsi'] = indicateur_rsi.rsi()
+        df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
+        df['stoch_k'] = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch()
         df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
-            
-        bougie_mere = df.iloc[-3]
-        bougie_enfant = df.iloc[-2] 
+        df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
+
+        # 2. Calcul des empreintes bancaires SMC
+        bullish_ob, bearish_ob = None, None
+        for i in range(10, len(df)-2):
+            if (df['close'].iloc[i+1] > df['open'].iloc[i+1]) and (df['close'].iloc[i+2] > df['open'].iloc[i+2]):
+                if (df['close'].iloc[i+2] - df['open'].iloc[i]) > (1.5 * df['atr'].iloc[i]):
+                    if df['close'].iloc[i-1] < df['open'].iloc[i-1]: bullish_ob = {'high': df['high'].iloc[i-1], 'low': df['low'].iloc[i-1]}
+            if (df['close'].iloc[i+1] < df['open'].iloc[i+1]) and (df['close'].iloc[i+2] < df['open'].iloc[i+2]):
+                if (df['open'].iloc[i] - df['close'].iloc[i+2]) > (1.5 * df['atr'].iloc[i]):
+                    if df['close'].iloc[i-1] > df['open'].iloc[i-1]: bearish_ob = {'high': df['high'].iloc[i-1], 'low': df['low'].iloc[i-1]}
+
+        c = df['close'].iloc[-1]
+        ema_200 = df['ema_200'].iloc[-1]
+        rsi_val = round(df['rsi'].iloc[-1], 1)
+        stoch_val = round(df['stoch_k'].iloc[-1], 1)
         
-        ema_200 = bougie_enfant['ema_200']
-        c = bougie_enfant['close']
-        o = bougie_enfant['open']
-        h = bougie_enfant['high']
-        l = bougie_enfant['low']
-        
-        est_inside_bar = (h < bougie_mere['high']) and (l > bougie_mere['low'])
+        # --- SYSTÈME DE POINTS (SCORING) SUR 100 ---
+        score_achat = 0
+        score_vente = 0
+        smc_status = "Aucun Bloc Bancaire"
+
+        # Points SMC (+50)
+        if bullish_ob and (bullish_ob['low'] <= c <= bullish_ob['high']) and c > ema_200:
+            score_achat += 50
+            smc_status = "🏦 OB Haussier Touché (+50)"
+        if bearish_ob and (bearish_ob['low'] <= c <= bearish_ob['high']) and c < ema_200:
+            score_vente += 50
+            smc_status = "🏦 OB Baissier Touché (+50)"
+
+        # Points RSI (+25)
+        if rsi_val <= 40: score_achat += 25
+        if rsi_val >= 60: score_vente += 25
+
+        # Points Stochastique (+15)
+        if stoch_val <= 20: score_achat += 15
+        if stoch_val >= 80: score_vente += 15
+
+        # Points Bollinger (+10)
+        if c <= df['bb_basse'].iloc[-1]: score_achat += 10
+        if c >= df['bb_haute'].iloc[-1]: score_vente += 10
 
         expiration = "1 MINUTE ⏱"
         duree_secondes = 60
-        
         action = None
-        confiance = 0
-        
-        rsi_val = round(bougie_enfant['rsi'], 1)
-        stoch_val = round(bougie_enfant['stoch_k'], 1)
+        confiance = max(score_achat, score_vente)
         bb_status = ""
-        
-        if c >= bougie_enfant['bb_haute'] and bougie_enfant['stoch_k'] >= 80 and bougie_enfant['rsi'] >= 60:
-            bb_status = "🔴 Rejet au Plafond"
-            if c < ema_200: 
-                if est_inside_bar:
-                    action = "🔴 VENTE (PUT) 👑 [TITAN INSIDE BAR]"
-                    confiance = 99
-                else:
-                    action = "🔴 VENTE (PUT) ☄️ [PRICE ACTION VIP]"
-                    confiance = random.randint(94, 98)
-            else:
-                return "⚠️ Tendance haussière forte (Attente)", None, None, None, None, None, None
-                
-        elif c <= bougie_enfant['bb_basse'] and bougie_enfant['stoch_k'] <= 20 and bougie_enfant['rsi'] <= 40:
-            bb_status = "🟢 Rejet au Plancher"
-            if c > ema_200: 
-                if est_inside_bar:
-                    action = "🟢 ACHAT (CALL) 👑 [TITAN INSIDE BAR]"
-                    confiance = 99
-                else:
-                    action = "🟢 ACHAT (CALL) 🔨 [PRICE ACTION VIP]"
-                    confiance = random.randint(94, 98)
-            else:
-                return "⚠️ Tendance baissière forte (Attente)", None, None, None, None, None, None
-            
+
+        # --- DÉCISION DU TIR (Seuil à 80/100) ---
+        if score_achat >= 80:
+            action = "🟢 ACHAT (CALL) 👑 [TITAN HYBRIDE VIP]"
+            bb_status = f"{smc_status} | Note: {score_achat}/100"
+        elif score_vente >= 80:
+            action = "🔴 VENTE (PUT) 👑 [TITAN HYBRIDE VIP]"
+            bb_status = f"{smc_status} | Note: {score_vente}/100"
         else:
-            return "⚠️ Marché neutre (Attente d'opportunité)", None, None, None, None, None, None
+            return f"⚠️ Note insuffisante ({max(score_achat, score_vente)}/100). Attente.", None, None, None, None, None, None
             
         return action, confiance, expiration, duree_secondes, rsi_val, stoch_val, bb_status
         
@@ -279,10 +265,7 @@ def scanner_marche_auto():
                     markup = InlineKeyboardMarkup()
                     markup.add(InlineKeyboardButton(f"📊 Analyser {actif[:3]}/{actif[3:]}", callback_data=f"set_{actif}"))
                     
-                    if "TITAN" in action:
-                        alerte_msg = f"👑 **ALERTE TITAN DÉTECTÉE** 👑\n\nUne compression de marché rarissime vient d'apparaître sur **{actif[:3]}/{actif[3:]}** (Confiance : {confiance}%).\n\n👇 *Clique sur le bouton ci-dessous pour lancer l'analyse !*"
-                    else:
-                        alerte_msg = f"🚨 **NOUVELLE OPPORTUNITÉ VIP** 🚨\n\nL'algorithme a validé une figure de retournement sur **{actif[:3]}/{actif[3:]}** (Confiance : {confiance}%).\n\n👇 *Clique sur le bouton ci-dessous pour lancer l'analyse !*"
+                    alerte_msg = f"👑 **ALERTE TITAN HYBRIDE DÉTECTÉE** 👑\n\nUne convergence exceptionnelle SMC+Indicateurs vient d'apparaître sur **{actif[:3]}/{actif[3:]}** (Score : {confiance}/100).\n\n👇 *Clique sur le bouton ci-dessous pour lancer l'analyse !*"
                     
                     for chat_id in utilisateurs_a_alerter:
                         try: bot.send_message(chat_id, alerte_msg, reply_markup=markup, parse_mode="Markdown")
@@ -325,7 +308,6 @@ def gestion_horaires_et_bilan():
                     for detail in stats_journee['details']:
                         texte_bilan_admin += f"{detail}\n"
                     
-                    # Seul l'admin reçoit le bilan
                     try: bot.send_message(ADMIN_ID, texte_bilan_admin, parse_mode="Markdown")
                     except: pass
                 
@@ -521,7 +503,7 @@ def save_devise(call):
     action, confiance, exp, duree_secondes, rsi_val, stoch_val, bb_status = analyser_binaire_pro(actif)
     
     if action and "⚠️" in action:
-        try: bot.edit_message_text(f"{action}\nLe prix ne remplit pas les conditions strictes de l'algorithme. Patientez.", chat_id, msg.message_id)
+        try: bot.edit_message_text(f"{action}", chat_id, msg.message_id)
         except: pass
         return
     elif not action:
@@ -551,7 +533,7 @@ def save_devise(call):
 📊 **VALIDATION DES INDICATEURS :**
 ➤ **RSI :** {rsi_emoji} Validé ({rsi_text})
 ➤ **Stochastique :** {rsi_emoji} Validé ({stoch_text})
-➤ **Bollinger :** {rsi_emoji} {bb_status}
+➤ **Hybride SMC :** {rsi_emoji} {bb_status}
 ──────────────────
 📍 **ORDRE À :** {heure_entree_texte} 👈
 💵 **MISE RECOMMANDÉE :** {mise_recommandee}$ (2%)
@@ -585,7 +567,7 @@ def lancer(message):
     call_mock = type('obj', (object,), {'data': f"set_{actif}", 'message': message, 'from_user': message.from_user})()
     save_devise(call_mock)
 
-# --- COMMANDE SECRÈTE : RADIOGRAPHIE DU MARCHÉ ---
+# --- COMMANDE SECRÈTE : RADIOGRAPHIE DU MARCHÉ (RESTAURÉE) ---
 @bot.message_handler(commands=['vision'])
 def vision_marche(message):
     if not est_autorise(message.chat.id): return
@@ -658,7 +640,7 @@ def vision_marche(message):
         except: pass
 
 if __name__ == "__main__":
-    print("⬛ BOÎTE NOIRE : Démarrage du système...", flush=True)
+    print("⬛ BOÎTE NOIRE : Démarrage du système Hybride...", flush=True)
     try:
         keep_alive()
         Thread(target=scanner_marche_auto, daemon=True).start()
