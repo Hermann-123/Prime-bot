@@ -17,8 +17,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-# ⚠️ TON TOKEN TÉLÉGRAM ICI ⚠️
-TELEGRAM_TOKEN = "8658287331:AAHovvVAtzI7pFBmNsnu5GvayoHJESV61l8"
+TELEGRAM_TOKEN = "8658287331:AAHFW3ypAhi64gvnuiMDpJeutCM3uJO-ay0"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 # 👑 L'ID DU FONDATEUR 👑
@@ -58,7 +57,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition Ultime & Corrigée (Moteur PDF - 100% Corrigé - Nuit 100% JPY)"
+    return "Terminal Prime VIP : Édition Sniper Esthétique (RSI 30/70 - Design Originel)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -156,13 +155,12 @@ def obtenir_prix_actuel_deriv(symbole_brut):
     return None
 
 # ==========================================
-# SYSTÈME DE VÉRIFICATION ITM/OTM (Correctif Bug)
+# SYSTÈME DE VÉRIFICATION ITM/OTM
 # ==========================================
 
 def relever_prix_entree(chat_id, symbole):
     prix = obtenir_prix_actuel_deriv(symbole)
     if prix and chat_id in trades_en_cours:
-        # ✅ Vérification stricte du symbole pour éviter le bug Deriv
         if trades_en_cours[chat_id]['symbole'] == symbole:
             trades_en_cours[chat_id]['prix_entree'] = prix
 
@@ -174,7 +172,7 @@ def verifier_resultat(chat_id):
         return
 
     symbole = trade['symbole']
-    prix_sortie = obtenir_prix_actuel_deriv(symbole) # ✅ On force la récupération du MÊME symbole
+    prix_sortie = obtenir_prix_actuel_deriv(symbole)
     
     if not prix_sortie:
         return
@@ -208,7 +206,7 @@ def verifier_resultat(chat_id):
         del trades_en_cours[chat_id]
 
 # ==========================================
-# MOTEUR D'ANALYSE PDF PURE + EXPIRATION DYN.
+# MOTEUR D'ANALYSE (VERROUILLAGE SNIPER)
 # ==========================================
 
 def analyser_binaire_pro(symbole):
@@ -224,14 +222,12 @@ def analyser_binaire_pro(symbole):
             'low': c['low']
         } for c in candles])
         
-        # Indicateurs PDF Pure (Bollinger, RSI, Stoch)
+        # Calcul des indicateurs
         indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
         df['bb_haute'] = indicateur_bb.bollinger_hband()
         df['bb_basse'] = indicateur_bb.bollinger_lband()
         df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
         df['stoch_k'] = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch()
-        
-        # Volatilité pour expiration dynamique
         df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
         
         atr_actuel = df['atr'].iloc[-1]
@@ -257,13 +253,13 @@ def analyser_binaire_pro(symbole):
         expiration_texte = f"{duree_minutes} MINUTE{'S' if duree_minutes > 1 else ''} ⏱"
         duree_secondes = duree_minutes * 60
 
-        # --- LOGIQUE DE DÉCISION (ACHAT / VENTE) ---
-        if c <= bb_b and rsi_val <= 40 and stoch_val <= 20:
+        # --- LOGIQUE DE DÉCISION STRICTE (VERROUILLAGE SNIPER RSI 30/70) ---
+        if c <= bb_b and rsi_val <= 30 and stoch_val <= 15:
             action = "🟢 ACHAT (CALL) 👑 [TITAN VIP]"
             confiance = random.randint(92, 99)
             bb_status = "Cassure Bande Basse Validée"
             
-        elif c >= bb_h and rsi_val >= 60 and stoch_val >= 80:
+        elif c >= bb_h and rsi_val >= 70 and stoch_val >= 85:
             action = "🔴 VENTE (PUT) 👑 [TITAN VIP]"
             confiance = random.randint(92, 99)
             bb_status = "Cassure Bande Haute Validée"
@@ -277,7 +273,7 @@ def analyser_binaire_pro(symbole):
         return None, None, None, None, None, None, None
 
 # ==========================================
-# LE SCANNER AUTOMATIQUE DE L'OMBRE (Corrigé)
+# LE SCANNER AUTOMATIQUE DE L'OMBRE
 # ==========================================
 
 def scanner_marche_auto():
@@ -291,14 +287,12 @@ def scanner_marche_auto():
             
             heure_actuelle = datetime.datetime.now().hour
             
-            # --- ✅ LE FILTRE JOUR / NUIT CORRIGÉ ET LOGIQUE ---
+            # --- LE FILTRE JOUR / NUIT CORRIGÉ ---
             if 8 <= heure_actuelle < 20:
-                # 👍 Devises Jour : GBP retiré, JPY inclus
                 devises_a_surveiller = [
                     "EURUSD", "USDJPY", "AUDUSD", "USDCAD", "EURJPY", "USDCHF"
                 ]
             else:
-                # 🌙 NUIT : 100% Focus JPY (Session Asiatique sécurisée)
                 devises_a_surveiller = [
                     "AUDJPY", "USDJPY", "CHFJPY", "CADJPY", "EURJPY"
                 ]
@@ -313,10 +307,10 @@ def scanner_marche_auto():
                         
                     derniere_alerte_auto[actif] = maintenant
                     
+                    # Esthétique du bouton d'alerte
                     markup = InlineKeyboardMarkup()
                     markup.add(InlineKeyboardButton(f"📊 Analyser {actif[:3]}/{actif[3:]}", callback_data=f"set_{actif}"))
                     
-                    # --- ✅ LES ALERTES VIP ESTHÉTIQUES ORIGINELLES ---
                     if confiance >= 98:
                         alerte_msg = f"👑 **ALERTE TITAN DÉTECTÉE** 👑\n\nUne compression de marché rarissime vient d'apparaître sur **{actif[:3]}/{actif[3:]}** (Confiance : {confiance}%).\n\n👇 *Clique sur le bouton ci-dessous pour lancer l'analyse !*"
                     else:
@@ -332,7 +326,7 @@ def scanner_marche_auto():
             pass
 
 # ==========================================
-# GESTIONNAIRE D'HORAIRES ET DE BILAN (Admin)
+# GESTIONNAIRE D'HORAIRES ET DE BILAN (22H00)
 # ==========================================
 
 def gestion_horaires_et_bilan():
@@ -345,7 +339,7 @@ def gestion_horaires_et_bilan():
             
             utilisateurs_a_alerter = [uid for uid in utilisateurs_actifs if est_autorise(uid)]
 
-            # --- TRANSITION DE NUIT (Message) ---
+            # Transition Nuit
             if heure == 20 and minute == 0 and not transition_nuit_envoyee:
                 texte_nuit = "🌉 **TRANSITION DE SESSION : MODE ASIATIQUE ACTIVÉ** 🌉\n\nLes volumes s'effondrent sur l'Europe. Le Terminal Prime bascule ses radars exclusivement sur l'Asie (Focus 100% JPY sécurisé).\n\n*La chasse continue de nuit. Restez concentrés.* 🥷"
                 for chat_id in utilisateurs_a_alerter:
@@ -354,7 +348,7 @@ def gestion_horaires_et_bilan():
                 transition_nuit_envoyee = True
                 transition_jour_envoyee = False
 
-            # --- TRANSITION DE JOUR (Message) ---
+            # Transition Jour
             elif heure == 8 and minute == 0 and not transition_jour_envoyee:
                 texte_jour = "☀️ **TRANSITION DE SESSION : MODE EUROPE/US ACTIVÉ** ☀️\n\nOuverture des marchés majeurs. La volatilité est de retour sur les paires Euro, Dollar et Yen.\n\n*Bonne journée de trading à tous les VIP !* 🚀"
                 for chat_id in utilisateurs_a_alerter:
@@ -363,7 +357,7 @@ def gestion_horaires_et_bilan():
                 transition_jour_envoyee = True
                 transition_nuit_envoyee = False
 
-            # --- BILAN DU FONDATEUR (22H00) ---
+            # --- BILAN AUTOMATIQUE FONDATEUR ---
             elif heure == 22 and minute == 0 and not bilan_envoye_aujourdhui:
                 total_trades = stats_journee['ITM'] + stats_journee['OTM']
                 if total_trades > 0:
@@ -377,10 +371,10 @@ def gestion_horaires_et_bilan():
                         bot.send_message(ADMIN_ID, texte_bilan_admin, parse_mode="Markdown")
                     except: pass
                     
+                # Réinitialisation
                 stats_journee = {'ITM': 0, 'OTM': 0, 'details': []}
                 bilan_envoye_aujourdhui = True
                 
-            # --- RÉINITIALISATION DU BILAN MINUIT ---
             elif heure == 23:
                 bilan_envoye_aujourdhui = False
                 
@@ -398,16 +392,6 @@ def admin_panel(message):
     if message.chat.id != ADMIN_ID: return
     msg = f"Admin Panel 🔥\nCapital actuel : {CAPITAL_ACTUEL}$"
     bot.send_message(ADMIN_ID, msg)
-
-@bot.message_handler(commands=['setuser'])
-def cmd_setuser(message):
-    if message.chat.id != ADMIN_ID: return
-    try:
-        user_id = int(message.text.split()[1])
-        utilisateurs_autorises[user_id] = "LIFETIME"
-        bot.send_message(ADMIN_ID, f"✅ Utilisateur {user_id} autorisé à vie.")
-    except:
-        bot.send_message(ADMIN_ID, "⚠️ Usage: `/setuser [ID]`")
 
 @bot.message_handler(func=lambda m: m.text and m.text.startswith("PRIME-"))
 def activer_cle(message):
@@ -442,7 +426,6 @@ def gerer_acces(call):
     
     if action == "accepter":
         markup = InlineKeyboardMarkup(row_width=2)
-        # ✅ AJOUT DES DURÉES MANQUANTES CORRIGÉ
         markup.add(
             InlineKeyboardButton("1 Semaine", callback_data=f"gen_7_{user_id}"),
             InlineKeyboardButton("2 Semaines 🔥", callback_data=f"gen_14_{user_id}"),
@@ -466,7 +449,6 @@ def creer_cle(call):
     cle = generer_cle()
     cles_generees[cle] = {"jours": jours, "user_id": user_id}
     
-    # Texte de durée intelligent
     duree_texte = ""
     if jours == 7: duree_texte = "1 Semaine"
     elif jours == 14: duree_texte = "2 Semaines"
@@ -479,7 +461,7 @@ def creer_cle(call):
     bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, parse_mode="Markdown")
 
 # ==========================================
-# COMMANDES TÉLÉGRAM ET MENUS VIP (Esthétique)
+# COMMANDES TÉLÉGRAM ET MENUS VIP ESTHÉTIQUES
 # ==========================================
 
 def obtenir_clavier():
@@ -492,7 +474,7 @@ def obtenir_clavier():
 def bienvenue(message):
     user_id = message.chat.id
     if not est_autorise(user_id):
-        markup = InlineKeyboardMarkup()
+        markup = InlineKeyboardMarkup(row_width=2)
         markup.add(
             InlineKeyboardButton("✅ Accepter", callback_data=f"admin_accepter_{user_id}"), 
             InlineKeyboardButton("❌ Ignorer", callback_data=f"admin_refuser_{user_id}")
@@ -518,6 +500,7 @@ Bienvenue dans ton radar de trading haute précision ! Ce bot est propulsé par 
 
 💡 **LE MOT DU FONDATEUR :**
 *Le marché ne ressent rien, n'aie aucune émotion face à lui. Le succès ne vient pas de la chance, mais d'une discipline de fer. Laisse l'algorithme faire les calculs, ne force jamais un trade et protège ton capital comme un tireur d'élite. Bon profit !* 🎯💸"""
+    
     bot.send_message(message.chat.id, texte_bienvenue, reply_markup=obtenir_clavier(), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
@@ -543,11 +526,12 @@ def horaires_trading(message):
 @bot.message_handler(func=lambda m: m.text == "📊 CHOISIR UNE DEVISE")
 def devises(message):
     if not est_autorise(message.chat.id): return
+    
+    # row_width=2 permet d'avoir 2 beaux boutons bien alignés par ligne
     markup = InlineKeyboardMarkup(row_width=2)
     heure = datetime.datetime.now().hour
     
     if 8 <= heure < 20: 
-        # --- ✅ CLAVIER DE JOUR CORRIGÉ (Retrait GBP, Ajout JPY) ---
         markup.add(
             InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="set_EURUSD"), 
             InlineKeyboardButton("🇯🇵 USD/JPY ✅", callback_data="set_USDJPY"), 
@@ -557,7 +541,6 @@ def devises(message):
             InlineKeyboardButton("🇨🇭 USD/CHF", callback_data="set_USDCHF")
         )
     else: 
-        # 🌙 CLAVIER DE NUIT 100% CORRIGÉ (Retrait GBP, Focus JPY)
         markup.add(
             InlineKeyboardButton("🇦🇺 AUD/JPY ✅", callback_data="set_AUDJPY"), 
             InlineKeyboardButton("🇯🇵 USD/JPY ✅", callback_data="set_USDJPY"), 
@@ -576,7 +559,7 @@ def save_devise(call):
     actif = call.data.split("_")[1]
     user_prefs[call.from_user.id] = actif
     
-    # ✅ L'esthétique de chargement VIP
+    # L'animation de chargement espacée
     try:
         msg = bot.send_message(chat_id, "⏳ *Initialisation du scan algorithmique rapide...*", parse_mode="Markdown")
         time.sleep(2)
@@ -600,7 +583,6 @@ def save_devise(call):
         except: pass
         return
 
-    # --- ✅ LE TIMING SNIPER VERROUILLÉ (1 minute 50) ---
     delai_avant_entree = 110 
     heure_entree_dt = datetime.datetime.now() + datetime.timedelta(seconds=delai_avant_entree)
     mise_recommandee = int(CAPITAL_ACTUEL * 0.02)
@@ -608,7 +590,7 @@ def save_devise(call):
     rsi_emoji = "🟢" if "ACHAT" in action else "🔴"
     stoch_text = "Survente" if "ACHAT" in action else "Surachat"
 
-    # ✅ LE SIGNAL ESTHÉTIQUE VIP (Format exact photo image_0.png)
+    # L'ESPACEMENT PARFAIT DU SIGNAL VIP
     signal = f"""🚀 **SIGNAL SNIPER GÉNÉRÉ** 🚀
 ──────────────────
 🛰 **ACTIF :** {actif[:3]}/{actif[3:]}
@@ -632,7 +614,8 @@ def save_devise(call):
     try:
         bot.delete_message(chat_id, msg.message_id)
         bot.send_message(chat_id, signal, parse_mode="Markdown")
-    except Exception: pass
+    except Exception:
+        pass
 
     action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
     trades_en_cours[chat_id] = {
@@ -640,7 +623,6 @@ def save_devise(call):
         'action': action_simplifiee
     }
     
-    # ✅ Démarrage des chronomètres synchronisés pour audit
     Timer(delai_avant_entree, relever_prix_entree, args=[chat_id, actif]).start()
     Timer(delai_avant_entree + duree_secondes, verifier_resultat, args=[chat_id]).start()
 
@@ -720,5 +702,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestion_horaires_et_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Serveur VIP + 2 Alertes Originelles + Focus JPY Nuit (Édition Ultime) lancé.", flush=True)
+    print("⬛ BOÎTE NOIRE : Serveur VIP + Sniper Strict (RSI 30/70) + Esthétique Originelle lancé.", flush=True)
     bot.infinity_polling()
