@@ -17,7 +17,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAHFW3ypAhi64gvnuiMDpJeutCM3uJO-ay0"
+TELEGRAM_TOKEN = "8658287331:AAHOPlAeP4_FRaaIXvL9s8_pNOeOXftN9Ak"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 # 👑 L'ID DU FONDATEUR 👑
@@ -57,7 +57,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition Sniper Esthétique (RSI 30/70 - Design Originel)"
+    return "Terminal Prime VIP : Édition Hybride (Rythme 25 Mars RSI 40/60 + Price Action Suprême)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -118,7 +118,7 @@ def obtenir_donnees_deriv(symbole_brut):
         req = {
             "ticks_history": symbole, 
             "end": "latest", 
-            "count": 50, 
+            "count": 250,  
             "style": "candles", 
             "granularity": 60
         }
@@ -206,7 +206,7 @@ def verifier_resultat(chat_id):
         del trades_en_cours[chat_id]
 
 # ==========================================
-# MOTEUR D'ANALYSE (VERROUILLAGE SNIPER)
+# MOTEUR D'ANALYSE (RYTHME 25 MARS + PRICE ACTION) 🚀🕯️
 # ==========================================
 
 def analyser_binaire_pro(symbole):
@@ -222,13 +222,14 @@ def analyser_binaire_pro(symbole):
             'low': c['low']
         } for c in candles])
         
-        # Calcul des indicateurs
+        # 1. Calcul des indicateurs mathématiques
         indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
         df['bb_haute'] = indicateur_bb.bollinger_hband()
         df['bb_basse'] = indicateur_bb.bollinger_lband()
         df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
         df['stoch_k'] = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch()
         df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
+        df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
         
         atr_actuel = df['atr'].iloc[-1]
         atr_moyen = df['atr'].mean()
@@ -237,6 +238,32 @@ def analyser_binaire_pro(symbole):
         stoch_val = round(df['stoch_k'].iloc[-1], 1)
         bb_h = df['bb_haute'].iloc[-1]
         bb_b = df['bb_basse'].iloc[-1]
+        ema_200 = df['ema_200'].iloc[-1]
+
+        # 2. 🕯️ DÉTECTEUR DE PRICE ACTION SUPRÊME
+        open_1, close_1, high_1, low_1 = df['open'].iloc[-1], df['close'].iloc[-1], df['high'].iloc[-1], df['low'].iloc[-1]
+        open_2, close_2, high_2, low_2 = df['open'].iloc[-2], df['close'].iloc[-2], df['high'].iloc[-2], df['low'].iloc[-2]
+
+        # Anatomie de la bougie
+        taille_totale = high_1 - low_1
+        if taille_totale == 0: taille_totale = 0.00001
+        corps = abs(open_1 - close_1)
+        meche_haute = high_1 - max(open_1, close_1)
+        meche_basse = min(open_1, close_1) - low_1
+
+        figure_trouvee = "Aucune"
+        
+        # Inside Bar (Compression TITAN)
+        if high_1 < high_2 and low_1 > low_2:
+            figure_trouvee = "INSIDE BAR"
+            
+        # Marteau (Rejet Baissier -> Signal VIP Achat)
+        elif meche_basse >= (2 * corps) and meche_haute <= (0.2 * taille_totale):
+            figure_trouvee = "MARTEAU"
+            
+        # Étoile (Rejet Haussier -> Signal VIP Vente)
+        elif meche_haute >= (2 * corps) and meche_basse <= (0.2 * taille_totale):
+            figure_trouvee = "ÉTOILE"
 
         action = None
         confiance = 0
@@ -253,16 +280,41 @@ def analyser_binaire_pro(symbole):
         expiration_texte = f"{duree_minutes} MINUTE{'S' if duree_minutes > 1 else ''} ⏱"
         duree_secondes = duree_minutes * 60
 
-        # --- LOGIQUE DE DÉCISION STRICTE (VERROUILLAGE SNIPER RSI 30/70) ---
-        if c <= bb_b and rsi_val <= 30 and stoch_val <= 15:
-            action = "🟢 ACHAT (CALL) 👑 [TITAN VIP]"
-            confiance = random.randint(92, 99)
-            bb_status = "Cassure Bande Basse Validée"
+        # --- 🎯 LOGIQUE DE DÉCISION ULTIME (RYTHME 25 MARS : RSI 40/60) ---
+        
+        # LOGIQUE ACHAT (CALL)
+        if c <= bb_b and rsi_val <= 40 and stoch_val <= 20:
+            # Filtre de tendance EMA
+            if c > ema_200:
+                bb_status = "Cassure Bande Basse Validée"
+                
+                if figure_trouvee == "INSIDE BAR":
+                    action = "🟢 ACHAT (CALL) 👑 [TITAN INSIDE BAR]"
+                    confiance = random.randint(98, 99)
+                elif figure_trouvee == "MARTEAU":
+                    action = "🟢 ACHAT (CALL) 🚨 [VIP MARTEAU]"
+                    confiance = random.randint(92, 97)
+                else:
+                    return f"⚠️ Marché bas, en attente d'un Marteau ou Inside Bar. Tir annulé.", None, None, None, None, None, None
+            else:
+                return f"⚠️ Contre-tendance (Prix sous EMA 200). Tir d'Achat annulé.", None, None, None, None, None, None
             
-        elif c >= bb_h and rsi_val >= 70 and stoch_val >= 85:
-            action = "🔴 VENTE (PUT) 👑 [TITAN VIP]"
-            confiance = random.randint(92, 99)
-            bb_status = "Cassure Bande Haute Validée"
+        # LOGIQUE VENTE (PUT)
+        elif c >= bb_h and rsi_val >= 60 and stoch_val >= 80:
+            # Filtre de tendance EMA
+            if c < ema_200:
+                bb_status = "Cassure Bande Haute Validée"
+                
+                if figure_trouvee == "INSIDE BAR":
+                    action = "🔴 VENTE (PUT) 👑 [TITAN INSIDE BAR]"
+                    confiance = random.randint(98, 99)
+                elif figure_trouvee == "ÉTOILE":
+                    action = "🔴 VENTE (PUT) 🚨 [VIP ÉTOILE]"
+                    confiance = random.randint(92, 97)
+                else:
+                    return f"⚠️ Marché haut, en attente d'une Étoile ou Inside Bar. Tir annulé.", None, None, None, None, None, None
+            else:
+                return f"⚠️ Contre-tendance (Prix au-dessus EMA 200). Tir de Vente annulé.", None, None, None, None, None, None
             
         else:
             return f"⚠️ Marché stable. En attente de cassure Bollinger.", None, None, None, None, None, None
@@ -287,7 +339,6 @@ def scanner_marche_auto():
             
             heure_actuelle = datetime.datetime.now().hour
             
-            # --- LE FILTRE JOUR / NUIT CORRIGÉ ---
             if 8 <= heure_actuelle < 20:
                 devises_a_surveiller = [
                     "EURUSD", "USDJPY", "AUDUSD", "USDCAD", "EURJPY", "USDCHF"
@@ -307,7 +358,6 @@ def scanner_marche_auto():
                         
                     derniere_alerte_auto[actif] = maintenant
                     
-                    # Esthétique du bouton d'alerte
                     markup = InlineKeyboardMarkup()
                     markup.add(InlineKeyboardButton(f"📊 Analyser {actif[:3]}/{actif[3:]}", callback_data=f"set_{actif}"))
                     
@@ -371,7 +421,6 @@ def gestion_horaires_et_bilan():
                         bot.send_message(ADMIN_ID, texte_bilan_admin, parse_mode="Markdown")
                     except: pass
                     
-                # Réinitialisation
                 stats_journee = {'ITM': 0, 'OTM': 0, 'details': []}
                 bilan_envoye_aujourdhui = True
                 
@@ -527,7 +576,7 @@ def horaires_trading(message):
 def devises(message):
     if not est_autorise(message.chat.id): return
     
-    # row_width=2 permet d'avoir 2 beaux boutons bien alignés par ligne
+    # L'espacement parfait de tes claviers VIP
     markup = InlineKeyboardMarkup(row_width=2)
     heure = datetime.datetime.now().hour
     
@@ -702,5 +751,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestion_horaires_et_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Serveur VIP + Sniper Strict (RSI 30/70) + Esthétique Originelle lancé.", flush=True)
+    print("⬛ BOÎTE NOIRE : Serveur VIP + Rythme 25 Mars + Price Action Suprême lancé.", flush=True)
     bot.infinity_polling()
