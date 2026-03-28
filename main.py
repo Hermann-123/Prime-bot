@@ -17,7 +17,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAEnc6IFA4p6azpzQPLihTu1s9g8z3LK8IY"
+TELEGRAM_TOKEN = "8658287331:AAHSjxzwqKe5Yx_QCk5BW31KlvxMrxpaopw"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 # 👑 L'ID DU FONDATEUR 👑
@@ -49,12 +49,12 @@ bilan_envoye_aujourdhui = False
 transition_nuit_envoyee = False
 transition_jour_envoyee = False
 
-# 💎 NOUVEL ARSENAL DE DEVISES (SYNCHRONISÉ BINOMO/DERIV)
+# 💎 NOUVEL ARSENAL DE DEVISES
 CRYPTO_PAIRS = ["BTCUSD", "ETHUSD", "LTCUSD"]
 FOREX_PAIRS = [
-    "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", # Majeurs
-    "EURJPY", "GBPJPY", "AUDJPY", "CADJPY", "CHFJPY",           # Crosses JPY
-    "EURGBP", "EURCAD", "EURNZD", "GBPCAD", "GBPNZD", "AUDCAD"  # Crosses EUR/GBP/AUD
+    "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF",
+    "EURJPY", "GBPJPY", "AUDJPY", "CADJPY", "CHFJPY",
+    "EURGBP", "EURCAD", "EURNZD", "GBPCAD", "GBPNZD", "AUDCAD"
 ]
 
 # ==========================================
@@ -65,7 +65,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition Suprême (Triple Cerveau + Mode Crypto/Binomo)"
+    return "Terminal Prime VIP : Édition Suprême"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -119,7 +119,6 @@ def generer_jauge(pourcentage):
 # ==========================================
 
 def prefixer_symbole(symbole_brut):
-    """Route l'actif vers le bon serveur Deriv (Forex ou Crypto)"""
     if symbole_brut in CRYPTO_PAIRS:
         return f"cry{symbole_brut}"
     return f"frx{symbole_brut}"
@@ -306,12 +305,12 @@ def analyser_binaire_pro(symbole):
 
         # 🌌 CERVEAU 3 : ANOMALIE 3-SIGMA
         if c <= bb_b_3:
-            action = "🟢 ACHAT (CALL / UP) 🌌 [TITAN 3-SIGMA]"
+            action = "🟢 ACHAT (CALL) 🌌 [TITAN 3-SIGMA]"
             confiance = 99
             bb_status = "Rupture 3-Sigma Validée"
             
         elif c >= bb_h_3:
-            action = "🔴 VENTE (PUT / DOWN) 🌌 [TITAN 3-SIGMA]"
+            action = "🔴 VENTE (PUT) 🌌 [TITAN 3-SIGMA]"
             confiance = 99
             bb_status = "Rupture 3-Sigma Validée"
 
@@ -320,30 +319,30 @@ def analyser_binaire_pro(symbole):
             if c <= bb_b and rsi_val <= 40 and stoch_val <= 20 and c > ema_200:
                 bb_status = "Cassure Bande Basse Validée"
                 if figure_trouvee == "INSIDE BAR":
-                    action = "🟢 ACHAT (CALL / UP) 👑 [TITAN INSIDE BAR]"
+                    action = "🟢 ACHAT (CALL) 👑 [TITAN INSIDE BAR]"
                     confiance = random.randint(98, 99)
                 elif figure_trouvee == "MARTEAU":
-                    action = "🟢 ACHAT (CALL / UP) 🚨 [VIP MARTEAU]"
+                    action = "🟢 ACHAT (CALL) 🚨 [VIP MARTEAU]"
                     confiance = random.randint(92, 97)
                 
             elif c >= bb_h and rsi_val >= 60 and stoch_val >= 80 and c < ema_200:
                 bb_status = "Cassure Bande Haute Validée"
                 if figure_trouvee == "INSIDE BAR":
-                    action = "🔴 VENTE (PUT / DOWN) 👑 [TITAN INSIDE BAR]"
+                    action = "🔴 VENTE (PUT) 👑 [TITAN INSIDE BAR]"
                     confiance = random.randint(98, 99)
                 elif figure_trouvee == "ÉTOILE":
-                    action = "🔴 VENTE (PUT / DOWN) 🚨 [VIP ÉTOILE]"
+                    action = "🔴 VENTE (PUT) 🚨 [VIP ÉTOILE]"
                     confiance = random.randint(92, 97)
 
         # 🧠 CERVEAU 2 : DIVERGENCE MACD
         if not action:
             if c <= bb_b and prix_fait_nouveau_creux and macd_fait_creux_plus_haut:
-                action = "🟢 ACHAT (CALL / UP) 💎 [TITAN DIVERGENCE]"
+                action = "🟢 ACHAT (CALL) 💎 [TITAN DIVERGENCE]"
                 confiance = random.randint(98, 99) 
                 bb_status = "Cassure Basse Validée (Math)"
                 
             elif c >= bb_h and prix_fait_nouveau_sommet and macd_fait_sommet_plus_bas:
-                action = "🔴 VENTE (PUT / DOWN) 💎 [TITAN DIVERGENCE]"
+                action = "🔴 VENTE (PUT) 💎 [TITAN DIVERGENCE]"
                 confiance = random.randint(98, 99)
                 bb_status = "Cassure Haute Validée (Math)"
 
@@ -541,22 +540,22 @@ def bienvenue(message):
         )
         try: bot.send_message(ADMIN_ID, f"🚨 **NOUVEAU CLIENT POTENTIEL** 🚨\n\n🆔 `{user_id}`\n\nGénérer un abonnement ?", reply_markup=markup, parse_mode="Markdown")
         except: pass
-        alerte = "🔒 **ACCÈS RESTREINT - TERMINAL PRIVÉ** 🔒\n\nCe système est une intelligence artificielle de trading haute précision sous licence payante.\n\n📲 **Pour obtenir votre clé d'accès, contactez l'administration.**"
-        return bot.send_message(user_id, alerte, parse_mode="Markdown")
+        alerte = "🔒 **ACCÈS RESTREINT - TERMINAL PRIVÉ** 🔒\n\nCe système est une intelligence artificielle de trading haute précision sous licence payante.\n\n📲 **Pour obtenir votre clé d'accès (Abonnement), veuillez contacter le fondateur : [@hermann1123](https://t.me/hermann1123)**"
+        return bot.send_message(user_id, alerte, parse_mode="Markdown", disable_web_page_preview=True)
 
     utilisateurs_actifs.add(user_id)
     texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION ULTIME** 🔥
     
-Bienvenue dans ton radar de trading haute précision ! Ce bot est propulsé par un moteur d'intelligence mathématique (Triple Cerveau Absolu) calibré pour Deriv et Binomo.
+Bienvenue dans ton radar de trading haute précision ! Ce bot est propulsé par un moteur d'intelligence mathématique (Triple Cerveau Absolu) pour scanner les graphiques à la milliseconde.
 
 📖 **MODE D'EMPLOI :**
-1️⃣ **SÉLECTION :** Clique sur "📊 CHOISIR UNE DEVISE" pour verrouiller un actif.
-2️⃣ **RADAR :** Clique sur "🚀 LANCER L'ANALYSE" pour déclencher le scan Sniper.
-3️⃣ **STRATÉGIE :** Prépare ton application (Règle l'heure d'expiration).
+1️⃣ **SÉLECTION :** Clique sur "📊 CHOISIR UNE DEVISE" pour verrouiller un actif logique compatible Pocket Broker.
+2️⃣ **RADAR :** Clique sur "🚀 LANCER L'ANALYSE" pour déclencher le scan et le verrouillage Sniper.
+3️⃣ **STRATÉGIE :** Consulte les meilleures fenêtres de tir via le bouton "⏰ HEURES DE TRADING".
 4️⃣ **DISCIPLINE :** N'oublie pas : 2% de mise maximum et stop total après 3 pertes dans une session.
 
 💡 **LE MOT DU FONDATEUR :**
-*Le marché ne ressent rien, n'aie aucune émotion face à lui. Laisse l'algorithme faire les calculs, ne force jamais un trade et protège ton capital comme un tireur d'élite. Bon profit !* 🎯💸"""
+*Le marché ne ressent rien, n'aie aucune émotion face à lui. Le succès ne vient pas de la chance, mais d'une discipline de fer. Laisse l'algorithme faire les calculs, ne force jamais un trade et protège ton capital comme un tireur d'élite. Bon profit !* 🎯💸"""
     bot.send_message(message.chat.id, texte_bienvenue, reply_markup=obtenir_clavier(), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
@@ -625,7 +624,7 @@ def save_devise(call):
     try:
         msg = bot.send_message(chat_id, "⏳ *Initialisation du scan algorithmique Triple Cerveau...*", parse_mode="Markdown")
         time.sleep(2)
-        bot.edit_message_text(f"📡 *Connexion Deriv et évaluation de la gravité sur {nom_affiche}...*", chat_id, msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text(f"📡 *Connexion Deriv et évaluation de la gravité 3-Sigma sur {nom_affiche}...*", chat_id, msg.message_id, parse_mode="Markdown")
         time.sleep(2)
         bot.edit_message_text("⚙️ *Calcul des indicateurs mathématiques (Sniper + MACD Piège)...*", chat_id, msg.message_id, parse_mode="Markdown")
         time.sleep(2)
@@ -669,7 +668,7 @@ def save_devise(call):
 ──────────────────
 🛰 **ACTIF :** {nom_affiche}
 🎯 **ACTION :** {action}
-⏳ **DURÉE IDÉALE :** {exp_texte}
+⏳ **EXPIRATION :** {exp_texte}
 ──────────────────
 🌡️ **FORCE DU SIGNAL (ALGORITHME) :**
 {jauge}
@@ -679,7 +678,7 @@ def save_devise(call):
 ➤ **Stochastique :** {rsi_emoji} Validé ({stoch_text})
 ➤ **Bollinger :** {rsi_emoji} {bb_status}
 ──────────────────
-📍 **ENTRÉE EXACTE À : {heure_entree_dt.strftime("%H:%M:00")}** 👈 *(Régler l'heure de fin sur Binomo)*
+📍 **ORDRE À : {heure_entree_dt.strftime("%H:%M:00")}** 👈
 💵 **MISE RECOMMANDÉE :** {mise_recommandee}$ (2%)
 🔥 **CONFIANCE GLOBALE :** {confiance}%
 ──────────────────
@@ -743,8 +742,8 @@ def vision_marche(message):
 🛡️ **EMA 200 (Tendance) :** `{ema_200:.5f}`
 📏 **Position Bollinger :** {position_bb}
 
-📊 **Niveau RSI :** `{rsi:.2f}`
-📉 **Niveau Stochastique :** `{stoch_k:.2f}`
+📊 **Niveau RSI :** `{rsi:.2f}` *(Rappel: >60 = Surchauffe, <40 = Essoufflé)*
+📉 **Niveau Stochastique :** `{stoch_k:.2f}` *(Rappel: >80 = Surachat, <20 = Survente)*
 ──────────────────"""
 
         if position_bb != "⚪ Au Milieu (Zone neutre)": rapport += "\n⚠️ *Le prix teste les limites, tiens-toi prêt !*" 
