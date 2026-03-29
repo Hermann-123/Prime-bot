@@ -17,7 +17,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAG6Onx1PYsXvCFBwYJbHMtF6YbtW8lQ70Q"
+TELEGRAM_TOKEN = "8658287331:AAF1IJWkonMph_J7PEKPik6XYwwnsngU8sM"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 # 👑 L'ID DU FONDATEUR 👑
@@ -29,7 +29,7 @@ CAPITAL_ACTUEL = 40650
 # VARIABLES D'ÉTAT ET ROUTAGE DES ACTIFS
 # ==========================================
 
-préférences_utilisateur =  }
+préférences_utilisateur = { }
 échanges_en_cours = { }
 utilisateurs_actifs = set ( )
 dernière_alerte_auto = { }
