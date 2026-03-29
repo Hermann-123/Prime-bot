@@ -17,8 +17,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-# ⚠️ METS TON NOUVEAU TOKEN ICI SI TU L'AS CHANGÉ SUR BOTFATHER
-TELEGRAM_TOKEN = "8658287331:AAG7lTU-dS3VGhGo--q-BTCHpef6wgAArKM"
+TELEGRAM_TOKEN = "8658287331:AAGz0aAdm5Q9oaqTTO1rdPeLMLIRHjr44Vw"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -63,7 +62,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition Suprême"
+    return "Terminal Prime VIP : Édition GOD MODE"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -188,12 +187,12 @@ def verifier_resultat(chat_id):
     if chat_id in trades_en_cours: del trades_en_cours[chat_id]
 
 # ==========================================
-# MOTEUR D'ANALYSE ( TRIPLE CERVEAU ABSOLU )
+# MOTEUR D'ANALYSE ( GOD MODE )
 # ==========================================
 
 def analyser_binaire_pro(symbole):
     candles = obtenir_donnees_deriv(symbole)
-    if not candles: return "⚠️ Impossible de se connecter au marché (Deriv)", None, None, None, None, None, None
+    if not candles: return "⚠️ Impossible de se connecter au marché", None, None, None, None, None, None, None
     
     try:
         df = pd.DataFrame([{'open': float(c['open']), 'close': float(c['close']), 'high': float(c['high']), 'low': float(c['low'])} for c in candles])
@@ -205,75 +204,62 @@ def analyser_binaire_pro(symbole):
         df['stoch_k'] = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch()
         df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
         df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
-        
         df['macd'] = ta.trend.MACD(close=df['close']).macd()
-        prix_fait_nouveau_sommet = df['high'].iloc[-1] > df['high'].iloc[-2]
-        macd_fait_sommet_plus_bas = df['macd'].iloc[-1] < df['macd'].iloc[-2]
-        prix_fait_nouveau_creux = df['low'].iloc[-1] < df['low'].iloc[-2]
-        macd_fait_creux_plus_haut = df['macd'].iloc[-1] > df['macd'].iloc[-2]
 
         indicateur_bb_extreme = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=3)
         df['bb_haute_3'] = indicateur_bb_extreme.bollinger_hband()
         df['bb_basse_3'] = indicateur_bb_extreme.bollinger_lband()
 
-        atr_actuel = df['atr'].iloc[-1]
-        atr_moyen = df['atr'].mean()
+        atr_actuel, atr_moyen = df['atr'].iloc[-1], df['atr'].mean()
         c = df['close'].iloc[-1]
-        rsi_val = round(df['rsi'].iloc[-1], 1)
-        stoch_val = round(df['stoch_k'].iloc[-1], 1)
-        bb_h = df['bb_haute'].iloc[-1]
-        bb_b = df['bb_basse'].iloc[-1]
-        bb_h_3 = df['bb_haute_3'].iloc[-1]
-        bb_b_3 = df['bb_basse_3'].iloc[-1]
+        rsi_val, stoch_val = round(df['rsi'].iloc[-1], 1), round(df['stoch_k'].iloc[-1], 1)
+        bb_h, bb_b = df['bb_haute'].iloc[-1], df['bb_basse'].iloc[-1]
+        bb_h_3, bb_b_3 = df['bb_haute_3'].iloc[-1], df['bb_basse_3'].iloc[-1]
         ema_200 = df['ema_200'].iloc[-1]
 
-        open_1, close_1, high_1, low_1 = df['open'].iloc[-2], df['close'].iloc[-2], df['high'].iloc[-2], df['low'].iloc[-2]
-        open_2, close_2, high_2, low_2 = df['open'].iloc[-3], df['close'].iloc[-3], df['high'].iloc[-3], df['low'].iloc[-3]
+        # 🛑 DÉTECTION SMART MONEY (FAKE BREAKOUT)
+        high1, high2 = df['high'].iloc[-1], df['high'].iloc[-2]
+        low1, low2 = df['low'].iloc[-1], df['low'].iloc[-2]
+        close1 = df['close'].iloc[-1]
+        
+        piege_detecte = None
+        if high1 > high2 and close1 < high2: piege_detecte = "FAKE_BREAKOUT_HAUT" # Piège à l'achat
+        elif low1 < low2 and close1 > low2: piege_detecte = "FAKE_BREAKOUT_BAS" # Piège à la vente
 
-        taille_totale = high_1 - low_1
-        if taille_totale == 0: taille_totale = 0.00001
-        corps = abs(open_1 - close_1)
-        meche_haute = high_1 - max(open_1, close_1)
-        meche_basse = min(open_1, close_1) - low_1
-
-        figure_trouvee = "Aucune"
-        if high_1 < high_2 and low_1 > low_2: figure_trouvee = "INSIDE BAR"
-        elif meche_basse >= (2 * corps) and meche_haute <= (0.2 * taille_totale): figure_trouvee = "MARTEAU"
-        elif meche_haute >= (2 * corps) and meche_basse <= (0.2 * taille_totale): figure_trouvee = "ÉTOILE"
-
-        action = None
-        confiance = 0
-        bb_status = "Au Milieu"
+        action, confiance, bb_status = None, 0, "Au Milieu"
         
         if atr_actuel > (atr_moyen * 1.5): duree_minutes = 3
         elif atr_actuel > atr_moyen: duree_minutes = 2
         else: duree_minutes = 1
-        expiration_texte = f"{duree_minutes} MINUTE{'S' if duree_minutes > 1 else ''} ⏱"
         duree_secondes = duree_minutes * 60
+        expiration_texte = f"{duree_minutes} MINUTE{'S' if duree_minutes > 1 else ''} ⏱"
 
-        if c <= bb_b_3:
-            action, confiance, bb_status = "🟢 ACHAT (CALL) 🌌 [TITAN 3-SIGMA]", 99, "Rupture 3-Sigma Validée"
-        elif c >= bb_h_3:
-            action, confiance, bb_status = "🔴 VENTE (PUT) 🌌 [TITAN 3-SIGMA]", 99, "Rupture 3-Sigma Validée"
-        elif not action:
-            if c <= bb_b and rsi_val <= 40 and stoch_val <= 20 and c > ema_200:
-                bb_status = "Cassure Bande Basse Validée"
-                if figure_trouvee == "INSIDE BAR": action, confiance = "🟢 ACHAT (CALL) 👑 [TITAN INSIDE BAR]", random.randint(98, 99)
-                elif figure_trouvee == "MARTEAU": action, confiance = "🟢 ACHAT (CALL) 🚨 [VIP MARTEAU]", random.randint(92, 97)
-            elif c >= bb_h and rsi_val >= 60 and stoch_val >= 80 and c < ema_200:
-                bb_status = "Cassure Bande Haute Validée"
-                if figure_trouvee == "INSIDE BAR": action, confiance = "🔴 VENTE (PUT) 👑 [TITAN INSIDE BAR]", random.randint(98, 99)
-                elif figure_trouvee == "ÉTOILE": action, confiance = "🔴 VENTE (PUT) 🚨 [VIP ÉTOILE]", random.randint(92, 97)
-        if not action:
-            if c <= bb_b and prix_fait_nouveau_creux and macd_fait_creux_plus_haut:
-                action, confiance, bb_status = "🟢 ACHAT (CALL) 💎 [TITAN DIVERGENCE]", random.randint(98, 99), "Cassure Basse Validée (Math)"
-            elif c >= bb_h and prix_fait_nouveau_sommet and macd_fait_sommet_plus_bas:
-                action, confiance, bb_status = "🔴 VENTE (PUT) 💎 [TITAN DIVERGENCE]", random.randint(98, 99), "Cassure Haute Validée (Math)"
+        # 🧠 LOGIQUE D'ENTRÉE TRIPLE CERVEAU
+        if c <= bb_b_3: action, confiance, bb_status = "🟢 ACHAT (CALL)", 99, "Rupture 3-Sigma"
+        elif c >= bb_h_3: action, confiance, bb_status = "🔴 VENTE (PUT)", 99, "Rupture 3-Sigma"
+        elif c <= bb_b and rsi_val <= 40 and stoch_val <= 20 and c > ema_200:
+            action, confiance, bb_status = "🟢 ACHAT (CALL)", random.randint(92, 98), "Cassure Bande Basse"
+        elif c >= bb_h and rsi_val >= 60 and stoch_val >= 80 and c < ema_200:
+            action, confiance, bb_status = "🔴 VENTE (PUT)", random.randint(92, 98), "Cassure Bande Haute"
 
-        if action: return action, confiance, expiration_texte, duree_secondes, rsi_val, stoch_val, bb_status
-        else: return f"⚠️ Marché stable. En attente de cassure Bollinger.", None, None, None, None, None, None
+        # 🛡️ FILTRE GOD MODE (REJET DES PIÈGES)
+        if action:
+            if "ACHAT" in action and piege_detecte == "FAKE_BREAKOUT_HAUT": action = None
+            elif "VENTE" in action and piege_detecte == "FAKE_BREAKOUT_BAS": action = None
+
+        # 📊 CALCUL DU SCORE ALGO SUR 10
+        score_algo = 5
+        if action:
+            if rsi_val <= 30 or rsi_val >= 70: score_algo += 2
+            elif rsi_val <= 40 or rsi_val >= 60: score_algo += 1
+            if stoch_val <= 20 or stoch_val >= 80: score_algo += 2
+            if atr_actuel > atr_moyen: score_algo += 1
+            if score_algo > 10: score_algo = 10
+
+        if action: return action, confiance, expiration_texte, duree_secondes, rsi_val, stoch_val, bb_status, score_algo
+        else: return f"⚠️ Marché instable ou manipulé. Filtrage actif.", None, None, None, None, None, None, None
             
-    except: return None, None, None, None, None, None, None
+    except: return None, None, None, None, None, None, None, None
 
 # ==========================================
 # LE SCANNER AUTOMATIQUE DE L'OMBRE
@@ -291,21 +277,18 @@ def scanner_marche_auto():
             devises_a_surveiller = CRYPTO_PAIRS if jour_semaine >= 5 else FOREX_PAIRS
             
             for actif in devises_a_surveiller:
-                action, confiance, exp, duree, rsi_val, stoch_val, bb_status = analyser_binaire_pro(actif)
+                action, confiance, exp, duree, rsi_val, stoch_val, bb_status, score = analyser_binaire_pro(actif)
                 if action and "⚠️" not in action and confiance:
                     temps_actuel = time.time()
                     if actif in derniere_alerte_auto and (temps_actuel - derniere_alerte_auto[actif] < 180): continue
                     derniere_alerte_auto[actif] = temps_actuel
                     nom_affiche = f"{actif[:3]}/{actif[3:]}"
-                    type_emoji = "🪙" if actif in CRYPTO_PAIRS else "💱"
                     
                     markup = InlineKeyboardMarkup()
                     markup.add(InlineKeyboardButton(f"📊 Analyser {nom_affiche}", callback_data=f"set_{actif}"))
                     
-                    if "3-SIGMA" in action: alerte_msg = f"🌌 **ALERTE ANOMALIE 3-SIGMA {type_emoji}** 🌌\n\nExtension extrême détectée sur **{nom_affiche}**. Correction institutionnelle imminente.\n\n👇 *Clique sur le bouton ci-dessous pour lancer le verrouillage !*"
-                    elif "DIVERGENCE" in action: alerte_msg = f"⚡ **ALERTE TITAN DIVERGENCE {type_emoji}** ⚡\n\nPiège de liquidité détecté sur **{nom_affiche}** (Divergence Mathématique Validée).\n\n👇 *Clique sur le bouton ci-dessous pour lancer le verrouillage Sniper !*"
-                    elif confiance >= 98: alerte_msg = f"👑 **ALERTE TITAN DÉTECTÉE {type_emoji}** 👑\n\nUne compression de marché rarissime vient d'apparaître sur **{nom_affiche}** (Confiance : {confiance}%).\n\n👇 *Clique sur le bouton ci-dessous pour lancer l'analyse !*"
-                    else: alerte_msg = f"🚨 **NOUVELLE OPPORTUNITÉ VIP {type_emoji}** 🚨\n\nL'algorithme a validé une figure de retournement sur **{nom_affiche}** (Confiance : {confiance}%).\n\n👇 *Clique sur le bouton ci-dessous pour lancer l'analyse !*"
+                    if score >= 9: alerte_msg = f"🔥 **ALERTE GOD MODE DÉTECTÉE** 🔥\n\nConfiguration mathématique parfaite (Score {score}/10) sur **{nom_affiche}**.\n\n👇 *Clique sur le bouton pour déclencher la frappe !*"
+                    else: alerte_msg = f"🚨 **OPPORTUNITÉ VIP FILTRÉE** 🚨\n\nLe radar a esquivé les pièges. Signal propre sur **{nom_affiche}** (Score {score}/10).\n\n👇 *Clique sur le bouton pour l'analyse !*"
                         
                     for chat_id in utilisateurs_a_alerter:
                         try: bot.send_message(chat_id, alerte_msg, reply_markup=markup, parse_mode="Markdown")
@@ -343,7 +326,7 @@ def gestion_horaires_et_bilan():
                 total_trades = stats_journee['ITM'] + stats_journee['OTM']
                 if total_trades > 0:
                     winrate = round((stats_journee['ITM'] / total_trades) * 100)
-                    texte_bilan_admin = f"📊 **BILAN VIP DE LA JOURNÉE (RAPPORT FONDATEUR)** 📊\n──────────────────\n🎯 **Total Signaux :** {total_trades}\n✅ **Victoires (ITM) :** {stats_journee['ITM']}\n❌ **Pertes (OTM) :** {stats_journee['OTM']}\n📈 **Winrate :** {winrate}%\n──────────────────\n"
+                    texte_bilan_admin = f"📊 **BILAN VIP DE LA JOURNÉE (GOD MODE)** 📊\n──────────────────\n🎯 **Total Signaux :** {total_trades}\n✅ **Victoires (ITM) :** {stats_journee['ITM']}\n❌ **Pertes (OTM) :** {stats_journee['OTM']}\n📈 **Winrate :** {winrate}%\n──────────────────\n"
                     for detail in stats_journee['details']: texte_bilan_admin += f"{detail}\n"
                     try: bot.send_message(ADMIN_ID, texte_bilan_admin, parse_mode="Markdown")
                     except: pass
@@ -429,18 +412,16 @@ def bienvenue(message):
         return bot.send_message(user_id, "🔒 **ACCÈS RESTREINT - TERMINAL PRIVÉ** 🔒\n\nCe système est une intelligence artificielle de trading haute précision sous licence payante.\n\n📲 **Pour obtenir votre clé d'accès (Abonnement), veuillez contacter le fondateur : [@hermann1123](https://t.me/hermann1123)**", parse_mode="Markdown", disable_web_page_preview=True)
 
     utilisateurs_actifs.add(user_id)
-    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION ULTIME** 🔥
+    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION GOD MODE** 🔥
     
-Bienvenue dans ton radar de trading haute précision ! Ce bot est propulsé par un moteur d'intelligence mathématique (Triple Cerveau Absolu) pour scanner les graphiques à la milliseconde.
+Bienvenue dans le radar institutionnel. Ce système est doté d'un filtre Anti-Manipulation (Smart Money) pour protéger ton capital.
 
 📖 **MODE D'EMPLOI :**
-1️⃣ **SÉLECTION :** Clique sur "📊 CHOISIR UNE DEVISE" pour verrouiller un actif logique compatible Pocket Broker.
-2️⃣ **RADAR :** Clique sur "🚀 LANCER L'ANALYSE" pour déclencher le scan et le verrouillage Sniper.
-3️⃣ **STRATÉGIE :** Consulte les meilleures fenêtres de tir via le bouton "⏰ HEURES DE TRADING".
-4️⃣ **DISCIPLINE :** N'oublie pas : 2% de mise maximum et stop total après 3 pertes dans une session.
+1️⃣ **SÉLECTION :** Clique sur "📊 CHOISIR UNE DEVISE" pour verrouiller un actif.
+2️⃣ **RADAR :** Clique sur "🚀 LANCER L'ANALYSE" pour déclencher le scan Sniper.
+3️⃣ **DISCIPLINE :** N'oublie pas : 2% de mise maximum et stop total après 3 pertes dans une session.
 
-💡 **LE MOT DU FONDATEUR :**
-*Le marché ne ressent rien, n'aie aucune émotion face à lui. Le succès ne vient pas de la chance, mais d'une discipline de fer. Laisse l'algorithme faire les calculs, ne force jamais un trade et protège ton capital comme un tireur d'élite. Bon profit !* 🎯💸"""
+💡 *La qualité détruit la quantité. Laisse le bot éliminer les pièges et encaisse les vraies opportunités.* 🎯💸"""
     bot.send_message(message.chat.id, texte_bienvenue, reply_markup=obtenir_clavier(), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
@@ -451,9 +432,9 @@ def horaires_trading(message):
 ✅ **SESSION SEMAINE 1 (08h00 - 11h00) :** EUR/USD, GBP/USD
 🔥 **SESSION SEMAINE 2 (13h30 - 16h30) :** EUR/USD, AUD/USD
 🌉 **SESSION SEMAINE 3 (20h00 - 08h00) :** AUD/JPY, USD/JPY, EUR/JPY
-🪙 **SESSION WEEK-END (Samedi/Dimanche) :** CRYPTOMONNAIES UNIQUEMENT (BTC, ETH...)
+🪙 **SESSION WEEK-END (Samedi/Dimanche) :** CRYPTOMONNAIES UNIQUEMENT
 
-*Rappel de Discipline : Fixe-toi tes 2% de mise max et arrête-toi après 3 pertes dans la même session !*"""
+*Rappel de Discipline : Fixe-toi tes 2% de mise max et arrête-toi après 3 pertes !*"""
     bot.send_message(message.chat.id, texte, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "📊 CHOISIR UNE DEVISE")
@@ -490,15 +471,13 @@ def save_devise(call):
     nom_affiche = f"{actif[:3]}/{actif[3:]}"
     
     try:
-        msg = bot.send_message(chat_id, "⏳ *Initialisation du scan algorithmique Triple Cerveau...*", parse_mode="Markdown")
+        msg = bot.send_message(chat_id, "⏳ *Initialisation du scan GOD MODE...*", parse_mode="Markdown")
         time.sleep(1)
-        bot.edit_message_text(f"📡 *Connexion Deriv et évaluation de la gravité 3-Sigma sur {nom_affiche}...*", chat_id, msg.message_id, parse_mode="Markdown")
-        time.sleep(1)
-        bot.edit_message_text("⚙️ *Calcul des indicateurs mathématiques (Sniper + MACD Piège)...*", chat_id, msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text("⚙️ *Lecture de l'Order Flow et détection de pièges institutionnels...*", chat_id, msg.message_id, parse_mode="Markdown")
         time.sleep(1)
     except: return
         
-    action, confiance, exp_texte, duree_secondes, rsi_val, stoch_val, bb_status = analyser_binaire_pro(actif)
+    action, confiance, exp_texte, duree_secondes, rsi_val, stoch_val, bb_status, score = analyser_binaire_pro(actif)
     
     if action and "⚠️" in action:
         try: bot.edit_message_text(f"{action}", chat_id, msg.message_id)
@@ -515,30 +494,26 @@ def save_devise(call):
     heure_entree_dt = maintenant + datetime.timedelta(seconds=secondes_restantes)
     
     mise_recommandee = int(CAPITAL_ACTUEL * 0.02)
-    jauge = generer_jauge(confiance)
-    rsi_emoji = "🟢" if "ACHAT" in action else "🔴"
-    stoch_text = "N/A (Anomalie 99.7%)" if "3-SIGMA" in action else "N/A (Piège Validé)" if "DIVERGENCE" in action else "Survente" if "ACHAT" in action else "Surachat"
-    titre_signal = "🪙 SIGNAL CRYPTO GÉNÉRÉ 🪙" if actif in CRYPTO_PAIRS else "💱 SIGNAL FOREX GÉNÉRÉ 💱"
+    titre_signal = "🔥 SIGNAL VALIDÉ GOD MODE 🔥" if score >= 8 else "⚡ SIGNAL VIP SÉCURISÉ ⚡"
 
-    signal = f"""🚀 **{titre_signal}** 🚀
+    signal = f"""{titre_signal}
 ──────────────────
 🛰 **ACTIF :** {nom_affiche}
 🎯 **ACTION :** {action}
 ⏳ **EXPIRATION :** {exp_texte}
 ──────────────────
-🌡️ **FORCE DU SIGNAL (ALGORITHME) :**
-{jauge}
+🧠 **SCORE ALGO :** {score}/10
+🛡️ **FILTRE ANTI-PIÈGE :** VALIDÉ ✅
 
-📊 **VALIDATION DES INDICATEURS :**
-➤ **RSI :** {rsi_emoji} Validé ({rsi_val})
-➤ **Stochastique :** {rsi_emoji} Validé ({stoch_text})
-➤ **Bollinger :** {rsi_emoji} {bb_status}
+📊 **VALIDATION MULTI-CERVEAU :**
+➤ **RSI :** 🟢 Validé ({rsi_val})
+➤ **Stochastique :** 🟢 Validé ({stoch_val})
+➤ **Volume/Trend :** 🟢 {bb_status}
 ──────────────────
 📍 **ORDRE À : {heure_entree_dt.strftime("%H:%M:00")}** 👈
 💵 **MISE RECOMMANDÉE :** {mise_recommandee}$ (2%)
-🔥 **CONFIANCE GLOBALE :** {confiance}%
 ──────────────────
-💎 *Audit de résultat (ITM/OTM) activé en arrière-plan.*"""
+⚠️ *Trade validé uniquement car aucun piège (Fake Breakout) n'a été détecté.*"""
 
     try:
         bot.delete_message(chat_id, msg.message_id)
@@ -598,5 +573,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestion_horaires_et_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition Suprême Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition GOD MODE Démarrée.", flush=True)
     bot.infinity_polling()
