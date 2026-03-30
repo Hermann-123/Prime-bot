@@ -17,7 +17,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAGz0aAdm5Q9oaqTTO1rdPeLMLIRHjr44Vw"
+TELEGRAM_TOKEN = "8658287331:AAH3CRVSnt8RE8H9SM9g1B5fae_znEQBClI"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -62,7 +62,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition GOD MODE"
+    return "Terminal Prime VIP : Édition GOD MODE (V2 - 2 Minutes)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -412,7 +412,7 @@ def bienvenue(message):
         return bot.send_message(user_id, "🔒 **ACCÈS RESTREINT - TERMINAL PRIVÉ** 🔒\n\nCe système est une intelligence artificielle de trading haute précision sous licence payante.\n\n📲 **Pour obtenir votre clé d'accès (Abonnement), veuillez contacter le fondateur : [@hermann1123](https://t.me/hermann1123)**", parse_mode="Markdown", disable_web_page_preview=True)
 
     utilisateurs_actifs.add(user_id)
-    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION GOD MODE** 🔥
+    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION GOD MODE (V2)** 🔥
     
 Bienvenue dans le radar institutionnel. Ce système est doté d'un filtre Anti-Manipulation (Smart Money) pour protéger ton capital.
 
@@ -488,9 +488,10 @@ def save_devise(call):
         except: pass
         return
 
+    # ⚡ INJECTION DU MOTEUR CHRONOMÉTRIQUE : 2 MINUTES DE PRÉPARATION
     maintenant = datetime.datetime.now()
-    secondes_restantes = 60 - maintenant.second
-    if secondes_restantes < 10: secondes_restantes += 60
+    secondes_restantes = (60 - maintenant.second) + 60
+    if (60 - maintenant.second) < 15: secondes_restantes += 60
     heure_entree_dt = maintenant + datetime.timedelta(seconds=secondes_restantes)
     
     mise_recommandee = int(CAPITAL_ACTUEL * 0.02)
@@ -513,7 +514,7 @@ def save_devise(call):
 📍 **ORDRE À : {heure_entree_dt.strftime("%H:%M:00")}** 👈
 💵 **MISE RECOMMANDÉE :** {mise_recommandee}$ (2%)
 ──────────────────
-⚠️ *Trade validé uniquement car aucun piège (Fake Breakout) n'a été détecté.*"""
+⚠️ *Trade validé (Aucun piège). Vous avez 2 minutes pour préparer l'ordre.*"""
 
     try:
         bot.delete_message(chat_id, msg.message_id)
