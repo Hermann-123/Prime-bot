@@ -17,11 +17,11 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAG6kYU0senMVwXD6QocW0VFb-erKXzRA5Q"
+TELEGRAM_TOKEN = "8658287331:AAEvE-asQ9AbR_-8lk7jMtHJZpm8B_UkqgU"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
-CAPITAL_ACTUEL = 40650 
+CAPITAL_DEFAUT = 1000 # Capital par défaut si l'utilisateur ne l'a pas configuré
 
 # ==========================================
 # VARIABLES D'ÉTAT ET ROUTAGE
@@ -31,6 +31,9 @@ user_prefs = {}
 trades_en_cours = {}
 utilisateurs_actifs = set()
 derniere_alerte_auto = {}
+
+capital_users = {} # Gestion personnalisée du capital
+pertes_consecutives = {} # Coupe-circuit 3 OTM
 
 utilisateurs_autorises = {
     ADMIN_ID: "LIFETIME"
@@ -48,7 +51,6 @@ transition_nuit_envoyee = False
 transition_jour_envoyee = False
 
 CRYPTO_PAIRS = ["BTCUSD", "ETHUSD", "LTCUSD"]
-# Arsenal mis à jour selon Quotex/Pocket Broker
 FOREX_PAIRS = [
     "AUDUSD", "CADJPY", "CHFJPY", "EURJPY", "USDCAD", 
     "AUDJPY", "EURAUD", "EURUSD", "AUDCAD", "USDCHF", 
@@ -63,7 +65,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition GOD MODE (V3 - Quotex M5)"
+    return "Terminal Prime VIP : Édition GOD MODE PRO (V4 - Quotex M5)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -98,12 +100,15 @@ def generer_cle():
     aleatoire = ''.join(random.choice(caracteres) for _ in range(8))
     return f"PRIME-{aleatoire}"
 
-def generer_jauge(pourcentage):
-    if pourcentage >= 99:
-        return "[██████████] 👑 MAX"
-    pleins = int(pourcentage / 10)
-    vides = 10 - pleins
-    return f"[{'█' * pleins}{'░' * vides}] {pourcentage}%"
+def est_heure_de_news():
+    """Bloque les trades Forex pendant les annonces économiques majeures (Heures GMT)"""
+    maintenant = datetime.datetime.now()
+    h = maintenant.hour
+    m = maintenant.minute
+    # Plages horaires rouges : 12h30-13h00 et 13h30-14h30 GMT (US News)
+    if (h == 12 and m >= 30) or (h == 13) or (h == 14 and m <= 30):
+        return True
+    return False
 
 # ==========================================
 # ROUTEUR API DERIV (FOREX VS CRYPTO)
@@ -150,7 +155,7 @@ def obtenir_prix_actuel_deriv(symbole_brut):
     return None
 
 # ==========================================
-# SYSTÈME DE VÉRIFICATION ITM/OTM
+# SYSTÈME DE VÉRIFICATION ITM/OTM & COUPE-CIRCUIT
 # ==========================================
 
 def relever_prix_entree(chat_id, symbole):
@@ -159,7 +164,7 @@ def relever_prix_entree(chat_id, symbole):
         trades_en_cours[chat_id]['prix_entree'] = prix
 
 def verifier_resultat(chat_id):
-    global stats_journee
+    global stats_journee, pertes_consecutives
     trade = trades_en_cours.get(chat_id)
     if not trade or not trade.get('prix_entree'): return
 
@@ -178,87 +183,90 @@ def verifier_resultat(chat_id):
         texte = f"✅ **VICTOIRE (ITM)**\n🚀 Signal {nom_paire} ({action})\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`\n👤 Client ID : `{chat_id}`"
         stats_journee['ITM'] += 1
         stats_journee['details'].append(f"✅ {type_emoji} {nom_paire} ({action})")
+        pertes_consecutives[chat_id] = 0 # Réinitialisation en cas de victoire
     else:
         texte = f"❌ **PERTE (OTM)**\n⚠️ Signal {nom_paire} ({action})\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`\n👤 Client ID : `{chat_id}`"
         stats_journee['OTM'] += 1
         stats_journee['details'].append(f"❌ {type_emoji} {nom_paire} ({action})")
+        pertes_consecutives[chat_id] = pertes_consecutives.get(chat_id, 0) + 1 # Incrémentation de la perte
     
-    try: bot.send_message(ADMIN_ID, texte, parse_mode="Markdown")
+    try: 
+        bot.send_message(chat_id, texte, parse_mode="Markdown")
+        bot.send_message(ADMIN_ID, texte, parse_mode="Markdown") # Copie admin
     except: pass
         
     if chat_id in trades_en_cours: del trades_en_cours[chat_id]
 
 # ==========================================
-# MOTEUR D'ANALYSE ( GOD MODE )
+# MOTEUR D'ANALYSE ( GOD MODE PRO )
 # ==========================================
 
 def analyser_binaire_pro(symbole):
+    # Bouclier Anti-News pour le Forex
+    if est_heure_de_news() and symbole not in CRYPTO_PAIRS:
+        return "⚠️ ALERTE NEWS : Marché sous influence (Heure de News USD). Analyse suspendue pour votre sécurité.", None, None, None, None, None, None, None
+
     candles = obtenir_donnees_deriv(symbole)
-    if not candles: return "⚠️ Impossible de se connecter au marché", None, None, None, None, None, None, None
+    if not candles or len(candles) < 200: 
+        return "⚠️ Impossible de se connecter au marché ou données insuffisantes", None, None, None, None, None, None, None
     
     try:
         df = pd.DataFrame([{'open': float(c['open']), 'close': float(c['close']), 'high': float(c['high']), 'low': float(c['low'])} for c in candles])
         
+        # Indicateurs Techniques
         indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
         df['bb_haute'] = indicateur_bb.bollinger_hband()
         df['bb_basse'] = indicateur_bb.bollinger_lband()
         df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
         df['stoch_k'] = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch()
-        df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
-        df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
-        df['macd'] = ta.trend.MACD(close=df['close']).macd()
+        df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator() # Tendance lourde
 
-        indicateur_bb_extreme = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=3)
-        df['bb_haute_3'] = indicateur_bb_extreme.bollinger_hband()
-        df['bb_basse_3'] = indicateur_bb_extreme.bollinger_lband()
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
+        c = last['close']
+        rsi_val, stoch_val = round(last['rsi'], 1), round(last['stoch_k'], 1)
+        bb_h, bb_b = last['bb_haute'], last['bb_basse']
+        ema_200 = last['ema_200']
 
-        atr_actuel, atr_moyen = df['atr'].iloc[-1], df['atr'].mean()
-        c = df['close'].iloc[-1]
-        rsi_val, stoch_val = round(df['rsi'].iloc[-1], 1), round(df['stoch_k'].iloc[-1], 1)
-        bb_h, bb_b = df['bb_haute'].iloc[-1], df['bb_basse'].iloc[-1]
-        bb_h_3, bb_b_3 = df['bb_haute_3'].iloc[-1], df['bb_basse_3'].iloc[-1]
-        ema_200 = df['ema_200'].iloc[-1]
-
-        # 🛑 DÉTECTION SMART MONEY (FAKE BREAKOUT)
-        high1, high2 = df['high'].iloc[-1], df['high'].iloc[-2]
-        low1, low2 = df['low'].iloc[-1], df['low'].iloc[-2]
-        close1 = df['close'].iloc[-1]
+        # 🛑 LECTURE DU PRICE ACTION (Bougies Institutionnelles)
+        taille_corps = abs(last['close'] - last['open'])
+        meche_basse = last['open'] - last['low'] if last['close'] > last['open'] else last['close'] - last['low']
+        meche_haute = last['high'] - last['close'] if last['close'] > last['open'] else last['high'] - last['open']
         
-        piege_detecte = None
-        if high1 > high2 and close1 < high2: piege_detecte = "FAKE_BREAKOUT_HAUT" # Piège à l'achat
-        elif low1 < low2 and close1 > low2: piege_detecte = "FAKE_BREAKOUT_BAS" # Piège à la vente
-
-        action, confiance, bb_status = None, 0, "Au Milieu"
+        pin_bar_haussiere = meche_basse > (taille_corps * 2) and meche_haute < taille_corps
+        pin_bar_baissiere = meche_haute > (taille_corps * 2) and meche_basse < taille_corps
         
-        # ⚡ EXPIRATION FIXÉE À 5 MINUTES
-        duree_minutes = 5
+        bullish_engulfing = (prev['close'] < prev['open']) and (last['close'] > last['open']) and (last['close'] > prev['open']) and (last['open'] < prev['close'])
+        bearish_engulfing = (prev['close'] > prev['open']) and (last['close'] < last['open']) and (last['close'] < prev['open']) and (last['open'] > prev['close'])
+
+        # 🛑 FILTRE DE TENDANCE (On ne trade jamais contre l'EMA 200)
+        tendance_haussiere = c > ema_200
+        tendance_baissiere = c < ema_200
+
+        action, confiance, bb_status, score_algo = None, 0, "Au Milieu", 5
+        
         duree_secondes = 300
         expiration_texte = "5 MINUTES ⏱"
 
-        # 🧠 LOGIQUE D'ENTRÉE TRIPLE CERVEAU (M5)
-        if c <= bb_b_3: action, confiance, bb_status = "🟢 ACHAT (CALL)", 99, "Rupture 3-Sigma"
-        elif c >= bb_h_3: action, confiance, bb_status = "🔴 VENTE (PUT)", 99, "Rupture 3-Sigma"
-        elif c <= bb_b and rsi_val <= 40 and stoch_val <= 20 and c > ema_200:
-            action, confiance, bb_status = "🟢 ACHAT (CALL)", random.randint(92, 98), "Cassure Bande Basse"
-        elif c >= bb_h and rsi_val >= 60 and stoch_val >= 80 and c < ema_200:
-            action, confiance, bb_status = "🔴 VENTE (PUT)", random.randint(92, 98), "Cassure Bande Haute"
+        # 🧠 LOGIQUE D'ENTRÉE : CONFLUENCE TOTALE
+        # ACHAT : Tendance Hausse + Zone Basse + (RSI/Stoch ou Figure Bougie)
+        if c <= bb_b and tendance_haussiere:
+            if bullish_engulfing or pin_bar_haussiere:
+                action, confiance, bb_status, score_algo = "🟢 ACHAT (CALL)", 99, "Rejet Bande Basse + Price Action", 10
+            elif rsi_val <= 40 and stoch_val <= 20:
+                action, confiance, bb_status, score_algo = "🟢 ACHAT (CALL)", 95, "Survente + Tendance Alignée", 8
 
-        # 🛡️ FILTRE GOD MODE (REJET DES PIÈGES)
-        if action:
-            if "ACHAT" in action and piege_detecte == "FAKE_BREAKOUT_HAUT": action = None
-            elif "VENTE" in action and piege_detecte == "FAKE_BREAKOUT_BAS": action = None
+        # VENTE : Tendance Baisse + Zone Haute + (RSI/Stoch ou Figure Bougie)
+        elif c >= bb_h and tendance_baissiere:
+            if bearish_engulfing or pin_bar_baissiere:
+                action, confiance, bb_status, score_algo = "🔴 VENTE (PUT)", 99, "Rejet Bande Haute + Price Action", 10
+            elif rsi_val >= 60 and stoch_val >= 80:
+                action, confiance, bb_status, score_algo = "🔴 VENTE (PUT)", 95, "Surachat + Tendance Alignée", 8
 
-        # 📊 CALCUL DU SCORE ALGO SUR 10
-        score_algo = 5
-        if action:
-            if rsi_val <= 30 or rsi_val >= 70: score_algo += 2
-            elif rsi_val <= 40 or rsi_val >= 60: score_algo += 1
-            if stoch_val <= 20 or stoch_val >= 80: score_algo += 2
-            if atr_actuel > atr_moyen: score_algo += 1
-            if score_algo > 10: score_algo = 10
-
-        if action: return action, confiance, expiration_texte, duree_secondes, rsi_val, stoch_val, bb_status, score_algo
-        else: return f"⚠️ Marché instable ou manipulé. Filtrage actif.", None, None, None, None, None, None, None
+        if action: 
+            return action, confiance, expiration_texte, duree_secondes, rsi_val, stoch_val, bb_status, score_algo
+        else: 
+            return f"⚠️ Marché instable ou contre-tendance. Attente d'un alignement parfait.", None, None, None, None, None, None, None
             
     except: return None, None, None, None, None, None, None, None
 
@@ -281,7 +289,6 @@ def scanner_marche_auto():
                 action, confiance, exp, duree, rsi_val, stoch_val, bb_status, score = analyser_binaire_pro(actif)
                 if action and "⚠️" not in action and confiance:
                     temps_actuel = time.time()
-                    # LE SILENCIEUX : Blocage de 1 Heure (3600 secondes) par devise
                     if actif in derniere_alerte_auto and (temps_actuel - derniere_alerte_auto[actif] < 3600): continue
                     derniere_alerte_auto[actif] = temps_actuel
                     nom_affiche = f"{actif[:3]}/{actif[3:]}"
@@ -338,13 +345,29 @@ def gestion_horaires_et_bilan():
         except: time.sleep(60)
 
 # ==========================================
-# COMMANDES ADMIN ET GÉNÉRATION DE CLÉS
+# COMMANDES ADMIN ET CONFIGURATION VIP
 # ==========================================
+
+@bot.message_handler(commands=['capital'])
+def configurer_capital(message):
+    if not est_autorise(message.chat.id): return
+    try:
+        montant = float(message.text.split()[1])
+        capital_users[message.chat.id] = montant
+        bot.send_message(message.chat.id, f"🏦 **Capital configuré à {montant}$**\n\nLe bot calculera désormais automatiquement vos mises à 2% ({int(montant * 0.02)}$) par signal.", parse_mode="Markdown")
+    except:
+        bot.send_message(message.chat.id, "⚠️ **Erreur de format.** \nUtilisation : `/capital 500` (pour un capital de 500$)", parse_mode="Markdown")
+
+@bot.message_handler(commands=['reset'])
+def reinitialiser_pertes(message):
+    if not est_autorise(message.chat.id): return
+    pertes_consecutives[message.chat.id] = 0
+    bot.send_message(message.chat.id, "🔄 **Coupe-circuit réinitialisé.**\n\nVotre compteur de pertes est remis à zéro. Reprise du radar.", parse_mode="Markdown")
 
 @bot.message_handler(commands=['panel'])
 def admin_panel(message):
     if message.chat.id != ADMIN_ID: return
-    bot.send_message(ADMIN_ID, f"Admin Panel 🔥\nCapital actuel : {CAPITAL_ACTUEL}$")
+    bot.send_message(ADMIN_ID, "Admin Panel 🔥\nTerminal Actif.")
 
 @bot.message_handler(func=lambda m: m.text and m.text.startswith("PRIME-"))
 def activer_cle(message):
@@ -414,16 +437,14 @@ def bienvenue(message):
         return bot.send_message(user_id, "🔒 **ACCÈS RESTREINT - TERMINAL PRIVÉ** 🔒\n\nCe système est une intelligence artificielle de trading haute précision sous licence payante.\n\n📲 **Pour obtenir votre clé d'accès (Abonnement), veuillez contacter le fondateur : [@hermann1123](https://t.me/hermann1123)**", parse_mode="Markdown", disable_web_page_preview=True)
 
     utilisateurs_actifs.add(user_id)
-    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION GOD MODE (V3 - M5)** 🔥
+    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION GOD MODE PRO (V4 - M5)** 🔥
     
-Bienvenue dans le radar institutionnel. Ce système est doté d'un filtre Anti-Manipulation et analyse désormais les bougies de **5 MINUTES (M5)**.
+Le radar est désormais équipé du filtre **EMA 200 (Tendance)** et d'un bouclier Anti-News.
 
-📖 **MODE D'EMPLOI :**
-1️⃣ **SÉLECTION :** Clique sur "📊 CHOISIR UNE DEVISE" pour verrouiller un actif.
-2️⃣ **RADAR :** Clique sur "🚀 LANCER L'ANALYSE" pour déclencher le scan Sniper.
-3️⃣ **DISCIPLINE :** N'oublie pas : 2% de mise maximum et stop total après 3 pertes dans une session.
-
-⚠️ **ATTENTION : RÉGLEZ L'HORLOGE DE VOTRE COURTIER SUR 5 MINUTES !** ⏱️"""
+📖 **MOTEUR SÉCURISÉ :**
+➤ Tapez `/capital [montant]` pour ajuster automatiquement vos mises.
+➤ **Coupe-circuit activé :** Le bot se bloquera après 3 pertes consécutives pour protéger votre compte.
+➤ **ATTENTION : RÉGLEZ L'HORLOGE DE VOTRE COURTIER SUR 5 MINUTES !** ⏱️"""
     bot.send_message(message.chat.id, texte_bienvenue, reply_markup=obtenir_clavier(), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
@@ -432,11 +453,10 @@ def horaires_trading(message):
     texte = """🕒 **GUIDE DES HORAIRES DE TRADING (Heure GMT)** 🕒
 
 ✅ **SESSION SEMAINE 1 (08h00 - 11h00) :** EUR/USD, GBP/USD
-🔥 **SESSION SEMAINE 2 (13h30 - 16h30) :** EUR/USD, AUD/USD
+🔴 **ZONE ROUGE (12h30 - 14h30) :** TRADING FORTEMENT DÉCONSEILLÉ (News USD)
+🔥 **SESSION SEMAINE 2 (14h30 - 16h30) :** EUR/USD, AUD/USD
 🌉 **SESSION SEMAINE 3 (20h00 - 08h00) :** AUD/JPY, USD/JPY, EUR/JPY
-🪙 **SESSION WEEK-END (Samedi/Dimanche) :** CRYPTOMONNAIES UNIQUEMENT
-
-*Rappel de Discipline : Fixe-toi tes 2% de mise max et arrête-toi après 3 pertes !*"""
+🪙 **SESSION WEEK-END (Samedi/Dimanche) :** CRYPTOMONNAIES UNIQUEMENT"""
     bot.send_message(message.chat.id, texte, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "📊 CHOISIR UNE DEVISE")
@@ -453,7 +473,6 @@ def devises(message):
         )
         message_texte = "Mode Week-End 🪙 : Les banques sont fermées. Sélectionne la Crypto :"
     else:
-        # Clavier mis à jour pour correspondre à Quotex/Pocket Broker
         markup.add(
             InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD"), InlineKeyboardButton("🇨🇦 CAD/JPY", callback_data="set_CADJPY"), InlineKeyboardButton("🇨🇭 CHF/JPY", callback_data="set_CHFJPY"),
             InlineKeyboardButton("🇪🇺 EUR/JPY", callback_data="set_EURJPY"), InlineKeyboardButton("🇺🇸 USD/CAD", callback_data="set_USDCAD"), InlineKeyboardButton("🇦🇺 AUD/JPY", callback_data="set_AUDJPY"),
@@ -468,14 +487,20 @@ def devises(message):
 def save_devise(call):
     chat_id = call.message.chat.id
     if not est_autorise(chat_id): return
+
+    # 🛑 VÉRIFICATION DU COUPE-CIRCUIT (STOP LOSS 3 OTM)
+    if pertes_consecutives.get(chat_id, 0) >= 3:
+        bot.send_message(chat_id, "🚫 **STOP LOSS PSYCHOLOGIQUE ATTEINT** 🚫\n\nVous avez subi 3 pertes consécutives. Le terminal est verrouillé pour protéger votre capital.\n\nPrenez une pause. Si vous souhaitez forcer la reprise, tapez `/reset`.", parse_mode="Markdown")
+        return
+
     actif = call.data.replace("set_", "")
     user_prefs[call.from_user.id] = actif
     nom_affiche = f"{actif[:3]}/{actif[3:]}"
     
     try:
-        msg = bot.send_message(chat_id, "⏳ *Initialisation du scan GOD MODE (M5)...*", parse_mode="Markdown")
+        msg = bot.send_message(chat_id, "⏳ *Analyse Tendance et Price Action en cours...*", parse_mode="Markdown")
         time.sleep(1)
-        bot.edit_message_text("⚙️ *Lecture de l'Order Flow sur 5 Minutes et détection de pièges...*", chat_id, msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text("⚙️ *Alignement de l'EMA 200 sur la Timeframe M5...*", chat_id, msg.message_id, parse_mode="Markdown")
         time.sleep(1)
     except: return
         
@@ -496,8 +521,11 @@ def save_devise(call):
     if (60 - maintenant.second) < 15: secondes_restantes += 60
     heure_entree_dt = maintenant + datetime.timedelta(seconds=secondes_restantes)
     
-    mise_recommandee = int(CAPITAL_ACTUEL * 0.02)
-    titre_signal = "🔥 SIGNAL VALIDÉ GOD MODE (M5) 🔥" if score >= 8 else "⚡ SIGNAL VIP SÉCURISÉ (M5) ⚡"
+    # Calcul dynamique de la mise selon le capital de l'utilisateur
+    capital_client = capital_users.get(chat_id, CAPITAL_DEFAUT)
+    mise_recommandee = max(1, int(capital_client * 0.02))
+
+    titre_signal = "🔥 SIGNAL PRO VALIDÉ (M5) 🔥" if score >= 8 else "⚡ SIGNAL VIP SÉCURISÉ (M5) ⚡"
 
     signal = f"""{titre_signal}
 ──────────────────
@@ -505,16 +533,16 @@ def save_devise(call):
 🎯 **ACTION :** {action}
 ⏳ **EXPIRATION :** {exp_texte}
 ──────────────────
-🧠 **SCORE ALGO :** {score}/10
-🛡️ **FILTRE ANTI-PIÈGE :** VALIDÉ ✅
+🧠 **CONFLUENCE ALGO :** {score}/10
+🛡️ **TENDANCE GLOBALE :** ALIGNÉE ✅
 
-📊 **VALIDATION MULTI-CERVEAU :**
+📊 **VALIDATION INSTITUTIONNELLE :**
+➤ **Structure :** 🟢 {bb_status}
 ➤ **RSI :** 🟢 Validé ({rsi_val})
 ➤ **Stochastique :** 🟢 Validé ({stoch_val})
-➤ **Volume/Trend :** 🟢 {bb_status}
 ──────────────────
 📍 **ORDRE À : {heure_entree_dt.strftime("%H:%M:00")}** 👈
-💵 **MISE RECOMMANDÉE :** {mise_recommandee}$ (2%)
+💵 **MISE RECOMMANDÉE :** {mise_recommandee}$ (2% de {capital_client}$)
 ──────────────────
 ⚠️ *Trade validé en M5. Vous avez 2 minutes pour préparer l'ordre de 5 MINUTES sur Quotex.*"""
 
@@ -576,5 +604,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestion_horaires_et_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition GOD MODE (V3 - M5) Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition GOD MODE PRO (V4 - M5) Démarrée.", flush=True)
     bot.infinity_polling()
