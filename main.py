@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAHRobSFxOzGoNUoy8-C9h_opnWS7igEtaQ"
+TELEGRAM_TOKEN = "8658287331:AAHY9ujvS2sOA_280k6LOwAJA5eLZ379n8c"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -33,6 +33,7 @@ user_prefs = {}
 trades_en_cours = {}
 utilisateurs_actifs = set()
 derniere_alerte_auto = {}
+cooldown_actifs = {} # NOUVEAU : Le "Silencieux" pour bloquer les paires perdantes
 
 utilisateurs_autorises = {
     ADMIN_ID: "LIFETIME"
@@ -64,7 +65,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition GOD MODE (V5 - Quotex M5)"
+    return "Terminal Prime VIP : Édition GOD MODE ELITE (V6 - Quotex M5)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -161,7 +162,6 @@ def obtenir_donnees_deriv(symbole_brut):
         try:
             ws = websocket.WebSocket()
             ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=5)
-            # PASSAGE EN M5 (BOUGIES DE 5 MINUTES : granularity 300)
             req = {"ticks_history": symbole, "end": "latest", "count": 250, "style": "candles", "granularity": 300}
             ws.send(json.dumps(req))
             history = json.loads(ws.recv())
@@ -191,7 +191,7 @@ def obtenir_prix_actuel_deriv(symbole_brut):
     return None
 
 # ==========================================
-# SYSTÈME DE VÉRIFICATION ITM/OTM
+# SYSTÈME DE VÉRIFICATION ITM/OTM & COOLDOWN
 # ==========================================
 
 def relever_prix_entree(chat_id, symbole):
@@ -200,7 +200,7 @@ def relever_prix_entree(chat_id, symbole):
         trades_en_cours[chat_id]['prix_entree'] = prix
 
 def verifier_resultat(chat_id):
-    global stats_journee
+    global stats_journee, cooldown_actifs
     trade = trades_en_cours.get(chat_id)
     if not trade or not trade.get('prix_entree'): return
 
@@ -219,10 +219,14 @@ def verifier_resultat(chat_id):
         texte = f"✅ **VICTOIRE (ITM)**\n🚀 Signal {nom_paire} ({action})\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`\n👤 Client ID : `{chat_id}`"
         stats_journee['ITM'] += 1
         stats_journee['details'].append(f"✅ {type_emoji} {nom_paire} ({action})")
+        # Réinitialise le cooldown en cas de victoire (Optionnel)
+        if symbole in cooldown_actifs: del cooldown_actifs[symbole]
     else:
         texte = f"❌ **PERTE (OTM)**\n⚠️ Signal {nom_paire} ({action})\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`\n👤 Client ID : `{chat_id}`"
         stats_journee['OTM'] += 1
         stats_journee['details'].append(f"❌ {type_emoji} {nom_paire} ({action})")
+        # ⚠️ ACTIVATION DU SILENCIEUX APRÈS UNE PERTE ⚠️
+        cooldown_actifs[symbole] = time.time()
     
     try: bot.send_message(ADMIN_ID, texte, parse_mode="Markdown")
     except: pass
@@ -230,10 +234,14 @@ def verifier_resultat(chat_id):
     if chat_id in trades_en_cours: del trades_en_cours[chat_id]
 
 # ==========================================
-# MOTEUR D'ANALYSE ( GOD MODE INSTITUTIONNEL )
+# MOTEUR D'ANALYSE ( GOD MODE ELITE V6 )
 # ==========================================
 
 def analyser_binaire_pro(symbole):
+    # 0. Le Silencieux : Interdiction de trader une paire qui vient de perdre (1 Heure de pause)
+    if symbole in cooldown_actifs and (time.time() - cooldown_actifs[symbole] < 3600):
+        return f"⚠️ **SILENCIEUX ACTIF** : {symbole} a récemment subi une manipulation (OTM). Radar coupé pendant 1 heure pour protéger le capital.", None, None, None, None, None, None, None
+
     # 1. Filtre News Dynamique
     if est_heure_de_news_dynamique() and symbole not in CRYPTO_PAIRS:
         return "⚠️ ALERTE NEWS : Marché manipulé, radar coupé.", None, None, None, None, None, None, None
@@ -246,7 +254,7 @@ def analyser_binaire_pro(symbole):
     try:
         df = pd.DataFrame([{'open': float(c['open']), 'close': float(c['close']), 'high': float(c['high']), 'low': float(c['low'])} for c in candles])
         
-        # 3. CORRECTION VSA : Utilisation du Momentum (corps de la bougie) au lieu du count Deriv
+        # 3. VSA : Utilisation du Momentum
         df['corps_bougie'] = abs(df['close'] - df['open'])
 
         indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
@@ -266,10 +274,14 @@ def analyser_binaire_pro(symbole):
         last = df.iloc[-1]
         c = last['close']
         rsi_val, stoch_val = round(last['rsi'], 1), round(last['stoch_k'], 1)
-        bb_h, bb_b, ema_200 = last['bb_haute'], last['bb_basse'], last['ema_200']
-
-        tendance_haussiere = c > ema_200 and tendance_h1 in ["UP", "NEUTRE"]
-        tendance_baissiere = c < ema_200 and tendance_h1 in ["DOWN", "NEUTRE"]
+        bb_h, bb_b = last['bb_haute'], last['bb_basse']
+        
+        # 🛡️ FILTRE DE PENTE EMA (V6) : Empêche d'acheter un couteau qui tombe
+        ema_actuelle = df['ema_200'].iloc[-1]
+        ema_ancienne = df['ema_200'].iloc[-5] # L'EMA il y a 25 minutes
+        
+        tendance_haussiere = c > ema_actuelle and tendance_h1 in ["UP", "NEUTRE"] and ema_actuelle >= ema_ancienne
+        tendance_baissiere = c < ema_actuelle and tendance_h1 in ["DOWN", "NEUTRE"] and ema_actuelle <= ema_ancienne
 
         action, confiance, bb_status, score_algo = None, 0, "Au Milieu", 5
         duree_secondes = 300
@@ -292,7 +304,7 @@ def analyser_binaire_pro(symbole):
         if action and score_algo >= 8:
             return action, confiance, expiration_texte, duree_secondes, rsi_val, stoch_val, bb_status, score_algo
         else:
-            return f"⚠️ Marché instable ou manipulé. Filtrage actif.", None, None, None, None, None, None, None
+            return f"⚠️ Marché instable ou contre-tendance lourde. Filtrage actif.", None, None, None, None, None, None, None
             
     except Exception as e: 
         return None, None, None, None, None, None, None, None
@@ -316,16 +328,16 @@ def scanner_marche_auto():
                 action, confiance, exp, duree, rsi_val, stoch_val, bb_status, score = analyser_binaire_pro(actif)
                 if action and "⚠️" not in action and confiance:
                     temps_actuel = time.time()
-                    # LE SILENCIEUX : Blocage de 1 Heure (3600 secondes) par devise
                     if actif in derniere_alerte_auto and (temps_actuel - derniere_alerte_auto[actif] < 3600): continue
                     derniere_alerte_auto[actif] = temps_actuel
                     nom_affiche = f"{actif[:3]}/{actif[3:]}"
                     
+                    jauge_visuelle = generer_jauge(score * 10) # Utilisation de la jauge V6
                     markup = InlineKeyboardMarkup()
                     markup.add(InlineKeyboardButton(f"📊 Analyser {nom_affiche}", callback_data=f"set_{actif}"))
                     
-                    if score >= 9: alerte_msg = f"🔥 **ALERTE GOD MODE (M5)** 🔥\n\nConfiguration mathématique lourde (Score {score}/10) sur **{nom_affiche}**.\n\n👇 *Clique sur le bouton pour déclencher la frappe !*"
-                    else: alerte_msg = f"🚨 **OPPORTUNITÉ VIP FILTRÉE (M5)** 🚨\n\nLe radar a esquivé les pièges. Signal propre sur **{nom_affiche}** (Score {score}/10).\n\n👇 *Clique sur le bouton pour l'analyse !*"
+                    if score >= 9: alerte_msg = f"🔥 **ALERTE GOD MODE (M5)** 🔥\n\nConfiguration mathématique lourde\n**CONFIANCE :** {jauge_visuelle}\nCible : **{nom_affiche}**\n\n👇 *Clique sur le bouton pour déclencher la frappe !*"
+                    else: alerte_msg = f"🚨 **OPPORTUNITÉ VIP FILTRÉE (M5)** 🚨\n\nLe radar a esquivé les pièges. Signal propre !\n**CONFIANCE :** {jauge_visuelle}\nCible : **{nom_affiche}**\n\n👇 *Clique sur le bouton pour l'analyse !*"
                         
                     for chat_id in utilisateurs_a_alerter:
                         try: bot.send_message(chat_id, alerte_msg, reply_markup=markup, parse_mode="Markdown")
@@ -449,9 +461,9 @@ def bienvenue(message):
         return bot.send_message(user_id, "🔒 **ACCÈS RESTREINT - TERMINAL PRIVÉ** 🔒\n\nCe système est une intelligence artificielle de trading haute précision sous licence payante.\n\n📲 **Pour obtenir votre clé d'accès (Abonnement), veuillez contacter le fondateur : [@hermann1123](https://t.me/hermann1123)**", parse_mode="Markdown", disable_web_page_preview=True)
 
     utilisateurs_actifs.add(user_id)
-    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION GOD MODE (V3 - M5)** 🔥
+    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION GOD MODE ELITE (V6 - M5)** 🔥
     
-Bienvenue dans le radar institutionnel. Ce système est doté d'un filtre Anti-Manipulation et analyse désormais les bougies de **5 MINUTES (M5)**.
+Bienvenue dans le radar institutionnel. Ce système est doté d'un filtre Anti-Manipulation (Silencieux de Pertes) et analyse désormais les bougies de **5 MINUTES (M5)** avec Jauge de Confiance.
 
 📖 **MODE D'EMPLOI :**
 1️⃣ **SÉLECTION :** Clique sur "📊 CHOISIR UNE DEVISE" pour verrouiller un actif.
@@ -488,7 +500,6 @@ def devises(message):
         )
         message_texte = "Mode Week-End 🪙 : Les banques sont fermées. Sélectionne la Crypto :"
     else:
-        # Clavier mis à jour pour correspondre à Quotex/Pocket Broker
         markup.add(
             InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD"), InlineKeyboardButton("🇨🇦 CAD/JPY", callback_data="set_CADJPY"), InlineKeyboardButton("🇨🇭 CHF/JPY", callback_data="set_CHFJPY"),
             InlineKeyboardButton("🇪🇺 EUR/JPY", callback_data="set_EURJPY"), InlineKeyboardButton("🇺🇸 USD/CAD", callback_data="set_USDCAD"), InlineKeyboardButton("🇦🇺 AUD/JPY", callback_data="set_AUDJPY"),
@@ -533,6 +544,7 @@ def save_devise(call):
     
     mise_recommandee = int(CAPITAL_ACTUEL * 0.02)
     titre_signal = "🔥 SIGNAL VALIDÉ GOD MODE (M5) 🔥" if score >= 8 else "⚡ SIGNAL VIP SÉCURISÉ (M5) ⚡"
+    jauge_visuelle = generer_jauge(score * 10) # 👈 Intégration de la Jauge de Confluence
 
     signal = f"""{titre_signal}
 ──────────────────
@@ -540,7 +552,7 @@ def save_devise(call):
 🎯 **ACTION :** {action}
 ⏳ **EXPIRATION :** {exp_texte}
 ──────────────────
-🧠 **SCORE ALGO :** {score}/10
+🧠 **CONFIANCE :** {jauge_visuelle}
 🛡️ **FILTRE ANTI-PIÈGE :** VALIDÉ ✅
 
 📊 **VALIDATION MULTI-CERVEAU :**
@@ -611,5 +623,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestion_horaires_et_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition GOD MODE (V3 - M5) Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition GOD MODE ELITE (V6 - M5) Démarrée.", flush=True)
     bot.infinity_polling()
