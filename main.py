@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAGbbfGZBQSUdrgaKBd1bhOItl9k0ShxUqY"
+TELEGRAM_TOKEN = "8658287331:AAHRobSFxOzGoNUoy8-C9h_opnWS7igEtaQ"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -64,7 +64,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition GOD MODE (V3 - Quotex M5)"
+    return "Terminal Prime VIP : Édition GOD MODE (V5 - Quotex M5)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -111,6 +111,7 @@ def generer_jauge(pourcentage):
 # ==========================================
 
 def est_heure_de_news_dynamique():
+    """Scan le calendrier mondial pour les news à High Impact"""
     if not FMP_API_KEY: return False
     try:
         today = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -122,12 +123,14 @@ def est_heure_de_news_dynamique():
             for event in events:
                 if event.get('impact') == 'High':
                     e_time = datetime.datetime.strptime(event['date'], "%Y-%m-%d %H:%M:%S")
-                    if abs((maintenant - e_time).total_seconds() / 60) <= 30:
+                    diff = abs((maintenant - e_time).total_seconds() / 60)
+                    if diff <= 30: # Bloque 30 min avant et après
                         return True
     except: pass
     return False
 
 def obtenir_tendance_H1(symbole_brut):
+    """Analyse la tendance majeure sur 1 Heure"""
     symbole = prefixer_symbole(symbole_brut)
     try:
         ws = websocket.WebSocket()
@@ -158,6 +161,7 @@ def obtenir_donnees_deriv(symbole_brut):
         try:
             ws = websocket.WebSocket()
             ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=5)
+            # PASSAGE EN M5 (BOUGIES DE 5 MINUTES : granularity 300)
             req = {"ticks_history": symbole, "end": "latest", "count": 250, "style": "candles", "granularity": 300}
             ws.send(json.dumps(req))
             history = json.loads(ws.recv())
@@ -226,20 +230,24 @@ def verifier_resultat(chat_id):
     if chat_id in trades_en_cours: del trades_en_cours[chat_id]
 
 # ==========================================
-# MOTEUR D'ANALYSE ( GOD MODE ) INVISIBLE
+# MOTEUR D'ANALYSE ( GOD MODE INSTITUTIONNEL )
 # ==========================================
 
 def analyser_binaire_pro(symbole):
+    # 1. Filtre News Dynamique
     if est_heure_de_news_dynamique() and symbole not in CRYPTO_PAIRS:
         return "⚠️ ALERTE NEWS : Marché manipulé, radar coupé.", None, None, None, None, None, None, None
 
+    # 2. Tendance de Fond
     tendance_h1 = obtenir_tendance_H1(symbole)
     candles = obtenir_donnees_deriv(symbole)
     if not candles: return "⚠️ Impossible de se connecter au marché", None, None, None, None, None, None, None
     
     try:
         df = pd.DataFrame([{'open': float(c['open']), 'close': float(c['close']), 'high': float(c['high']), 'low': float(c['low'])} for c in candles])
-        df['volume'] = [float(c['count']) for c in candles]
+        
+        # 3. CORRECTION VSA : Utilisation du Momentum (corps de la bougie) au lieu du count Deriv
+        df['corps_bougie'] = abs(df['close'] - df['open'])
 
         indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
         df['bb_haute'] = indicateur_bb.bollinger_hband()
@@ -248,9 +256,10 @@ def analyser_binaire_pro(symbole):
         df['stoch_k'] = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch()
         df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
 
-        # VSA & SMC
-        vol_moy = df['volume'].rolling(window=10).mean().iloc[-1]
-        vsa_valide = df['volume'].iloc[-1] > vol_moy
+        # Calcul VSA & SMC
+        corps_moyen = df['corps_bougie'].rolling(window=10).mean().iloc[-1]
+        vsa_valide = df['corps_bougie'].iloc[-1] > corps_moyen 
+        
         fvg_haussier = df['low'].iloc[-1] > df['high'].iloc[-3]
         fvg_baissier = df['high'].iloc[-1] < df['low'].iloc[-3]
 
@@ -285,7 +294,8 @@ def analyser_binaire_pro(symbole):
         else:
             return f"⚠️ Marché instable ou manipulé. Filtrage actif.", None, None, None, None, None, None, None
             
-    except: return None, None, None, None, None, None, None, None
+    except Exception as e: 
+        return None, None, None, None, None, None, None, None
 
 # ==========================================
 # LE SCANNER AUTOMATIQUE DE L'OMBRE
@@ -306,6 +316,7 @@ def scanner_marche_auto():
                 action, confiance, exp, duree, rsi_val, stoch_val, bb_status, score = analyser_binaire_pro(actif)
                 if action and "⚠️" not in action and confiance:
                     temps_actuel = time.time()
+                    # LE SILENCIEUX : Blocage de 1 Heure (3600 secondes) par devise
                     if actif in derniere_alerte_auto and (temps_actuel - derniere_alerte_auto[actif] < 3600): continue
                     derniere_alerte_auto[actif] = temps_actuel
                     nom_affiche = f"{actif[:3]}/{actif[3:]}"
