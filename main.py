@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAFkMTWKpZAzy2G6g-ne4jbuXZI4_PLCSdg"
+TELEGRAM_TOKEN = "8658287331:AAG4fd0Fgw8697WMePA_dfbCFvT983SfOBI"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -65,7 +65,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition GOD MODE DYNAMIQUE (V7)"
+    return "Terminal Prime VIP : Édition EMPIRE (V8 - Pocket Broker)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -108,7 +108,7 @@ def generer_jauge(pourcentage):
     return f"[{'█' * pleins}{'░' * vides}] {pourcentage}%"
 
 # ==========================================
-# NOUVELLES FONCTIONS PRO (NEWS & H1)
+# FONCTIONS PRO V8 (NEWS, H1, FAKEOUT & PSYCHO)
 # ==========================================
 
 def est_heure_de_news_dynamique():
@@ -144,6 +144,38 @@ def obtenir_tendance_H1(symbole_brut):
             return "UP" if float(df['close'].iloc[-1]) > ema20.iloc[-1] else "DOWN"
     except: pass
     return "NEUTRE"
+
+def detecter_rejet_meche(df):
+    """V8 : Détecte les pièges de mèches (Rejets Institutionnels)"""
+    last = df.iloc[-1]
+    corps = abs(last['close'] - last['open'])
+    meche_haute = last['high'] - max(last['open'], last['close'])
+    meche_basse = min(last['open'], last['close']) - last['low']
+    
+    # Sécurité anti-division par zéro si la bougie est un vrai doji (corps=0)
+    if corps == 0:
+        corps = 0.00001 
+        
+    # Si une mèche est 2 fois plus grande que le corps, c'est un piège
+    if meche_haute > (corps * 2) or meche_basse > (corps * 2):
+        return True
+    return False
+
+def est_niveau_psychologique(prix, symbole_brut):
+    """V8 : Détecte mathématiquement les chiffres ronds sans erreur de string"""
+    # Pour le JPY (ex: 150.000, 150.500)
+    if "JPY" in symbole_brut:
+        reste = prix % 0.5
+        if reste < 0.015 or reste > 0.485: return True
+    # Pour la Crypto (ex: 65000, 65500)
+    elif symbole_brut in CRYPTO_PAIRS:
+        reste = prix % 500
+        if reste < 10 or reste > 490: return True
+    # Pour le Forex standard (ex: 1.08000, 1.08500)
+    else:
+        reste = prix % 0.005
+        if reste < 0.00015 or reste > 0.00485: return True
+    return False
 
 # ==========================================
 # ROUTEUR API DERIV (FOREX VS CRYPTO)
@@ -230,13 +262,15 @@ def verifier_resultat(chat_id):
     if chat_id in trades_en_cours: del trades_en_cours[chat_id]
 
 # ==========================================
-# MOTEUR D'ANALYSE ( GOD MODE ELITE V7 DYNAMIQUE )
+# MOTEUR D'ANALYSE ( GOD MODE V8 EMPIRE )
 # ==========================================
 
 def analyser_binaire_pro(symbole):
+    # 0. Le Silencieux V7
     if symbole in cooldown_actifs and (time.time() - cooldown_actifs[symbole] < 3600):
-        return f"⚠️ **SILENCIEUX ACTIF** : {symbole} a récemment subi une manipulation (OTM). Radar coupé pendant 1 heure pour protéger le capital.", None, None, None, None, None, None, None
+        return f"⚠️ **SILENCIEUX ACTIF** : {symbole} a récemment subi une manipulation (OTM). Radar coupé pendant 1 heure.", None, None, None, None, None, None, None
 
+    # 1. Filtre News Dynamique V7
     if est_heure_de_news_dynamique() and symbole not in CRYPTO_PAIRS:
         return "⚠️ ALERTE NEWS : Marché manipulé, radar coupé.", None, None, None, None, None, None, None
 
@@ -256,7 +290,7 @@ def analyser_binaire_pro(symbole):
         df['stoch_k'] = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch()
         df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
         
-        # ⚡ NOUVEAU : Calcul ATR pour l'Expiration Dynamique
+        # Calcul ATR V7 pour l'Expiration Dynamique
         df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
         atr_actuel = df['atr'].iloc[-1]
         atr_moyen = df['atr'].rolling(window=20).mean().iloc[-1]
@@ -272,6 +306,14 @@ def analyser_binaire_pro(symbole):
         rsi_val, stoch_val = round(last['rsi'], 1), round(last['stoch_k'], 1)
         bb_h, bb_b = last['bb_haute'], last['bb_basse']
         
+        # 🛡️ FILTRE V8 : Détection Anti-Fakeout (Mèches)
+        if detecter_rejet_meche(df):
+            return "⚠️ **PIÈGE DÉTECTÉ** : Rejet brutal par mèche (Fakeout institutionnel). Analyse annulée pour protéger le capital.", None, None, None, None, None, None, None
+
+        # 🛡️ FILTRE V8 : Niveaux Psychologiques
+        if est_niveau_psychologique(c, symbole):
+            return "⚠️ **ZONE PSYCHOLOGIQUE** : Le prix est sur un chiffre rond manipulé par les banques. Radar suspendu.", None, None, None, None, None, None, None
+
         ema_actuelle = df['ema_200'].iloc[-1]
         ema_ancienne = df['ema_200'].iloc[-5] 
         
@@ -280,7 +322,7 @@ def analyser_binaire_pro(symbole):
 
         action, confiance, bb_status, score_algo = None, 0, "Au Milieu", 5
         
-        # ⏱️ SÉLECTION AUTOMATIQUE DE L'EXPIRATION
+        # ⏱️ SÉLECTION AUTOMATIQUE DE L'EXPIRATION (V7 Intacte)
         if atr_actuel > (atr_moyen * 1.5):
             duree_secondes = 120
             expiration_texte = "2 MINUTES (Vitesse Élevée ⚡)"
@@ -340,7 +382,7 @@ def scanner_marche_auto():
                     markup = InlineKeyboardMarkup()
                     markup.add(InlineKeyboardButton(f"📊 Analyser {nom_affiche}", callback_data=f"set_{actif}"))
                     
-                    if score >= 9: alerte_msg = f"🔥 **ALERTE GOD MODE** 🔥\n\nConfiguration mathématique lourde\n**CONFIANCE :** {jauge_visuelle}\nCible : **{nom_affiche}**\n\n👇 *Clique sur le bouton pour déclencher la frappe !*"
+                    if score >= 9: alerte_msg = f"🔥 **ALERTE EMPIRE V8** 🔥\n\nConfiguration mathématique lourde\n**CONFIANCE :** {jauge_visuelle}\nCible : **{nom_affiche}**\n\n👇 *Clique sur le bouton pour déclencher la frappe !*"
                     else: alerte_msg = f"🚨 **OPPORTUNITÉ VIP FILTRÉE** 🚨\n\nLe radar a esquivé les pièges. Signal propre !\n**CONFIANCE :** {jauge_visuelle}\nCible : **{nom_affiche}**\n\n👇 *Clique sur le bouton pour l'analyse !*"
                         
                     for chat_id in utilisateurs_a_alerter:
@@ -397,7 +439,6 @@ def admin_panel(message):
     if message.chat.id != ADMIN_ID: return
     bot.send_message(ADMIN_ID, f"Admin Panel 🔥\nCapital actuel : {CAPITAL_ACTUEL}$")
 
-# 💰 AJOUT DE LA COMMANDE CAPITAL SÉPARÉE
 @bot.message_handler(commands=['capital'])
 def voir_capital(message):
     if message.chat.id != ADMIN_ID: return
@@ -471,9 +512,12 @@ def bienvenue(message):
         return bot.send_message(user_id, "🔒 **ACCÈS RESTREINT - TERMINAL PRIVÉ** 🔒\n\nCe système est une intelligence artificielle de trading haute précision sous licence payante.\n\n📲 **Pour obtenir votre clé d'accès (Abonnement), veuillez contacter le fondateur : [@hermann1123](https://t.me/hermann1123)**", parse_mode="Markdown", disable_web_page_preview=True)
 
     utilisateurs_actifs.add(user_id)
-    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION GOD MODE DYNAMIQUE (V7)** 🔥
+    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION EMPIRE (V8)** 🔥
     
-Bienvenue dans le radar institutionnel. Ce système est doté d'un cerveau de volatilité : il choisit **LUI-MÊME** le meilleur temps d'expiration (2, 5 ou 10 minutes) en fonction du marché.
+Bienvenue dans le radar institutionnel niveau 9/10. Ce système est équipé :
+⚡ D'une Expiration Dynamique calculée par l'ATR.
+🛡️ D'un filtre Anti-Fakeout (Rejet de mèches).
+🧠 D'un détecteur de manipulation sur Niveaux Psychologiques.
 
 📖 **MODE D'EMPLOI :**
 1️⃣ **SÉLECTION :** Clique sur "📊 CHOISIR UNE DEVISE" pour verrouiller un actif.
@@ -529,9 +573,9 @@ def save_devise(call):
     nom_affiche = f"{actif[:3]}/{actif[3:]}"
     
     try:
-        msg = bot.send_message(chat_id, "⏳ *Initialisation du scan DYNAMIQUE...*", parse_mode="Markdown")
+        msg = bot.send_message(chat_id, "⏳ *Initialisation du scan EMPIRE V8...*", parse_mode="Markdown")
         time.sleep(1)
-        bot.edit_message_text("⚙️ *Lecture de l'Order Flow et calcul de la Volatilité ATR...*", chat_id, msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text("⚙️ *Lecture de l'Order Flow, analyse des mèches et niveaux psycho...*", chat_id, msg.message_id, parse_mode="Markdown")
         time.sleep(1)
     except: return
         
@@ -552,7 +596,7 @@ def save_devise(call):
     heure_entree_dt = maintenant + datetime.timedelta(seconds=secondes_restantes)
     
     mise_recommandee = int(CAPITAL_ACTUEL * 0.02)
-    titre_signal = "🔥 SIGNAL VALIDÉ DYNAMIQUE 🔥" if score >= 8 else "⚡ SIGNAL VIP SÉCURISÉ ⚡"
+    titre_signal = "🔥 SIGNAL VALIDÉ EMPIRE V8 🔥" if score >= 8 else "⚡ SIGNAL VIP SÉCURISÉ ⚡"
     jauge_visuelle = generer_jauge(score * 10) 
 
     signal = f"""{titre_signal}
@@ -632,5 +676,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestion_horaires_et_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition GOD MODE DYNAMIQUE (V7) Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition EMPIRE (V8) Démarrée. Précision 9/10.", flush=True)
     bot.infinity_polling()
