@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAHY9ujvS2sOA_280k6LOwAJA5eLZ379n8c"
+TELEGRAM_TOKEN = "8658287331:AAFkMTWKpZAzy2G6g-ne4jbuXZI4_PLCSdg"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -33,7 +33,7 @@ user_prefs = {}
 trades_en_cours = {}
 utilisateurs_actifs = set()
 derniere_alerte_auto = {}
-cooldown_actifs = {} # NOUVEAU : Le "Silencieux" pour bloquer les paires perdantes
+cooldown_actifs = {} # Le "Silencieux" pour bloquer les paires perdantes
 
 utilisateurs_autorises = {
     ADMIN_ID: "LIFETIME"
@@ -65,7 +65,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition GOD MODE ELITE (V6 - Quotex M5)"
+    return "Terminal Prime VIP : Édition GOD MODE DYNAMIQUE (V7)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -90,7 +90,7 @@ def est_autorise(user_id):
             return True
         else:
             del utilisateurs_autorises[user_id]
-            try: bot.send_message(user_id, "⚠️ **ABONNEMENT EXPIRÉ** ⚠️\n\nVotre accès au Terminal Prime est terminé. Veuillez contacter le fondateur [@hermann1123](https://t.me/hermann1123).", parse_mode="Markdown")
+            try: bot.send_message(user_id, "⚠️ **ABONNEMENT EXPIRÉ** ⚠️\n\nVotre accès au Terminal Prime est terminé.", parse_mode="Markdown")
             except: pass
             return False
     return False
@@ -112,7 +112,6 @@ def generer_jauge(pourcentage):
 # ==========================================
 
 def est_heure_de_news_dynamique():
-    """Scan le calendrier mondial pour les news à High Impact"""
     if not FMP_API_KEY: return False
     try:
         today = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -125,13 +124,12 @@ def est_heure_de_news_dynamique():
                 if event.get('impact') == 'High':
                     e_time = datetime.datetime.strptime(event['date'], "%Y-%m-%d %H:%M:%S")
                     diff = abs((maintenant - e_time).total_seconds() / 60)
-                    if diff <= 30: # Bloque 30 min avant et après
+                    if diff <= 30: 
                         return True
     except: pass
     return False
 
 def obtenir_tendance_H1(symbole_brut):
-    """Analyse la tendance majeure sur 1 Heure"""
     symbole = prefixer_symbole(symbole_brut)
     try:
         ws = websocket.WebSocket()
@@ -219,13 +217,11 @@ def verifier_resultat(chat_id):
         texte = f"✅ **VICTOIRE (ITM)**\n🚀 Signal {nom_paire} ({action})\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`\n👤 Client ID : `{chat_id}`"
         stats_journee['ITM'] += 1
         stats_journee['details'].append(f"✅ {type_emoji} {nom_paire} ({action})")
-        # Réinitialise le cooldown en cas de victoire (Optionnel)
         if symbole in cooldown_actifs: del cooldown_actifs[symbole]
     else:
         texte = f"❌ **PERTE (OTM)**\n⚠️ Signal {nom_paire} ({action})\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`\n👤 Client ID : `{chat_id}`"
         stats_journee['OTM'] += 1
         stats_journee['details'].append(f"❌ {type_emoji} {nom_paire} ({action})")
-        # ⚠️ ACTIVATION DU SILENCIEUX APRÈS UNE PERTE ⚠️
         cooldown_actifs[symbole] = time.time()
     
     try: bot.send_message(ADMIN_ID, texte, parse_mode="Markdown")
@@ -234,19 +230,16 @@ def verifier_resultat(chat_id):
     if chat_id in trades_en_cours: del trades_en_cours[chat_id]
 
 # ==========================================
-# MOTEUR D'ANALYSE ( GOD MODE ELITE V6 )
+# MOTEUR D'ANALYSE ( GOD MODE ELITE V7 DYNAMIQUE )
 # ==========================================
 
 def analyser_binaire_pro(symbole):
-    # 0. Le Silencieux : Interdiction de trader une paire qui vient de perdre (1 Heure de pause)
     if symbole in cooldown_actifs and (time.time() - cooldown_actifs[symbole] < 3600):
         return f"⚠️ **SILENCIEUX ACTIF** : {symbole} a récemment subi une manipulation (OTM). Radar coupé pendant 1 heure pour protéger le capital.", None, None, None, None, None, None, None
 
-    # 1. Filtre News Dynamique
     if est_heure_de_news_dynamique() and symbole not in CRYPTO_PAIRS:
         return "⚠️ ALERTE NEWS : Marché manipulé, radar coupé.", None, None, None, None, None, None, None
 
-    # 2. Tendance de Fond
     tendance_h1 = obtenir_tendance_H1(symbole)
     candles = obtenir_donnees_deriv(symbole)
     if not candles: return "⚠️ Impossible de se connecter au marché", None, None, None, None, None, None, None
@@ -254,7 +247,6 @@ def analyser_binaire_pro(symbole):
     try:
         df = pd.DataFrame([{'open': float(c['open']), 'close': float(c['close']), 'high': float(c['high']), 'low': float(c['low'])} for c in candles])
         
-        # 3. VSA : Utilisation du Momentum
         df['corps_bougie'] = abs(df['close'] - df['open'])
 
         indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
@@ -263,8 +255,12 @@ def analyser_binaire_pro(symbole):
         df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
         df['stoch_k'] = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch()
         df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
+        
+        # ⚡ NOUVEAU : Calcul ATR pour l'Expiration Dynamique
+        df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
+        atr_actuel = df['atr'].iloc[-1]
+        atr_moyen = df['atr'].rolling(window=20).mean().iloc[-1]
 
-        # Calcul VSA & SMC
         corps_moyen = df['corps_bougie'].rolling(window=10).mean().iloc[-1]
         vsa_valide = df['corps_bougie'].iloc[-1] > corps_moyen 
         
@@ -276,16 +272,24 @@ def analyser_binaire_pro(symbole):
         rsi_val, stoch_val = round(last['rsi'], 1), round(last['stoch_k'], 1)
         bb_h, bb_b = last['bb_haute'], last['bb_basse']
         
-        # 🛡️ FILTRE DE PENTE EMA (V6) : Empêche d'acheter un couteau qui tombe
         ema_actuelle = df['ema_200'].iloc[-1]
-        ema_ancienne = df['ema_200'].iloc[-5] # L'EMA il y a 25 minutes
+        ema_ancienne = df['ema_200'].iloc[-5] 
         
         tendance_haussiere = c > ema_actuelle and tendance_h1 in ["UP", "NEUTRE"] and ema_actuelle >= ema_ancienne
         tendance_baissiere = c < ema_actuelle and tendance_h1 in ["DOWN", "NEUTRE"] and ema_actuelle <= ema_ancienne
 
         action, confiance, bb_status, score_algo = None, 0, "Au Milieu", 5
-        duree_secondes = 300
-        expiration_texte = "5 MINUTES ⏱"
+        
+        # ⏱️ SÉLECTION AUTOMATIQUE DE L'EXPIRATION
+        if atr_actuel > (atr_moyen * 1.5):
+            duree_secondes = 120
+            expiration_texte = "2 MINUTES (Vitesse Élevée ⚡)"
+        elif atr_actuel < (atr_moyen * 0.8):
+            duree_secondes = 600
+            expiration_texte = "10 MINUTES (Marché Lent 🐢)"
+        else:
+            duree_secondes = 300
+            expiration_texte = "5 MINUTES (Standard 💎)"
 
         if c <= bb_b and tendance_haussiere:
             action, confiance = "🟢 ACHAT (CALL)", 99
@@ -332,12 +336,12 @@ def scanner_marche_auto():
                     derniere_alerte_auto[actif] = temps_actuel
                     nom_affiche = f"{actif[:3]}/{actif[3:]}"
                     
-                    jauge_visuelle = generer_jauge(score * 10) # Utilisation de la jauge V6
+                    jauge_visuelle = generer_jauge(score * 10)
                     markup = InlineKeyboardMarkup()
                     markup.add(InlineKeyboardButton(f"📊 Analyser {nom_affiche}", callback_data=f"set_{actif}"))
                     
-                    if score >= 9: alerte_msg = f"🔥 **ALERTE GOD MODE (M5)** 🔥\n\nConfiguration mathématique lourde\n**CONFIANCE :** {jauge_visuelle}\nCible : **{nom_affiche}**\n\n👇 *Clique sur le bouton pour déclencher la frappe !*"
-                    else: alerte_msg = f"🚨 **OPPORTUNITÉ VIP FILTRÉE (M5)** 🚨\n\nLe radar a esquivé les pièges. Signal propre !\n**CONFIANCE :** {jauge_visuelle}\nCible : **{nom_affiche}**\n\n👇 *Clique sur le bouton pour l'analyse !*"
+                    if score >= 9: alerte_msg = f"🔥 **ALERTE GOD MODE** 🔥\n\nConfiguration mathématique lourde\n**CONFIANCE :** {jauge_visuelle}\nCible : **{nom_affiche}**\n\n👇 *Clique sur le bouton pour déclencher la frappe !*"
+                    else: alerte_msg = f"🚨 **OPPORTUNITÉ VIP FILTRÉE** 🚨\n\nLe radar a esquivé les pièges. Signal propre !\n**CONFIANCE :** {jauge_visuelle}\nCible : **{nom_affiche}**\n\n👇 *Clique sur le bouton pour l'analyse !*"
                         
                     for chat_id in utilisateurs_a_alerter:
                         try: bot.send_message(chat_id, alerte_msg, reply_markup=markup, parse_mode="Markdown")
@@ -375,7 +379,7 @@ def gestion_horaires_et_bilan():
                 total_trades = stats_journee['ITM'] + stats_journee['OTM']
                 if total_trades > 0:
                     winrate = round((stats_journee['ITM'] / total_trades) * 100)
-                    texte_bilan_admin = f"📊 **BILAN VIP DE LA JOURNÉE (GOD MODE M5)** 📊\n──────────────────\n🎯 **Total Signaux :** {total_trades}\n✅ **Victoires (ITM) :** {stats_journee['ITM']}\n❌ **Pertes (OTM) :** {stats_journee['OTM']}\n📈 **Winrate :** {winrate}%\n──────────────────\n"
+                    texte_bilan_admin = f"📊 **BILAN VIP DE LA JOURNÉE** 📊\n──────────────────\n🎯 **Total Signaux :** {total_trades}\n✅ **Victoires (ITM) :** {stats_journee['ITM']}\n❌ **Pertes (OTM) :** {stats_journee['OTM']}\n📈 **Winrate :** {winrate}%\n──────────────────\n"
                     for detail in stats_journee['details']: texte_bilan_admin += f"{detail}\n"
                     try: bot.send_message(ADMIN_ID, texte_bilan_admin, parse_mode="Markdown")
                     except: pass
@@ -392,6 +396,12 @@ def gestion_horaires_et_bilan():
 def admin_panel(message):
     if message.chat.id != ADMIN_ID: return
     bot.send_message(ADMIN_ID, f"Admin Panel 🔥\nCapital actuel : {CAPITAL_ACTUEL}$")
+
+# 💰 AJOUT DE LA COMMANDE CAPITAL SÉPARÉE
+@bot.message_handler(commands=['capital'])
+def voir_capital(message):
+    if message.chat.id != ADMIN_ID: return
+    bot.send_message(ADMIN_ID, f"💰 **SOLDE ACTUEL DU COMPTE** 💰\n──────────────────\n💵 Montant : `{CAPITAL_ACTUEL}$`\n──────────────────\n⚖️ *Prêt pour la prochaine session !*", parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text and m.text.startswith("PRIME-"))
 def activer_cle(message):
@@ -461,16 +471,16 @@ def bienvenue(message):
         return bot.send_message(user_id, "🔒 **ACCÈS RESTREINT - TERMINAL PRIVÉ** 🔒\n\nCe système est une intelligence artificielle de trading haute précision sous licence payante.\n\n📲 **Pour obtenir votre clé d'accès (Abonnement), veuillez contacter le fondateur : [@hermann1123](https://t.me/hermann1123)**", parse_mode="Markdown", disable_web_page_preview=True)
 
     utilisateurs_actifs.add(user_id)
-    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION GOD MODE ELITE (V6 - M5)** 🔥
+    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION GOD MODE DYNAMIQUE (V7)** 🔥
     
-Bienvenue dans le radar institutionnel. Ce système est doté d'un filtre Anti-Manipulation (Silencieux de Pertes) et analyse désormais les bougies de **5 MINUTES (M5)** avec Jauge de Confiance.
+Bienvenue dans le radar institutionnel. Ce système est doté d'un cerveau de volatilité : il choisit **LUI-MÊME** le meilleur temps d'expiration (2, 5 ou 10 minutes) en fonction du marché.
 
 📖 **MODE D'EMPLOI :**
 1️⃣ **SÉLECTION :** Clique sur "📊 CHOISIR UNE DEVISE" pour verrouiller un actif.
 2️⃣ **RADAR :** Clique sur "🚀 LANCER L'ANALYSE" pour déclencher le scan Sniper.
-3️⃣ **DISCIPLINE :** N'oublie pas : 2% de mise maximum et stop total après 3 pertes dans une session.
+3️⃣ **DISCIPLINE :** N'oublie pas : 2% de mise maximum et stop total après 3 pertes.
 
-⚠️ **ATTENTION : RÉGLEZ L'HORLOGE DE VOTRE COURTIER SUR 5 MINUTES !** ⏱️"""
+⚠️ **ATTENTION : RÉGLEZ SOIGNEUSEMENT L'HORLOGE DE POCKET BROKER SELON LE SIGNAL !** ⏱️"""
     bot.send_message(message.chat.id, texte_bienvenue, reply_markup=obtenir_clavier(), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
@@ -507,7 +517,7 @@ def devises(message):
             InlineKeyboardButton("🇺🇸 USD/CHF", callback_data="set_USDCHF"), InlineKeyboardButton("🇨🇦 CAD/CHF", callback_data="set_CADCHF"), InlineKeyboardButton("🇪🇺 EUR/CHF", callback_data="set_EURCHF"),
             InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY")
         )
-        message_texte = "Mode Semaine 💱 : Arsenal Quotex synchronisé. Sélectionne ta cible :"
+        message_texte = "Mode Semaine 💱 : Arsenal Pocket Broker synchronisé. Sélectionne ta cible :"
     bot.send_message(message.chat.id, message_texte, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
@@ -519,9 +529,9 @@ def save_devise(call):
     nom_affiche = f"{actif[:3]}/{actif[3:]}"
     
     try:
-        msg = bot.send_message(chat_id, "⏳ *Initialisation du scan GOD MODE (M5)...*", parse_mode="Markdown")
+        msg = bot.send_message(chat_id, "⏳ *Initialisation du scan DYNAMIQUE...*", parse_mode="Markdown")
         time.sleep(1)
-        bot.edit_message_text("⚙️ *Lecture de l'Order Flow sur 5 Minutes et détection de pièges...*", chat_id, msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text("⚙️ *Lecture de l'Order Flow et calcul de la Volatilité ATR...*", chat_id, msg.message_id, parse_mode="Markdown")
         time.sleep(1)
     except: return
         
@@ -536,15 +546,14 @@ def save_devise(call):
         except: pass
         return
 
-    # ⚡ INJECTION DU MOTEUR CHRONOMÉTRIQUE : 2 MINUTES DE PRÉPARATION
     maintenant = datetime.datetime.now()
     secondes_restantes = (60 - maintenant.second) + 60
     if (60 - maintenant.second) < 15: secondes_restantes += 60
     heure_entree_dt = maintenant + datetime.timedelta(seconds=secondes_restantes)
     
     mise_recommandee = int(CAPITAL_ACTUEL * 0.02)
-    titre_signal = "🔥 SIGNAL VALIDÉ GOD MODE (M5) 🔥" if score >= 8 else "⚡ SIGNAL VIP SÉCURISÉ (M5) ⚡"
-    jauge_visuelle = generer_jauge(score * 10) # 👈 Intégration de la Jauge de Confluence
+    titre_signal = "🔥 SIGNAL VALIDÉ DYNAMIQUE 🔥" if score >= 8 else "⚡ SIGNAL VIP SÉCURISÉ ⚡"
+    jauge_visuelle = generer_jauge(score * 10) 
 
     signal = f"""{titre_signal}
 ──────────────────
@@ -563,7 +572,7 @@ def save_devise(call):
 📍 **ORDRE À : {heure_entree_dt.strftime("%H:%M:00")}** 👈
 💵 **MISE RECOMMANDÉE :** {mise_recommandee}$ (2%)
 ──────────────────
-⚠️ *Trade validé en M5. Vous avez 2 minutes pour préparer l'ordre de 5 MINUTES sur Quotex.*"""
+⚠️ *Préparez l'ordre sur Pocket Broker avec le temps d'expiration indiqué ci-dessus.*"""
 
     try:
         bot.delete_message(chat_id, msg.message_id)
@@ -588,7 +597,7 @@ def vision_marche(message):
     commande = message.text.split()
     if len(commande) < 2: return bot.send_message(message.chat.id, "⚠️ Précise la devise. Exemple : `/vision EURUSD`", parse_mode="Markdown")
     symbole = commande[1].upper()
-    try: msg = bot.send_message(message.chat.id, f"🔍 *Scan aux rayons X de {symbole} (M5)...*", parse_mode="Markdown")
+    try: msg = bot.send_message(message.chat.id, f"🔍 *Scan aux rayons X de {symbole}...*", parse_mode="Markdown")
     except: return
     
     candles = obtenir_donnees_deriv(symbole)
@@ -606,7 +615,7 @@ def vision_marche(message):
         position_bb = "🔴 Au Plafond (Touche la bande haute)" if prix_actuel >= bb_haute else "🟢 Au Plancher (Touche la bande basse)" if prix_actuel <= bb_basse else "⚪ Au Milieu (Zone neutre)"
         nom_affiche = f"{symbole[:3]}/{symbole[3:]}"
         
-        rapport = f"""👁️ **VISION RAYONS X (M5) : {nom_affiche}** 👁️
+        rapport = f"""👁️ **VISION RAYONS X : {nom_affiche}** 👁️
 ──────────────────
 💰 **Prix actuel :** `{prix_actuel:.5f}`
 🛡️ **EMA 200 (Tendance) :** `{ema_200:.5f}`
@@ -615,7 +624,7 @@ def vision_marche(message):
 📊 **Niveau RSI :** `{rsi:.2f}` *(Rappel: >60 = Surchauffe, <40 = Essoufflé)*
 📉 **Niveau Stochastique :** `{stoch_k:.2f}` *(Rappel: >80 = Surachat, <20 = Survente)*
 ──────────────────"""
-        rapport += "\n⚠️ *Le prix teste les limites sur 5 min, tiens-toi prêt !*" if position_bb != "⚪ Au Milieu (Zone neutre)" else "\n💤 *Le marché respire tranquillement.*"
+        rapport += "\n⚠️ *Le prix teste les limites, tiens-toi prêt !*" if position_bb != "⚪ Au Milieu (Zone neutre)" else "\n💤 *Le marché respire tranquillement.*"
         bot.edit_message_text(rapport, message.chat.id, msg.message_id, parse_mode="Markdown")
     except Exception as e: bot.edit_message_text(f"❌ Erreur : {e}", message.chat.id, msg.message_id)
 
@@ -623,5 +632,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestion_horaires_et_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition GOD MODE ELITE (V6 - M5) Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition GOD MODE DYNAMIQUE (V7) Démarrée.", flush=True)
     bot.infinity_polling()
