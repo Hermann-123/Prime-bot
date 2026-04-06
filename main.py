@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAFjlCSev-ZanvrLIRt__Cpe4KKe9b85xNc"
+TELEGRAM_TOKEN = "8658287331:AAHYWajLLN0ClsMdAmdkbHqraRDsz_JCZXY"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -50,9 +50,10 @@ bilan_envoye_aujourdhui = False
 transition_nuit_envoyee = False
 transition_jour_envoyee = False
 
-# 🧹 NETTOYAGE DES DEVISES (ÉLITE UNIQUEMENT, SANS GBP)
-CRYPTO_PAIRS = ["BTCUSD", "ETHUSD"]
-FOREX_PAIRS = ["EURUSD", "AUDUSD", "USDJPY", "EURJPY", "USDCAD"]
+CRYPTO_PAIRS = ["BTCUSD", "ETHUSD", "LTCUSD"]
+FOREX_PAIRS = [
+    "EURUSD", "AUDUSD", "USDJPY", "EURJPY", "USDCAD"
+]
 
 # ==========================================
 # SERVEUR WEB (KEEP ALIVE RENDER)
@@ -62,7 +63,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition GOD MODE CHIRURGICAL (V7.1)"
+    return "Terminal Prime VIP : Édition GOD MODE DYNAMIQUE (V7)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -227,7 +228,7 @@ def verifier_resultat(chat_id):
     if chat_id in trades_en_cours: del trades_en_cours[chat_id]
 
 # ==========================================
-# MOTEUR D'ANALYSE ( GOD MODE ELITE V7.1 )
+# MOTEUR D'ANALYSE ( GOD MODE ELITE V7 DYNAMIQUE )
 # ==========================================
 
 def analyser_binaire_pro(symbole):
@@ -244,45 +245,36 @@ def analyser_binaire_pro(symbole):
     try:
         df = pd.DataFrame([{'open': float(c['open']), 'close': float(c['close']), 'high': float(c['high']), 'low': float(c['low'])} for c in candles])
         
-        # 🧠 ANATOMIE DE LA BOUGIE (PRICE ACTION)
         df['corps_bougie'] = abs(df['close'] - df['open'])
-        df['meche_haute'] = df['high'] - df[['open', 'close']].max(axis=1)
-        df['meche_basse'] = df[['open', 'close']].min(axis=1) - df['low']
 
-        indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2.2) # 2.2 pour des extrêmes plus sûrs
+        indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
         df['bb_haute'] = indicateur_bb.bollinger_hband()
         df['bb_basse'] = indicateur_bb.bollinger_lband()
         df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
         df['stoch_k'] = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch()
         df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
         
-        # ⚡ Calcul ATR pour l'Expiration Dynamique
+        # ⚡ NOUVEAU : Calcul ATR pour l'Expiration Dynamique
         df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
         atr_actuel = df['atr'].iloc[-1]
         atr_moyen = df['atr'].rolling(window=20).mean().iloc[-1]
 
-        # 🛡️ Calcul ADX pour la Force Minimum et le Bouclier
-        ind_adx = ta.trend.ADXIndicator(high=df['high'], low=df['low'], close=df['close'], window=14)
-        df['adx'] = ind_adx.adx()
-        df['di_plus'] = ind_adx.adx_pos()
-        df['di_moins'] = ind_adx.adx_neg()
+        corps_moyen = df['corps_bougie'].rolling(window=10).mean().iloc[-1]
+        vsa_valide = df['corps_bougie'].iloc[-1] > corps_moyen 
+        
+        fvg_haussier = df['low'].iloc[-1] > df['high'].iloc[-3]
+        fvg_baissier = df['high'].iloc[-1] < df['low'].iloc[-3]
 
         last = df.iloc[-1]
         c = last['close']
         rsi_val, stoch_val = round(last['rsi'], 1), round(last['stoch_k'], 1)
         bb_h, bb_b = last['bb_haute'], last['bb_basse']
-        adx_val = round(last['adx'], 1)
-        di_p, di_m = last['di_plus'], last['di_moins']
         
         ema_actuelle = df['ema_200'].iloc[-1]
         ema_ancienne = df['ema_200'].iloc[-5] 
         
         tendance_haussiere = c > ema_actuelle and tendance_h1 in ["UP", "NEUTRE"] and ema_actuelle >= ema_ancienne
         tendance_baissiere = c < ema_actuelle and tendance_h1 in ["DOWN", "NEUTRE"] and ema_actuelle <= ema_ancienne
-
-        # REJET PRICE ACTION
-        rejet_haussier = last['meche_basse'] > (last['corps_bougie'] * 1.5)
-        rejet_baissier = last['meche_haute'] > (last['corps_bougie'] * 1.5)
 
         action, confiance, bb_status, score_algo = None, 0, "Au Milieu", 5
         
@@ -297,32 +289,24 @@ def analyser_binaire_pro(symbole):
             duree_secondes = 300
             expiration_texte = "5 MINUTES (Standard 💎)"
 
-        # 🛑 VERROU 1 : FILTRE DE FORCE MINIMUM (ADX < 20)
-        if adx_val < 20:
-            return f"⚠️ Scan: ADX trop faible ({adx_val}). Pas de force.", None, None, None, None, None, None, None
+        if c <= bb_b and tendance_haussiere:
+            action, confiance = "🟢 ACHAT (CALL)", 99
+            score_algo = 7
+            bb_status = "Bande Basse"
+            if vsa_valide: score_algo += 1; bb_status += " + Vol VSA"
+            if fvg_haussier: score_algo += 2; bb_status += " + SMC"
 
-        # 🟢 ACHAT CHIRURGICAL (RSI <= 25, Stoch <= 20)
-        if c <= bb_b and rsi_val <= 25 and stoch_val <= 20 and tendance_haussiere:
-            if (adx_val > 35 and di_m > di_p):
-                return "⚠️ ADX ALERTE : Le marché s'effondre lourdement. Achat annulé.", None, None, None, None, None, None, None
-            if rejet_haussier:
-                action, confiance = "🟢 ACHAT (CALL)", 99
-                score_algo = 10
-                bb_status = f"Rejet Haussier + Surchauffe (ADX: {adx_val})"
+        elif c >= bb_h and tendance_baissiere:
+            action, confiance = "🔴 VENTE (PUT)", 99
+            score_algo = 7
+            bb_status = "Bande Haute"
+            if vsa_valide: score_algo += 1; bb_status += " + Vol VSA"
+            if fvg_baissier: score_algo += 2; bb_status += " + SMC"
 
-        # 🔴 VENTE CHIRURGICALE (RSI >= 75, Stoch >= 80)
-        elif c >= bb_h and rsi_val >= 75 and stoch_val >= 80 and tendance_baissiere:
-            if (adx_val > 35 and di_p > di_m):
-                return "⚠️ ADX ALERTE : Hausse explosive détectée. Vente annulée.", None, None, None, None, None, None, None
-            if rejet_baissier:
-                action, confiance = "🔴 VENTE (PUT)", 99
-                score_algo = 10
-                bb_status = f"Rejet Baissier + Surchauffe (ADX: {adx_val})"
-
-        if action and score_algo >= 10:
+        if action and score_algo >= 8:
             return action, confiance, expiration_texte, duree_secondes, rsi_val, stoch_val, bb_status, score_algo
         else:
-            return f"⚠️ Scan en cours... (RSI: {rsi_val} / Stoch: {stoch_val})", None, None, None, None, None, None, None
+            return f"⚠️ Marché instable ou contre-tendance lourde. Filtrage actif.", None, None, None, None, None, None, None
             
     except Exception as e: 
         return None, None, None, None, None, None, None, None
@@ -352,9 +336,10 @@ def scanner_marche_auto():
                     
                     jauge_visuelle = generer_jauge(score * 10)
                     markup = InlineKeyboardMarkup()
-                    markup.add(InlineKeyboardButton(f"🎯 Frapper {nom_affiche}", callback_data=f"set_{actif}"))
+                    markup.add(InlineKeyboardButton(f"📊 Analyser {nom_affiche}", callback_data=f"set_{actif}"))
                     
-                    alerte_msg = f"🥷 **FRAPPE CHIRURGICALE DÉTECTÉE** 🥷\n\n**CONFIANCE :** {jauge_visuelle}\nCible : **{nom_affiche}**\n\n👇 *Clique sur le bouton pour l'analyse !*"
+                    if score >= 9: alerte_msg = f"🔥 **ALERTE GOD MODE** 🔥\n\nConfiguration mathématique lourde\n**CONFIANCE :** {jauge_visuelle}\nCible : **{nom_affiche}**\n\n👇 *Clique sur le bouton pour déclencher la frappe !*"
+                    else: alerte_msg = f"🚨 **OPPORTUNITÉ VIP FILTRÉE** 🚨\n\nLe radar a esquivé les pièges. Signal propre !\n**CONFIANCE :** {jauge_visuelle}\nCible : **{nom_affiche}**\n\n👇 *Clique sur le bouton pour l'analyse !*"
                         
                     for chat_id in utilisateurs_a_alerter:
                         try: bot.send_message(chat_id, alerte_msg, reply_markup=markup, parse_mode="Markdown")
@@ -512,23 +497,24 @@ def horaires_trading(message):
 @bot.message_handler(func=lambda m: m.text == "📊 CHOISIR UNE DEVISE")
 def devises(message):
     if not est_autorise(message.chat.id): return
-    markup = InlineKeyboardMarkup(row_width=3)
+    markup = InlineKeyboardMarkup()
     jour_semaine = datetime.datetime.now().weekday()
     
     if jour_semaine >= 5:
         markup.add(
             InlineKeyboardButton("🪙 BTC/USD", callback_data="set_BTCUSD"),
-            InlineKeyboardButton("🔷 ETH/USD", callback_data="set_ETHUSD")
+            InlineKeyboardButton("🔷 ETH/USD", callback_data="set_ETHUSD"),
+            InlineKeyboardButton("⚡ LTC/USD", callback_data="set_LTCUSD")
         )
         message_texte = "Mode Week-End 🪙 : Les banques sont fermées. Sélectionne la Crypto :"
     else:
-        markup.add(
-            InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="set_EURUSD"), 
+        markup.row(
+            InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="set_EURUSD"),
             InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD")
         )
-        markup.add(
-            InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY"), 
-            InlineKeyboardButton("🇪🇺 EUR/JPY", callback_data="set_EURJPY"), 
+        markup.row(
+            InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY"),
+            InlineKeyboardButton("🇪🇺 EUR/JPY", callback_data="set_EURJPY"),
             InlineKeyboardButton("🇺🇸 USD/CAD", callback_data="set_USDCAD")
         )
         message_texte = "Mode Semaine 💱 : Arsenal Pocket Broker synchronisé. Sélectionne ta cible :"
@@ -619,18 +605,13 @@ def vision_marche(message):
         
     try:
         df = pd.DataFrame([{'close': float(c['close']), 'high': float(c['high']), 'low': float(c['low'])} for c in candles])
-        indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2.2)
+        indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
         bb_haute, bb_basse = indicateur_bb.bollinger_hband().iloc[-1], indicateur_bb.bollinger_lband().iloc[-1]
         stoch_k = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch().iloc[-1]
         rsi = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi().iloc[-1]
         ema_200 = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator().iloc[-1]
         prix_actuel = df['close'].iloc[-1]
         
-        # 🛡️ AJOUT DE L'ADX DANS LA COMMANDE VISION
-        indicateur_adx = ta.trend.ADXIndicator(high=df['high'], low=df['low'], close=df['close'], window=14)
-        adx_val = indicateur_adx.adx().iloc[-1]
-        force_tendance = "🚀 Tendance TRÈS FORTE" if adx_val > 30 else "💤 Marché plat / Sans direction" if adx_val < 20 else "📈 Tendance modérée"
-
         position_bb = "🔴 Au Plafond (Touche la bande haute)" if prix_actuel >= bb_haute else "🟢 Au Plancher (Touche la bande basse)" if prix_actuel <= bb_basse else "⚪ Au Milieu (Zone neutre)"
         nom_affiche = f"{symbole[:3]}/{symbole[3:]}"
         
@@ -640,9 +621,8 @@ def vision_marche(message):
 🛡️ **EMA 200 (Tendance) :** `{ema_200:.5f}`
 📏 **Position Bollinger :** {position_bb}
 
-📊 **Niveau RSI :** `{rsi:.2f}` *(Attente: <=25 ou >=75)*
-📉 **Niveau Stochastique :** `{stoch_k:.2f}` *(Attente: <=20 ou >=80)*
-🌪️ **Force ADX :** `{adx_val:.2f}` ({force_tendance})
+📊 **Niveau RSI :** `{rsi:.2f}` *(Rappel: >60 = Surchauffe, <40 = Essoufflé)*
+📉 **Niveau Stochastique :** `{stoch_k:.2f}` *(Rappel: >80 = Surachat, <20 = Survente)*
 ──────────────────"""
         rapport += "\n⚠️ *Le prix teste les limites, tiens-toi prêt !*" if position_bb != "⚪ Au Milieu (Zone neutre)" else "\n💤 *Le marché respire tranquillement.*"
         bot.edit_message_text(rapport, message.chat.id, msg.message_id, parse_mode="Markdown")
@@ -652,5 +632,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestion_horaires_et_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition GOD MODE DYNAMIQUE (V7.1) Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition GOD MODE DYNAMIQUE (V7) Démarrée.", flush=True)
     bot.infinity_polling()
