@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAFpPMNLGoIxyJrNw-LXVV3CAl459K-g2q0"
+TELEGRAM_TOKEN = "8658287331:AAG6KptbzeMOV5-7R872tc2szBXm__e5KfM"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -249,6 +249,7 @@ def analyser_binaire_pro(symbole):
         
         df['corps_bougie'] = abs(df['close'] - df['open'])
 
+        # Indicateurs classiques
         indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
         df['bb_haute'] = indicateur_bb.bollinger_hband()
         df['bb_basse'] = indicateur_bb.bollinger_lband()
@@ -256,10 +257,16 @@ def analyser_binaire_pro(symbole):
         df['stoch_k'] = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch()
         df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
         
-        # ⚡ NOUVEAU : Calcul ATR pour l'Expiration Dynamique
+        # ⚡ Calcul ATR pour l'Expiration Dynamique
         df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
         atr_actuel = df['atr'].iloc[-1]
         atr_moyen = df['atr'].rolling(window=20).mean().iloc[-1]
+
+        # 🛡️ Calcul ADX pour la Force Minimum et le Bouclier
+        indicateur_adx = ta.trend.ADXIndicator(high=df['high'], low=df['low'], close=df['close'], window=14)
+        df['adx'] = indicateur_adx.adx()
+        df['di_plus'] = indicateur_adx.adx_pos()
+        df['di_moins'] = indicateur_adx.adx_neg()
 
         corps_moyen = df['corps_bougie'].rolling(window=10).mean().iloc[-1]
         vsa_valide = df['corps_bougie'].iloc[-1] > corps_moyen 
@@ -271,6 +278,9 @@ def analyser_binaire_pro(symbole):
         c = last['close']
         rsi_val, stoch_val = round(last['rsi'], 1), round(last['stoch_k'], 1)
         bb_h, bb_b = last['bb_haute'], last['bb_basse']
+        
+        adx_val = round(last['adx'], 1)
+        di_p, di_m = last['di_plus'], last['di_moins']
         
         ema_actuelle = df['ema_200'].iloc[-1]
         ema_ancienne = df['ema_200'].iloc[-5] 
@@ -291,24 +301,36 @@ def analyser_binaire_pro(symbole):
             duree_secondes = 300
             expiration_texte = "5 MINUTES (Standard 💎)"
 
-        if c <= bb_b and tendance_haussiere:
-            action, confiance = "🟢 ACHAT (CALL)", 99
-            score_algo = 7
-            bb_status = "Bande Basse"
-            if vsa_valide: score_algo += 1; bb_status += " + Vol VSA"
-            if fvg_haussier: score_algo += 2; bb_status += " + SMC"
+        # 🛑 VERROU 1 : FILTRE DE FORCE MINIMUM (ADX < 18)
+        if adx_val < 18:
+            return f"⚠️ Filtre ADX : Marché trop mou ({adx_val} < 18). Le radar attend une vraie impulsion.", None, None, None, None, None, None, None
 
-        elif c >= bb_h and tendance_baissiere:
-            action, confiance = "🔴 VENTE (PUT)", 99
-            score_algo = 7
-            bb_status = "Bande Haute"
+        tendance_violente_baisse = (adx_val > 30) and (di_m > di_p)
+        tendance_violente_hausse = (adx_val > 30) and (di_p > di_m)
+
+        # 🛑 VERROUS 2 & 3 : TRIPLE CONFLUENCE + SURCHAUFFE (20/80)
+        if c <= bb_b and rsi_val <= 20 and stoch_val <= 20 and tendance_haussiere:
+            if tendance_violente_baisse:
+                return "⚠️ ADX ALERTE : Le marché s'effondre lourdement. Achat annulé.", None, None, None, None, None, None, None
+            action, confiance = "🟢 ACHAT (CALL)", 99
+            score_algo = 8
+            bb_status = f"Triple Confluence 20 (ADX : {adx_val})"
             if vsa_valide: score_algo += 1; bb_status += " + Vol VSA"
-            if fvg_baissier: score_algo += 2; bb_status += " + SMC"
+            if fvg_haussier: score_algo += 1; bb_status += " + SMC"
+
+        elif c >= bb_h and rsi_val >= 80 and stoch_val >= 80 and tendance_baissiere:
+            if tendance_violente_hausse:
+                return "⚠️ ADX ALERTE : Hausse explosive détectée. Vente annulée.", None, None, None, None, None, None, None
+            action, confiance = "🔴 VENTE (PUT)", 99
+            score_algo = 8
+            bb_status = f"Triple Confluence 80 (ADX : {adx_val})"
+            if vsa_valide: score_algo += 1; bb_status += " + Vol VSA"
+            if fvg_baissier: score_algo += 1; bb_status += " + SMC"
 
         if action and score_algo >= 8:
             return action, confiance, expiration_texte, duree_secondes, rsi_val, stoch_val, bb_status, score_algo
         else:
-            return f"⚠️ Marché instable ou contre-tendance lourde. Filtrage actif.", None, None, None, None, None, None, None
+            return f"⚠️ Scan en cours... Aucune configuration Triple Confluence détectée.", None, None, None, None, None, None, None
             
     except Exception as e: 
         return None, None, None, None, None, None, None, None
@@ -612,6 +634,11 @@ def vision_marche(message):
         ema_200 = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator().iloc[-1]
         prix_actuel = df['close'].iloc[-1]
         
+        # 🛡️ AJOUT DE L'ADX DANS LA COMMANDE VISION
+        indicateur_adx = ta.trend.ADXIndicator(high=df['high'], low=df['low'], close=df['close'], window=14)
+        adx_val = indicateur_adx.adx().iloc[-1]
+        force_tendance = "🚀 Tendance TRÈS FORTE" if adx_val > 30 else "💤 Marché plat / Sans direction" if adx_val < 18 else "📈 Tendance modérée"
+        
         position_bb = "🔴 Au Plafond (Touche la bande haute)" if prix_actuel >= bb_haute else "🟢 Au Plancher (Touche la bande basse)" if prix_actuel <= bb_basse else "⚪ Au Milieu (Zone neutre)"
         nom_affiche = f"{symbole[:3]}/{symbole[3:]}"
         
@@ -621,8 +648,9 @@ def vision_marche(message):
 🛡️ **EMA 200 (Tendance) :** `{ema_200:.5f}`
 📏 **Position Bollinger :** {position_bb}
 
-📊 **Niveau RSI :** `{rsi:.2f}` *(Rappel: >60 = Surchauffe, <40 = Essoufflé)*
-📉 **Niveau Stochastique :** `{stoch_k:.2f}` *(Rappel: >80 = Surachat, <20 = Survente)*
+📊 **Niveau RSI :** `{rsi:.2f}` *(Attente: <=20 ou >=80)*
+📉 **Niveau Stochastique :** `{stoch_k:.2f}` *(Attente: <=20 ou >=80)*
+🌪️ **Force ADX :** `{adx_val:.2f}` ({force_tendance})
 ──────────────────"""
         rapport += "\n⚠️ *Le prix teste les limites, tiens-toi prêt !*" if position_bb != "⚪ Au Milieu (Zone neutre)" else "\n💤 *Le marché respire tranquillement.*"
         bot.edit_message_text(rapport, message.chat.id, msg.message_id, parse_mode="Markdown")
@@ -632,5 +660,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestion_horaires_et_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition GOD MODE DYNAMIQUE (V7) Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition GOD MODE DYNAMIQUE (V7) Démarrée avec QUALITÉ TOTALE.", flush=True)
     bot.infinity_polling()
