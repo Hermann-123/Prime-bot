@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAHYWajLLN0ClsMdAmdkbHqraRDsz_JCZXY"
+TELEGRAM_TOKEN = "8658287331:AAEYBXVBIFR1Z4BE-XSsXPRI1oLTtDgf9oc"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -51,9 +51,8 @@ transition_nuit_envoyee = False
 transition_jour_envoyee = False
 
 CRYPTO_PAIRS = ["BTCUSD", "ETHUSD", "LTCUSD"]
-FOREX_PAIRS = [
-    "EURUSD", "AUDUSD", "USDJPY", "EURJPY", "USDCAD"
-]
+# Paires réduites conformément à la V7 validée
+FOREX_PAIRS = ["EURUSD", "AUDUSD", "USDJPY", "EURJPY", "USDCAD"]
 
 # ==========================================
 # SERVEUR WEB (KEEP ALIVE RENDER)
@@ -63,7 +62,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition GOD MODE DYNAMIQUE (V7)"
+    return "Terminal Prime VIP : Édition V8 SMC INSTITUTIONAL"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -228,87 +227,59 @@ def verifier_resultat(chat_id):
     if chat_id in trades_en_cours: del trades_en_cours[chat_id]
 
 # ==========================================
-# MOTEUR D'ANALYSE ( GOD MODE ELITE V7 DYNAMIQUE )
+# MOTEUR D'ANALYSE V8 ( INSTITUTIONAL SMC )
 # ==========================================
 
-def analyser_binaire_pro(symbole):
+def analyser_v8_smc(symbole):
+    # Conservation de la protection du capital (Silencieux & News)
     if symbole in cooldown_actifs and (time.time() - cooldown_actifs[symbole] < 3600):
         return f"⚠️ **SILENCIEUX ACTIF** : {symbole} a récemment subi une manipulation (OTM). Radar coupé pendant 1 heure pour protéger le capital.", None, None, None, None, None, None, None
 
     if est_heure_de_news_dynamique() and symbole not in CRYPTO_PAIRS:
         return "⚠️ ALERTE NEWS : Marché manipulé, radar coupé.", None, None, None, None, None, None, None
 
-    tendance_h1 = obtenir_tendance_H1(symbole)
-    candles = obtenir_donnees_deriv(symbole)
-    if not candles: return "⚠️ Impossible de se connecter au marché", None, None, None, None, None, None, None
-    
     try:
-        df = pd.DataFrame([{'open': float(c['open']), 'close': float(c['close']), 'high': float(c['high']), 'low': float(c['low'])} for c in candles])
-        
-        df['corps_bougie'] = abs(df['close'] - df['open'])
-
-        indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
-        df['bb_haute'] = indicateur_bb.bollinger_hband()
-        df['bb_basse'] = indicateur_bb.bollinger_lband()
-        df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
-        df['stoch_k'] = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch()
-        df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
-        
-        # ⚡ NOUVEAU : Calcul ATR pour l'Expiration Dynamique
-        df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
-        atr_actuel = df['atr'].iloc[-1]
-        atr_moyen = df['atr'].rolling(window=20).mean().iloc[-1]
-
-        corps_moyen = df['corps_bougie'].rolling(window=10).mean().iloc[-1]
-        vsa_valide = df['corps_bougie'].iloc[-1] > corps_moyen 
-        
-        fvg_haussier = df['low'].iloc[-1] > df['high'].iloc[-3]
-        fvg_baissier = df['high'].iloc[-1] < df['low'].iloc[-3]
-
-        last = df.iloc[-1]
-        c = last['close']
-        rsi_val, stoch_val = round(last['rsi'], 1), round(last['stoch_k'], 1)
-        bb_h, bb_b = last['bb_haute'], last['bb_basse']
-        
-        ema_actuelle = df['ema_200'].iloc[-1]
-        ema_ancienne = df['ema_200'].iloc[-5] 
-        
-        tendance_haussiere = c > ema_actuelle and tendance_h1 in ["UP", "NEUTRE"] and ema_actuelle >= ema_ancienne
-        tendance_baissiere = c < ema_actuelle and tendance_h1 in ["DOWN", "NEUTRE"] and ema_actuelle <= ema_ancienne
-
-        action, confiance, bb_status, score_algo = None, 0, "Au Milieu", 5
-        
-        # ⏱️ SÉLECTION AUTOMATIQUE DE L'EXPIRATION
-        if atr_actuel > (atr_moyen * 1.5):
-            duree_secondes = 120
-            expiration_texte = "2 MINUTES (Vitesse Élevée ⚡)"
-        elif atr_actuel < (atr_moyen * 0.8):
-            duree_secondes = 600
-            expiration_texte = "10 MINUTES (Marché Lent 🐢)"
-        else:
-            duree_secondes = 300
-            expiration_texte = "5 MINUTES (Standard 💎)"
-
-        if c <= bb_b and tendance_haussiere:
-            action, confiance = "🟢 ACHAT (CALL)", 99
-            score_algo = 7
-            bb_status = "Bande Basse"
-            if vsa_valide: score_algo += 1; bb_status += " + Vol VSA"
-            if fvg_haussier: score_algo += 2; bb_status += " + SMC"
-
-        elif c >= bb_h and tendance_baissiere:
-            action, confiance = "🔴 VENTE (PUT)", 99
-            score_algo = 7
-            bb_status = "Bande Haute"
-            if vsa_valide: score_algo += 1; bb_status += " + Vol VSA"
-            if fvg_baissier: score_algo += 2; bb_status += " + SMC"
-
-        if action and score_algo >= 8:
-            return action, confiance, expiration_texte, duree_secondes, rsi_val, stoch_val, bb_status, score_algo
-        else:
-            return f"⚠️ Marché instable ou contre-tendance lourde. Filtrage actif.", None, None, None, None, None, None, None
+        # 1. Récupération des données (On a besoin d'un historique propre)
+        candles = obtenir_donnees_deriv(symbole)
+        if not candles: 
+            return "⚠️ Impossible de se connecter au marché", None, None, None, None, None, None, None
             
-    except Exception as e: 
+        df = pd.DataFrame([{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close']), 'open': float(c['open'])} for c in candles])
+        
+        # 2. Analyse de la Structure (BOS)
+        # On cherche si la clôture actuelle casse le plus haut des 10 dernières bougies
+        dernier_plus_haut = df['high'].tail(15).iloc[:-1].max()
+        dernier_plus_bas = df['low'].tail(15).iloc[:-1].min()
+        cloture_actuelle = df['close'].iloc[-1]
+        
+        # 3. Détection de l'Imbalance (FVG - Le secret des Pros)
+        # Zone de vide entre la mèche 1 et la mèche 3
+        fvg_bullish = df['low'].iloc[-1] > df['high'].iloc[-3]
+        fvg_bearish = df['high'].iloc[-1] < df['low'].iloc[-3]
+
+        # 4. Tendance de Fond (H1 obligatoire)
+        tendance_h1 = obtenir_tendance_H1(symbole)
+        
+        action = None
+        score = 0
+
+        # --- LOGIQUE D'ACHAT (BULLISH SMC) ---
+        if cloture_actuelle > dernier_plus_haut and fvg_bullish and tendance_h1 in ["UP", "NEUTRE"]:
+            action = "🟢 INSTITUTIONAL BUY (CALL)"
+            score = 95
+
+        # --- LOGIQUE DE VENTE (BEARISH SMC) ---
+        elif cloture_actuelle < dernier_plus_bas and fvg_bearish and tendance_h1 in ["DOWN", "NEUTRE"]:
+            action = "🔴 INSTITUTIONAL SELL (PUT)"
+            score = 95
+
+        if action:
+            return action, score, "5 MIN", 300, "SMC Validé ✅", "BOS Détecté", "Flux Institutionnel", 10
+        
+        # Si aucune trace de banque, le bot reste muet (On retourne None pour les 8 variables)
+        return f"⚠️ Marché en consolidation ou contre-tendance. Aucun BOS détecté.", None, None, None, None, None, None, None 
+
+    except Exception as e:
         return None, None, None, None, None, None, None, None
 
 # ==========================================
@@ -327,19 +298,20 @@ def scanner_marche_auto():
             devises_a_surveiller = CRYPTO_PAIRS if jour_semaine >= 5 else FOREX_PAIRS
             
             for actif in devises_a_surveiller:
-                action, confiance, exp, duree, rsi_val, stoch_val, bb_status, score = analyser_binaire_pro(actif)
+                # Appel du nouveau moteur V8 SMC
+                action, confiance, exp, duree, var1, var2, var3, score = analyser_v8_smc(actif)
+                
                 if action and "⚠️" not in action and confiance:
                     temps_actuel = time.time()
                     if actif in derniere_alerte_auto and (temps_actuel - derniere_alerte_auto[actif] < 3600): continue
                     derniere_alerte_auto[actif] = temps_actuel
                     nom_affiche = f"{actif[:3]}/{actif[3:]}"
                     
-                    jauge_visuelle = generer_jauge(score * 10)
+                    jauge_visuelle = generer_jauge(score)
                     markup = InlineKeyboardMarkup()
                     markup.add(InlineKeyboardButton(f"📊 Analyser {nom_affiche}", callback_data=f"set_{actif}"))
                     
-                    if score >= 9: alerte_msg = f"🔥 **ALERTE GOD MODE** 🔥\n\nConfiguration mathématique lourde\n**CONFIANCE :** {jauge_visuelle}\nCible : **{nom_affiche}**\n\n👇 *Clique sur le bouton pour déclencher la frappe !*"
-                    else: alerte_msg = f"🚨 **OPPORTUNITÉ VIP FILTRÉE** 🚨\n\nLe radar a esquivé les pièges. Signal propre !\n**CONFIANCE :** {jauge_visuelle}\nCible : **{nom_affiche}**\n\n👇 *Clique sur le bouton pour l'analyse !*"
+                    alerte_msg = f"🏦 **ALERTE INSTITUTIONNELLE V8** 🏦\n\nCassure de structure (BOS) détectée.\n**CONFIANCE :** {jauge_visuelle}\nCible : **{nom_affiche}**\n\n👇 *Clique sur le bouton pour l'analyse !*"
                         
                     for chat_id in utilisateurs_a_alerter:
                         try: bot.send_message(chat_id, alerte_msg, reply_markup=markup, parse_mode="Markdown")
@@ -395,7 +367,6 @@ def admin_panel(message):
     if message.chat.id != ADMIN_ID: return
     bot.send_message(ADMIN_ID, f"Admin Panel 🔥\nCapital actuel : {CAPITAL_ACTUEL}$")
 
-# 💰 AJOUT DE LA COMMANDE CAPITAL SÉPARÉE
 @bot.message_handler(commands=['capital'])
 def voir_capital(message):
     if message.chat.id != ADMIN_ID: return
@@ -469,14 +440,14 @@ def bienvenue(message):
         return bot.send_message(user_id, "🔒 **ACCÈS RESTREINT - TERMINAL PRIVÉ** 🔒\n\nCe système est une intelligence artificielle de trading haute précision sous licence payante.\n\n📲 **Pour obtenir votre clé d'accès (Abonnement), veuillez contacter le fondateur : [@hermann1123](https://t.me/hermann1123)**", parse_mode="Markdown", disable_web_page_preview=True)
 
     utilisateurs_actifs.add(user_id)
-    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION GOD MODE DYNAMIQUE (V7)** 🔥
+    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION V8 SMC INSTITUTIONAL** 🔥
     
-Bienvenue dans le radar institutionnel. Ce système est doté d'un cerveau de volatilité : il choisit **LUI-MÊME** le meilleur temps d'expiration (2, 5 ou 10 minutes) en fonction du marché.
+Bienvenue dans le radar institutionnel. Ce système analyse désormais les cassures de structure (BOS) et les déséquilibres (FVG) pour filtrer le bruit.
 
 📖 **MODE D'EMPLOI :**
 1️⃣ **SÉLECTION :** Clique sur "📊 CHOISIR UNE DEVISE" pour verrouiller un actif.
-2️⃣ **RADAR :** Clique sur "🚀 LANCER L'ANALYSE" pour déclencher le scan Sniper.
-3️⃣ **DISCIPLINE :** N'oublie pas : 2% de mise maximum et stop total après 3 pertes.
+2️⃣ **RADAR :** Clique sur "🚀 LANCER L'ANALYSE" pour déclencher le scan SMC.
+3️⃣ **DISCIPLINE :** Signaux rares = Signaux forts. N'oublie pas : 2% de mise maximum et stop total après 3 pertes.
 
 ⚠️ **ATTENTION : RÉGLEZ SOIGNEUSEMENT L'HORLOGE DE POCKET BROKER SELON LE SIGNAL !** ⏱️"""
     bot.send_message(message.chat.id, texte_bienvenue, reply_markup=obtenir_clavier(), parse_mode="Markdown")
@@ -508,6 +479,7 @@ def devises(message):
         )
         message_texte = "Mode Week-End 🪙 : Les banques sont fermées. Sélectionne la Crypto :"
     else:
+        # Affichage restreint aux 5 paires comme demandé précédemment
         markup.row(
             InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="set_EURUSD"),
             InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD")
@@ -529,13 +501,14 @@ def save_devise(call):
     nom_affiche = f"{actif[:3]}/{actif[3:]}"
     
     try:
-        msg = bot.send_message(chat_id, "⏳ *Initialisation du scan DYNAMIQUE...*", parse_mode="Markdown")
+        msg = bot.send_message(chat_id, "⏳ *Initialisation du scan SMC V8...*", parse_mode="Markdown")
         time.sleep(1)
-        bot.edit_message_text("⚙️ *Lecture de l'Order Flow et calcul de la Volatilité ATR...*", chat_id, msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text("⚙️ *Recherche de Liquidité et de FVG Institutionnel...*", chat_id, msg.message_id, parse_mode="Markdown")
         time.sleep(1)
     except: return
         
-    action, confiance, exp_texte, duree_secondes, rsi_val, stoch_val, bb_status, score = analyser_binaire_pro(actif)
+    # Appel de la nouvelle fonction V8
+    action, confiance, exp_texte, duree_secondes, var1, var2, var3, score = analyser_v8_smc(actif)
     
     if action and "⚠️" in action:
         try: bot.edit_message_text(f"{action}", chat_id, msg.message_id)
@@ -552,10 +525,10 @@ def save_devise(call):
     heure_entree_dt = maintenant + datetime.timedelta(seconds=secondes_restantes)
     
     mise_recommandee = int(CAPITAL_ACTUEL * 0.02)
-    titre_signal = "🔥 SIGNAL VALIDÉ DYNAMIQUE 🔥" if score >= 8 else "⚡ SIGNAL VIP SÉCURISÉ ⚡"
-    jauge_visuelle = generer_jauge(score * 10) 
+    jauge_visuelle = generer_jauge(confiance) 
 
-    signal = f"""{titre_signal}
+    # Texte du signal mis à jour pour coller au thème SMC
+    signal = f"""🏦 SIGNAL INSTITUTIONNEL V8 🏦
 ──────────────────
 🛰 **ACTIF :** {nom_affiche}
 🎯 **ACTION :** {action}
@@ -564,10 +537,10 @@ def save_devise(call):
 🧠 **CONFIANCE :** {jauge_visuelle}
 🛡️ **FILTRE ANTI-PIÈGE :** VALIDÉ ✅
 
-📊 **VALIDATION MULTI-CERVEAU :**
-➤ **RSI :** 🟢 Validé ({rsi_val})
-➤ **Stochastique :** 🟢 Validé ({stoch_val})
-➤ **Volume/Trend :** 🟢 {bb_status}
+📊 **VALIDATION SMC (Smart Money) :**
+➤ **Structure :** 🟢 {var2}
+➤ **Déséquilibre :** 🟢 {var1}
+➤ **Flux/Trend :** 🟢 {var3}
 ──────────────────
 📍 **ORDRE À : {heure_entree_dt.strftime("%H:%M:00")}** 👈
 💵 **MISE RECOMMANDÉE :** {mise_recommandee}$ (2%)
@@ -579,7 +552,7 @@ def save_devise(call):
         bot.send_message(chat_id, signal, parse_mode="Markdown")
     except: pass
 
-    action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
+    action_simplifiee = "CALL" if "ACHAT" in action or "BUY" in action else "PUT"
     trades_en_cours[chat_id] = {'symbole': actif, 'action': action_simplifiee}
     Timer(secondes_restantes, relever_prix_entree, args=[chat_id, actif]).start()
     Timer(secondes_restantes + duree_secondes, verifier_resultat, args=[chat_id]).start()
@@ -597,7 +570,7 @@ def vision_marche(message):
     commande = message.text.split()
     if len(commande) < 2: return bot.send_message(message.chat.id, "⚠️ Précise la devise. Exemple : `/vision EURUSD`", parse_mode="Markdown")
     symbole = commande[1].upper()
-    try: msg = bot.send_message(message.chat.id, f"🔍 *Scan aux rayons X de {symbole}...*", parse_mode="Markdown")
+    try: msg = bot.send_message(message.chat.id, f"🔍 *Scan aux rayons X SMC de {symbole}...*", parse_mode="Markdown")
     except: return
     
     candles = obtenir_donnees_deriv(symbole)
@@ -605,26 +578,29 @@ def vision_marche(message):
         
     try:
         df = pd.DataFrame([{'close': float(c['close']), 'high': float(c['high']), 'low': float(c['low'])} for c in candles])
-        indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
-        bb_haute, bb_basse = indicateur_bb.bollinger_hband().iloc[-1], indicateur_bb.bollinger_lband().iloc[-1]
-        stoch_k = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch().iloc[-1]
-        rsi = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi().iloc[-1]
-        ema_200 = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator().iloc[-1]
+        
+        # Logique de vision mise à jour pour le SMC
+        dernier_plus_haut = df['high'].tail(15).iloc[:-1].max()
+        dernier_plus_bas = df['low'].tail(15).iloc[:-1].min()
         prix_actuel = df['close'].iloc[-1]
         
-        position_bb = "🔴 Au Plafond (Touche la bande haute)" if prix_actuel >= bb_haute else "🟢 Au Plancher (Touche la bande basse)" if prix_actuel <= bb_basse else "⚪ Au Milieu (Zone neutre)"
+        fvg_bullish = df['low'].iloc[-1] > df['high'].iloc[-3]
+        fvg_bearish = df['high'].iloc[-1] < df['low'].iloc[-3]
+        
+        etat_fvg = "🟢 FVG Bullish détecté" if fvg_bullish else "🔴 FVG Bearish détecté" if fvg_bearish else "⚪ Aucun déséquilibre majeur"
+        etat_bos = "🟢 BOS Haussier imminent" if prix_actuel >= dernier_plus_haut else "🔴 BOS Baissier imminent" if prix_actuel <= dernier_plus_bas else "⚪ Dans le range"
+
         nom_affiche = f"{symbole[:3]}/{symbole[3:]}"
         
-        rapport = f"""👁️ **VISION RAYONS X : {nom_affiche}** 👁️
+        rapport = f"""👁️ **VISION RAYONS X SMC : {nom_affiche}** 👁️
 ──────────────────
 💰 **Prix actuel :** `{prix_actuel:.5f}`
-🛡️ **EMA 200 (Tendance) :** `{ema_200:.5f}`
-📏 **Position Bollinger :** {position_bb}
+📈 **Résistance (Plus haut) :** `{dernier_plus_haut:.5f}`
+📉 **Support (Plus bas) :** `{dernier_plus_bas:.5f}`
 
-📊 **Niveau RSI :** `{rsi:.2f}` *(Rappel: >60 = Surchauffe, <40 = Essoufflé)*
-📉 **Niveau Stochastique :** `{stoch_k:.2f}` *(Rappel: >80 = Surachat, <20 = Survente)*
+📊 **Structure (BOS) :** {etat_bos}
+⚖️ **Déséquilibre (FVG) :** {etat_fvg}
 ──────────────────"""
-        rapport += "\n⚠️ *Le prix teste les limites, tiens-toi prêt !*" if position_bb != "⚪ Au Milieu (Zone neutre)" else "\n💤 *Le marché respire tranquillement.*"
         bot.edit_message_text(rapport, message.chat.id, msg.message_id, parse_mode="Markdown")
     except Exception as e: bot.edit_message_text(f"❌ Erreur : {e}", message.chat.id, msg.message_id)
 
@@ -632,5 +608,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestion_horaires_et_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition GOD MODE DYNAMIQUE (V7) Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition V8 SMC INSTITUTIONAL Démarrée.", flush=True)
     bot.infinity_polling()
