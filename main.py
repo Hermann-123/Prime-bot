@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # ==========================================
 
 # ⚠️ METS TON NOUVEAU TOKEN ICI SI TU L'AS CHANGÉ SUR BOTFATHER
-TELEGRAM_TOKEN = "8658287331:AAE1YD-I37D8Mwb9A7fEuFQ2FrYD_YQufIM"
+TELEGRAM_TOKEN = "8658287331:AAH_0gMeBTrgvuJyPMDp_PRYcayiag0F10w"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -49,10 +49,13 @@ transition_nuit_envoyee = False
 transition_jour_envoyee = False
 
 CRYPTO_PAIRS = ["BTCUSD", "ETHUSD", "LTCUSD"]
+# MISE À JOUR : Les 13 paires correspondant à la capture d'écran
 FOREX_PAIRS = [
-    "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF",
-    "EURJPY", "GBPJPY", "AUDJPY", "CADJPY", "CHFJPY",
-    "EURGBP", "EURCAD", "EURNZD", "GBPCAD", "GBPNZD", "AUDCAD"
+    "AUDUSD", "CADJPY", "CHFJPY", 
+    "EURJPY", "USDCAD", "AUDJPY", 
+    "EURAUD", "EURUSD", "AUDCAD", 
+    "USDCHF", "CADCHF", "EURCHF", 
+    "USDJPY"
 ]
 
 # ==========================================
@@ -470,13 +473,13 @@ def devises(message):
         )
         message_texte = "Mode Week-End 🪙 : Les banques sont fermées. Sélectionne la Crypto :"
     else:
+        # MISE À JOUR : Clavier identique à ta capture d'écran
         markup.add(
-            InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="set_EURUSD"), InlineKeyboardButton("🇬🇧 GBP/USD", callback_data="set_GBPUSD"), InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY"), 
-            InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD"), InlineKeyboardButton("🇺🇸 USD/CAD", callback_data="set_USDCAD"), InlineKeyboardButton("🇨🇭 USD/CHF", callback_data="set_USDCHF"),
-            InlineKeyboardButton("🇪🇺 EUR/JPY", callback_data="set_EURJPY"), InlineKeyboardButton("🇬🇧 GBP/JPY", callback_data="set_GBPJPY"), InlineKeyboardButton("🇦🇺 AUD/JPY", callback_data="set_AUDJPY"),
-            InlineKeyboardButton("🇨🇦 CAD/JPY", callback_data="set_CADJPY"), InlineKeyboardButton("🇨🇭 CHF/JPY", callback_data="set_CHFJPY"), InlineKeyboardButton("🇪🇺 EUR/GBP", callback_data="set_EURGBP"),
-            InlineKeyboardButton("🇪🇺 EUR/CAD", callback_data="set_EURCAD"), InlineKeyboardButton("🇪🇺 EUR/NZD", callback_data="set_EURNZD"), InlineKeyboardButton("🇬🇧 GBP/CAD", callback_data="set_GBPCAD"), 
-            InlineKeyboardButton("🇬🇧 GBP/NZD", callback_data="set_GBPNZD"), InlineKeyboardButton("🇦🇺 AUD/CAD", callback_data="set_AUDCAD")
+            InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD"), InlineKeyboardButton("🇨🇦 CAD/JPY", callback_data="set_CADJPY"), InlineKeyboardButton("🇨🇭 CHF/JPY", callback_data="set_CHFJPY"),
+            InlineKeyboardButton("🇪🇺 EUR/JPY", callback_data="set_EURJPY"), InlineKeyboardButton("🇺🇸 USD/CAD", callback_data="set_USDCAD"), InlineKeyboardButton("🇦🇺 AUD/JPY", callback_data="set_AUDJPY"),
+            InlineKeyboardButton("🇪🇺 EUR/AUD", callback_data="set_EURAUD"), InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="set_EURUSD"), InlineKeyboardButton("🇦🇺 AUD/CAD", callback_data="set_AUDCAD"),
+            InlineKeyboardButton("🇺🇸 USD/CHF", callback_data="set_USDCHF"), InlineKeyboardButton("🇨🇦 CAD/CHF", callback_data="set_CADCHF"), InlineKeyboardButton("🇪🇺 EUR/CHF", callback_data="set_EURCHF"),
+            InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY")
         )
         message_texte = "Mode Semaine 💱 : Arsenal 100% synchronisé. Sélectionne ta cible :"
     bot.send_message(message.chat.id, message_texte, reply_markup=markup)
@@ -509,9 +512,9 @@ def save_devise(call):
         except: pass
         return
 
+    # MISE À JOUR : Ajout d'un délai de 2 minutes (120 secondes) pour l'entrée
     maintenant = datetime.datetime.now()
-    secondes_restantes = 60 - maintenant.second
-    if secondes_restantes < 10: secondes_restantes += 60
+    secondes_restantes = (60 - maintenant.second) + 120 
     heure_entree_dt = maintenant + datetime.timedelta(seconds=secondes_restantes)
     
     mise_recommandee = int(CAPITAL_ACTUEL * 0.02)
