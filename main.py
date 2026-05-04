@@ -6,19 +6,19 @@ import time
 import string
 import json
 import websocket
-import threading
 import pandas as pd
 import ta
 import requests
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from flask import Flask
+from threading import Thread, Timer
 
 # ==========================================
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAG0LpBkmnWvix3XhQJ7h-JRaCOlkM8HDqo" # Remets ton token si différent
+TELEGRAM_TOKEN = "8658287331:AAGUU1HjmZfarjqZeiOuCMX_6s525lxpUs0"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -26,8 +26,8 @@ CAPITAL_ACTUEL = 40650
 FMP_API_KEY = os.environ.get("FMP_API_KEY", "D0srw6sB3otYTc00UdBE9otPIbhkKV8X")
 
 # 🔴 CONFIGURATION MARTINGALE SÉCURISÉE
-COEF_MARTINGALE = 2.5  # Multiplicateur pour couvrir les pertes (Option Binaire)
-MAX_MARTINGALE = 2     # Nombre maximum de rattrapages autorisés (Base -> M1 -> M2)
+COEF_MARTINGALE = 2.5
+MAX_MARTINGALE = 2
 
 # ==========================================
 # VARIABLES D'ÉTAT ET ROUTAGE
@@ -38,8 +38,7 @@ trades_en_cours = {}
 utilisateurs_actifs = set()
 derniere_alerte_auto = {}
 cooldown_actifs = {} 
-prix_en_direct = {} 
-niveaux_martingale = {} # 🔥 NOUVEAU : Suivi des paliers par utilisateur
+niveaux_martingale = {} # Mémoire pour le palier de chaque utilisateur
 
 utilisateurs_autorises = {
     ADMIN_ID: "LIFETIME"
@@ -51,6 +50,10 @@ stats_journee = {
     'OTM': 0, 
     'details': []
 }
+
+bilan_envoye_aujourdhui = False
+transition_nuit_envoyee = False
+transition_jour_envoyee = False
 
 CRYPTO_PAIRS = ["BTCUSD", "ETHUSD", "LTCUSD"]
 FOREX_PAIRS = [
@@ -67,83 +70,48 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : V10 (MTF + Divergence + Martingale)"
+    return "Terminal Prime VIP : Édition GOD MODE DYNAMIQUE (V11)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
-    threading.Thread(target=run, daemon=True).start()
+    t = Thread(target=run)
+    t.start()
 
 # ==========================================
 # SYSTÈME DE GESTION DES ACCÈS VIP
 # ==========================================
 
 def est_autorise(user_id):
-    if user_id == ADMIN_ID: return True
+    if user_id == ADMIN_ID:
+        return True
     if user_id in utilisateurs_autorises:
         expiration = utilisateurs_autorises[user_id]
-        if expiration == "LIFETIME" or datetime.datetime.now() < expiration: return True
+        if expiration == "LIFETIME" or datetime.datetime.now() < expiration:
+            return True
         else:
             del utilisateurs_autorises[user_id]
             try: bot.send_message(user_id, "⚠️ **ABONNEMENT EXPIRÉ** ⚠️\n\nVotre accès au Terminal Prime est terminé.", parse_mode="Markdown")
             except: pass
+            return False
     return False
 
 def generer_cle():
-    return f"PRIME-{''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(8))}"
+    caracteres = string.ascii_uppercase + string.digits
+    aleatoire = ''.join(random.choice(caracteres) for _ in range(8))
+    return f"PRIME-{aleatoire}"
 
 def generer_jauge(pourcentage):
-    if pourcentage >= 99: return "[██████████] 👑 MAX"
+    if pourcentage >= 99:
+        return "[██████████] 👑 MAX"
     pleins = int(pourcentage / 10)
-    return f"[{'█' * pleins}{'░' * (10 - pleins)}] {pourcentage}%"
+    vides = 10 - pleins
+    return f"[{'█' * pleins}{'░' * vides}] {pourcentage}%"
 
 # ==========================================
-# MOTEUR RÉSEAU DERIV (ZERO LATENCE)
-# ==========================================
-
-def prefixer_symbole(symbole_brut):
-    return f"cry{symbole_brut}" if symbole_brut in CRYPTO_PAIRS else f"frx{symbole_brut}"
-
-def on_ws_message(ws, message):
-    data = json.loads(message)
-    if 'tick' in data:
-        symbole = data['tick']['symbol']
-        prix = float(data['tick']['quote'])
-        prix_en_direct[symbole] = prix 
-
-def on_ws_open(ws):
-    symboles = [prefixer_symbole(p) for p in CRYPTO_PAIRS + FOREX_PAIRS]
-    for s in symboles:
-        ws.send(json.dumps({"ticks": s, "subscribe": 1}))
-
-def demarrer_flux_deriv():
-    while True:
-        try:
-            ws = websocket.WebSocketApp("wss://ws.derivws.com/websockets/v3?app_id=1089", 
-                                        on_open=on_ws_open, on_message=on_ws_message)
-            ws.run_forever()
-        except:
-            time.sleep(5)
-
-def obtenir_prix_actuel_deriv(symbole_brut):
-    return prix_en_direct.get(prefixer_symbole(symbole_brut))
-
-def obtenir_donnees_deriv(symbole_brut, granularity=300):
-    symbole = prefixer_symbole(symbole_brut)
-    try:
-        ws = websocket.WebSocket()
-        ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=5)
-        req = {"ticks_history": symbole, "end": "latest", "count": 250, "style": "candles", "granularity": granularity}
-        ws.send(json.dumps(req))
-        history = json.loads(ws.recv())
-        ws.close()
-        return history.get('candles')
-    except: return None
-
-# ==========================================
-# NOUVELLES FONCTIONS PRO (NEWS & MTF)
+# NOUVELLES FONCTIONS PRO (NEWS & H1)
 # ==========================================
 
 def est_heure_de_news_dynamique():
@@ -151,111 +119,150 @@ def est_heure_de_news_dynamique():
     try:
         today = datetime.datetime.now().strftime("%Y-%m-%d")
         url = f"https://financialmodelingprep.com/api/v3/economic_calendar?from={today}&to={today}&apikey={FMP_API_KEY}"
-        res = requests.get(url, timeout=5)
-        if res.status_code == 200:
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            events = response.json()
             maintenant = datetime.datetime.utcnow()
-            for event in res.json():
+            for event in events:
                 if event.get('impact') == 'High':
                     e_time = datetime.datetime.strptime(event['date'], "%Y-%m-%d %H:%M:%S")
-                    if abs((maintenant - e_time).total_seconds() / 60) <= 30: return True
+                    diff = abs((maintenant - e_time).total_seconds() / 60)
+                    if diff <= 30: 
+                        return True
     except: pass
     return False
 
-def obtenir_tendance_M15(symbole_brut):
-    candles = obtenir_donnees_deriv(symbole_brut, granularity=900)
-    if not candles: return "NEUTRE"
+def obtenir_tendance_H1(symbole_brut):
+    symbole = prefixer_symbole(symbole_brut)
     try:
-        df_m15 = pd.DataFrame([{'close': float(c['close'])} for c in candles])
-        ema_m15 = ta.trend.EMAIndicator(close=df_m15['close'], window=20).ema_indicator()
-        if df_m15['close'].iloc[-1] > ema_m15.iloc[-1]: return "UP"
-        elif df_m15['close'].iloc[-1] < ema_m15.iloc[-1]: return "DOWN"
+        ws = websocket.WebSocket()
+        ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=5)
+        req = {"ticks_history": symbole, "end": "latest", "count": 50, "style": "candles", "granularity": 3600}
+        ws.send(json.dumps(req))
+        res = json.loads(ws.recv())
+        ws.close()
+        if "candles" in res and len(res["candles"]) > 20:
+            df = pd.DataFrame(res['candles'])
+            ema20 = ta.trend.EMAIndicator(close=df['close'].astype(float), window=20).ema_indicator()
+            return "UP" if float(df['close'].iloc[-1]) > ema20.iloc[-1] else "DOWN"
     except: pass
     return "NEUTRE"
 
 # ==========================================
-# GESTIONNAIRE CENTRALISÉ DES TRADES & MARTINGALE
+# ROUTEUR API DERIV (FOREX VS CRYPTO)
 # ==========================================
 
-def gestionnaire_trades():
+def prefixer_symbole(symbole_brut):
+    if symbole_brut in CRYPTO_PAIRS: return f"cry{symbole_brut}"
+    return f"frx{symbole_brut}"
+
+def obtenir_donnees_deriv(symbole_brut):
+    symbole = prefixer_symbole(symbole_brut)
+    for tentative in range(3):
+        try:
+            ws = websocket.WebSocket()
+            ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=5)
+            req = {"ticks_history": symbole, "end": "latest", "count": 250, "style": "candles", "granularity": 300}
+            ws.send(json.dumps(req))
+            history = json.loads(ws.recv())
+            ws.close()
+            if "error" not in history and "candles" in history:
+                return history['candles']
+        except:
+            time.sleep(1)
+            continue
+    return None
+
+def obtenir_prix_actuel_deriv(symbole_brut):
+    symbole = prefixer_symbole(symbole_brut)
+    for tentative in range(3):
+        try:
+            ws = websocket.WebSocket()
+            ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=5)
+            req = {"ticks_history": symbole, "end": "latest", "count": 1, "style": "ticks"}
+            ws.send(json.dumps(req))
+            res = json.loads(ws.recv())
+            ws.close()
+            if "history" in res and "prices" in res["history"]:
+                return float(res["history"]["prices"][0])
+        except:
+            time.sleep(1)
+            continue
+    return None
+
+# ==========================================
+# SYSTÈME DE VÉRIFICATION ITM/OTM & COOLDOWN
+# ==========================================
+
+def relever_prix_entree(chat_id, symbole):
+    prix = obtenir_prix_actuel_deriv(symbole)
+    if prix and chat_id in trades_en_cours and trades_en_cours[chat_id]['symbole'] == symbole:
+        trades_en_cours[chat_id]['prix_entree'] = prix
+
+def verifier_resultat(chat_id):
     global stats_journee, cooldown_actifs, niveaux_martingale
-    while True:
-        maintenant = time.time()
-        a_supprimer = []
-        
-        for chat_id, trade in trades_en_cours.items():
-            symbole = trade['symbole']
-            prix_actuel = obtenir_prix_actuel_deriv(symbole)
-            if not prix_actuel: continue
+    trade = trades_en_cours.get(chat_id)
+    if not trade or not trade.get('prix_entree'): return
 
-            if trade['prix_entree'] is None and maintenant >= trade['heure_entree'] and maintenant < trade['heure_sortie']:
-                trades_en_cours[chat_id]['prix_entree'] = prix_actuel
+    symbole = trade['symbole']
+    prix_sortie = obtenir_prix_actuel_deriv(symbole)
+    if not prix_sortie: return
 
-            if maintenant >= trade['heure_sortie']:
-                prix_entree = trade.get('prix_entree')
-                if prix_entree:
-                    action = trade['action']
-                    gagne = (action == "CALL" and prix_actuel > prix_entree) or (action == "PUT" and prix_actuel < prix_entree)
-                    nom_paire = f"{symbole[:3]}/{symbole[3:]}"
-                    
-                    if gagne:
-                        niveaux_martingale[chat_id] = 0 # 🔥 RESET MARTINGALE
-                        texte = f"✅ **VICTOIRE (ITM)**\n🚀 Signal {nom_paire} ({action})\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_actuel}`\n👤 Client : `{chat_id}`\n🔄 **Palier Réinitialisé (Base)**"
-                        stats_journee['ITM'] += 1
-                        stats_journee['details'].append(f"✅ {nom_paire} ({action})")
-                        if symbole in cooldown_actifs: del cooldown_actifs[symbole]
-                    else:
-                        # 🔥 GESTION MARTINGALE
-                        palier_actuel = niveaux_martingale.get(chat_id, 0)
-                        if palier_actuel < MAX_MARTINGALE:
-                            niveaux_martingale[chat_id] = palier_actuel + 1
-                            statut_mg = f"⚠️ **MARTINGALE ACTIVÉE (Palier {palier_actuel + 1})**"
-                        else:
-                            niveaux_martingale[chat_id] = 0 # Arrêt d'urgence
-                            statut_mg = f"🛑 **MARTINGALE STOP (Retour à la base)**"
-                            
-                        texte = f"❌ **PERTE (OTM)**\n⚠️ Signal {nom_paire} ({action})\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_actuel}`\n👤 Client : `{chat_id}`\n{statut_mg}"
-                        stats_journee['OTM'] += 1
-                        stats_journee['details'].append(f"❌ {nom_paire} ({action})")
-                        cooldown_actifs[symbole] = time.time()
-                    
-                    try: bot.send_message(chat_id, texte, parse_mode="Markdown") # Informe aussi l'utilisateur du résultat
-                    except: pass
-                    try: bot.send_message(ADMIN_ID, texte, parse_mode="Markdown") # Informe l'admin
-                    except: pass
-                
-                a_supprimer.append(chat_id)
-        
-        for chat_id in a_supprimer:
-            del trades_en_cours[chat_id]
+    prix_entree = trade['prix_entree']
+    action = trade['action']
+
+    gagne = (action == "CALL" and prix_sortie > prix_entree) or (action == "PUT" and prix_sortie < prix_entree)
+    nom_paire = f"{symbole[:3]}/{symbole[3:]}"
+    type_emoji = "🪙" if symbole in CRYPTO_PAIRS else "💱"
+    
+    if gagne:
+        niveaux_martingale[chat_id] = 0 # RESET MARTINGALE
+        texte = f"✅ **VICTOIRE (ITM)**\n🚀 Signal {nom_paire} ({action})\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`\n👤 Client ID : `{chat_id}`\n🔄 **Palier Réinitialisé (Base)**"
+        stats_journee['ITM'] += 1
+        stats_journee['details'].append(f"✅ {type_emoji} {nom_paire} ({action})")
+        if symbole in cooldown_actifs: del cooldown_actifs[symbole]
+    else:
+        # GESTION MARTINGALE
+        palier = niveaux_martingale.get(chat_id, 0)
+        if palier < MAX_MARTINGALE:
+            niveaux_martingale[chat_id] = palier + 1
+            statut = f"⚠️ **MARTINGALE ACTIVÉE (Palier {palier + 1})**"
+        else:
+            niveaux_martingale[chat_id] = 0
+            statut = "🛑 **MARTINGALE STOP (Retour à la base)**"
             
-        time.sleep(1)
+        texte = f"❌ **PERTE (OTM)**\n⚠️ Signal {nom_paire} ({action})\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`\n👤 Client ID : `{chat_id}`\n{statut}"
+        stats_journee['OTM'] += 1
+        stats_journee['details'].append(f"❌ {type_emoji} {nom_paire} ({action})")
+        cooldown_actifs[symbole] = time.time()
+    
+    try: 
+        bot.send_message(chat_id, texte, parse_mode="Markdown") # Notifier l'utilisateur
+        bot.send_message(ADMIN_ID, texte, parse_mode="Markdown") # Notifier l'admin
+    except: pass
+        
+    if chat_id in trades_en_cours: del trades_en_cours[chat_id]
 
 # ==========================================
-# MOTEUR D'ANALYSE ( V10 )
+# MOTEUR D'ANALYSE ( GOD MODE V11 - INJECTION BÉTON )
 # ==========================================
 
 def analyser_binaire_pro(symbole):
     if symbole in cooldown_actifs and (time.time() - cooldown_actifs[symbole] < 3600):
-        return f"⚠️ **SILENCIEUX ACTIF**", None, None, None, None, None, None, None
+        return f"⚠️ **SILENCIEUX ACTIF** : {symbole} a récemment subi une manipulation (OTM). Radar coupé pendant 1 heure.", None, None, None, None, None, None, None
 
     if est_heure_de_news_dynamique() and symbole not in CRYPTO_PAIRS:
-        return "⚠️ ALERTE NEWS", None, None, None, None, None, None, None
+        return "⚠️ ALERTE NEWS : Marché manipulé, radar coupé.", None, None, None, None, None, None, None
 
+    tendance_h1 = obtenir_tendance_H1(symbole)
     candles = obtenir_donnees_deriv(symbole)
-    if not candles: return "⚠️ Erreur connexion", None, None, None, None, None, None, None
+    if not candles: return "⚠️ Impossible de se connecter au marché", None, None, None, None, None, None, None
     
     try:
         df = pd.DataFrame([{'open': float(c['open']), 'close': float(c['close']), 'high': float(c['high']), 'low': float(c['low'])} for c in candles])
         
-        tendance_m15 = obtenir_tendance_M15(symbole)
-
-        df['taille_bougie'] = abs(df['open'] - df['close'])
-        df['meche_haute'] = df['high'] - df[['open', 'close']].max(axis=1)
-        df['meche_basse'] = df[['open', 'close']].min(axis=1) - df['low']
-        
-        df['adx'] = ta.trend.ADXIndicator(high=df['high'], low=df['low'], close=df['close'], window=14).adx()
-        marche_en_mouvement = df['adx'].iloc[-1] > 20 
-
+        # Tes indicateurs d'origine
+        df['corps_bougie'] = abs(df['close'] - df['open'])
         indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
         df['bb_haute'] = indicateur_bb.bollinger_hband()
         df['bb_basse'] = indicateur_bb.bollinger_lband()
@@ -264,46 +271,209 @@ def analyser_binaire_pro(symbole):
         df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
         df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
         
+        # Injections des Filtres Béton (ADX + Price Action + Divergence)
+        df['adx'] = ta.trend.ADXIndicator(high=df['high'], low=df['low'], close=df['close'], window=14).adx()
+        df['meche_haute'] = df['high'] - df[['open', 'close']].max(axis=1)
+        df['meche_basse'] = df[['open', 'close']].min(axis=1) - df['low']
+
         atr_actuel = df['atr'].iloc[-1]
         atr_moyen = df['atr'].rolling(window=20).mean().iloc[-1]
+        corps_moyen = df['corps_bougie'].rolling(window=10).mean().iloc[-1]
+        vsa_valide = df['corps_bougie'].iloc[-1] > corps_moyen 
         
+        fvg_haussier = df['low'].iloc[-1] > df['high'].iloc[-3]
+        fvg_baissier = df['high'].iloc[-1] < df['low'].iloc[-3]
+
         last = df.iloc[-1]
         c = last['close']
         rsi_val, stoch_val = round(last['rsi'], 1), round(last['stoch_k'], 1)
         bb_h, bb_b = last['bb_haute'], last['bb_basse']
         
-        rejet_haussier = last['meche_basse'] > (last['taille_bougie'] * 1.5)
-        rejet_baissier = last['meche_haute'] > (last['taille_bougie'] * 1.5)
+        ema_actuelle = df['ema_200'].iloc[-1]
+        ema_ancienne = df['ema_200'].iloc[-5] 
+        
+        tendance_haussiere = c > ema_actuelle and tendance_h1 in ["UP", "NEUTRE"] and ema_actuelle >= ema_ancienne
+        tendance_baissiere = c < ema_actuelle and tendance_h1 in ["DOWN", "NEUTRE"] and ema_actuelle <= ema_ancienne
 
-        tendance_haussiere = c > df['ema_200'].iloc[-1]
-        tendance_baissiere = c < df['ema_200'].iloc[-1]
+        # Vérification Price Action (Mèche vs Corps)
+        rejet_haussier = last['meche_basse'] > (last['corps_bougie'] * 1.5)
+        rejet_baissier = last['meche_haute'] > (last['corps_bougie'] * 1.5)
+        
+        # Vérification ADX (Marché en mouvement)
+        marche_en_mouvement = last['adx'] > 20
 
+        # Vérification Divergence RSI
         prix_precedent_bas = df['low'].iloc[-15:-3].min()
         prix_precedent_haut = df['high'].iloc[-15:-3].max()
         rsi_precedent_bas = df['rsi'].iloc[-15:-3].min()
         rsi_precedent_haut = df['rsi'].iloc[-15:-3].max()
-
         divergence_haussiere = (last['low'] < prix_precedent_bas) and (last['rsi'] > rsi_precedent_bas)
         divergence_baissiere = (last['high'] > prix_precedent_haut) and (last['rsi'] < rsi_precedent_haut)
 
-        action, confiance, bb_status, score_algo = None, 0, "Recherche setup...", 5
+        action, confiance, bb_status, score_algo = None, 0, "Au Milieu", 5
         
+        # Expiration (Ton système de base)
         if atr_actuel > (atr_moyen * 1.5): duree_secondes, expiration_texte = 120, "2 MINUTES (Vitesse Élevée ⚡)"
         elif atr_actuel < (atr_moyen * 0.8): duree_secondes, expiration_texte = 600, "10 MINUTES (Marché Lent 🐢)"
         else: duree_secondes, expiration_texte = 300, "5 MINUTES (Standard 💎)"
 
-        if c <= bb_b and tendance_haussiere and tendance_m15 in ["UP", "NEUTRE"] and marche_en_mouvement and rejet_haussier and divergence_haussiere:
+        # NOUVELLE LOGIQUE COMBINÉE : Tes indicateurs (VSA/FVG) + Mes filtres (Rejet/ADX/Divergence)
+        if c <= bb_b and tendance_haussiere and marche_en_mouvement and rejet_haussier and divergence_haussiere:
             action, confiance = "🟢 ACHAT (CALL)", 99
-            score_algo, bb_status = 10, "Rejet Bas + DIVERGENCE + MTF M15 🚀"
+            score_algo = 10
+            bb_status = "Bande Basse + Rejet + ADX + DIVERGENCE"
+            if vsa_valide: bb_status += " + VSA"
+            if fvg_haussier: bb_status += " + SMC"
 
-        elif c >= bb_h and tendance_baissiere and tendance_m15 in ["DOWN", "NEUTRE"] and marche_en_mouvement and rejet_baissier and divergence_baissiere:
+        elif c >= bb_h and tendance_baissiere and marche_en_mouvement and rejet_baissier and divergence_baissiere:
             action, confiance = "🔴 VENTE (PUT)", 99
-            score_algo, bb_status = 10, "Rejet Haut + DIVERGENCE + MTF M15 ☄️"
+            score_algo = 10
+            bb_status = "Bande Haute + Rejet + ADX + DIVERGENCE"
+            if vsa_valide: bb_status += " + VSA"
+            if fvg_baissier: bb_status += " + SMC"
 
-        if action and score_algo >= 9: return action, confiance, expiration_texte, duree_secondes, rsi_val, stoch_val, bb_status, score_algo
-        else: return f"⚠️ Recherche de Divergence Parfaite...", None, None, None, None, None, None, None
+        if action and score_algo >= 9:
+            return action, confiance, expiration_texte, duree_secondes, rsi_val, stoch_val, bb_status, score_algo
+        else:
+            return f"⚠️ Marché instable ou en attente d'un setup parfait (Divergence/Pinbar).", None, None, None, None, None, None, None
             
-    except: return None, None, None, None, None, None, None, None
+    except Exception as e: 
+        return None, None, None, None, None, None, None, None
+
+# ==========================================
+# LE SCANNER AUTOMATIQUE DE L'OMBRE
+# ==========================================
+
+def scanner_marche_auto():
+    while True:
+        try:
+            time.sleep(60)
+            utilisateurs_a_alerter = [uid for uid in utilisateurs_actifs if est_autorise(uid)]
+            if not utilisateurs_a_alerter: continue
+                
+            maintenant = datetime.datetime.now()
+            jour_semaine = maintenant.weekday() 
+            devises_a_surveiller = CRYPTO_PAIRS if jour_semaine >= 5 else FOREX_PAIRS
+            
+            for actif in devises_a_surveiller:
+                action, confiance, exp, duree, rsi_val, stoch_val, bb_status, score = analyser_binaire_pro(actif)
+                if action and "⚠️" not in action and confiance:
+                    temps_actuel = time.time()
+                    if actif in derniere_alerte_auto and (temps_actuel - derniere_alerte_auto[actif] < 3600): continue
+                    derniere_alerte_auto[actif] = temps_actuel
+                    nom_affiche = f"{actif[:3]}/{actif[3:]}"
+                    
+                    jauge_visuelle = generer_jauge(score * 10)
+                    markup = InlineKeyboardMarkup()
+                    markup.add(InlineKeyboardButton(f"📊 Analyser {nom_affiche}", callback_data=f"set_{actif}"))
+                    
+                    alerte_msg = f"💎 **ALERTE ÉLITE BÉTON** 💎\n\nConfiguration mathématique lourde (Divergence + Rejet)\n**CONFIANCE :** {jauge_visuelle}\nCible : **{nom_affiche}**\n\n👇 *Clique sur le bouton pour déclencher la frappe !*"
+                        
+                    for chat_id in utilisateurs_a_alerter:
+                        try: bot.send_message(chat_id, alerte_msg, reply_markup=markup, parse_mode="Markdown")
+                        except: pass
+        except: pass
+
+# ==========================================
+# GESTIONNAIRE D'HORAIRES ET DE BILAN (22H00)
+# ==========================================
+
+def gestion_horaires_et_bilan():
+    global stats_journee, bilan_envoye_aujourdhui, transition_nuit_envoyee, transition_jour_envoyee
+    while True:
+        try:
+            maintenant = datetime.datetime.now()
+            heure, minute, jour_semaine = maintenant.hour, maintenant.minute, maintenant.weekday()
+            utilisateurs_a_alerter = [uid for uid in utilisateurs_actifs if est_autorise(uid)]
+
+            if jour_semaine < 5: 
+                if heure == 20 and minute == 0 and not transition_nuit_envoyee:
+                    texte_nuit = "🌉 **TRANSITION DE SESSION : MODE ASIATIQUE ACTIVÉ** 🌉\n\nLes volumes s'effondrent sur l'Europe. Le Terminal Prime bascule ses radars exclusivement sur l'Asie.\n\n*La chasse continue de nuit. Restez concentrés.* 🥷"
+                    for chat_id in utilisateurs_a_alerter:
+                        try: bot.send_message(chat_id, texte_nuit, parse_mode="Markdown")
+                        except: pass
+                    transition_nuit_envoyee, transition_jour_envoyee = True, False
+
+                elif heure == 8 and minute == 0 and not transition_jour_envoyee:
+                    texte_jour = "☀️ **TRANSITION DE SESSION : MODE EUROPE/US ACTIVÉ** ☀️\n\nOuverture des marchés majeurs. La volatilité est de retour.\n\n*Bonne journée de trading à tous les VIP !* 🚀"
+                    for chat_id in utilisateurs_a_alerter:
+                        try: bot.send_message(chat_id, texte_jour, parse_mode="Markdown")
+                        except: pass
+                    transition_jour_envoyee, transition_nuit_envoyee = True, False
+
+            if heure == 22 and minute == 0 and not bilan_envoye_aujourdhui:
+                total_trades = stats_journee['ITM'] + stats_journee['OTM']
+                if total_trades > 0:
+                    winrate = round((stats_journee['ITM'] / total_trades) * 100)
+                    texte_bilan_admin = f"📊 **BILAN VIP DE LA JOURNÉE** 📊\n──────────────────\n🎯 **Total Signaux :** {total_trades}\n✅ **Victoires (ITM) :** {stats_journee['ITM']}\n❌ **Pertes (OTM) :** {stats_journee['OTM']}\n📈 **Winrate :** {winrate}%\n──────────────────\n"
+                    for detail in stats_journee['details']: texte_bilan_admin += f"{detail}\n"
+                    try: bot.send_message(ADMIN_ID, texte_bilan_admin, parse_mode="Markdown")
+                    except: pass
+                stats_journee, bilan_envoye_aujourdhui = {'ITM': 0, 'OTM': 0, 'details': []}, True
+            elif heure == 23: bilan_envoye_aujourdhui = False
+            time.sleep(30)
+        except: time.sleep(60)
+
+# ==========================================
+# COMMANDES ADMIN ET GÉNÉRATION DE CLÉS
+# ==========================================
+
+@bot.message_handler(commands=['panel'])
+def admin_panel(message):
+    if message.chat.id != ADMIN_ID: return
+    bot.send_message(ADMIN_ID, f"Admin Panel 🔥\nCapital actuel : {CAPITAL_ACTUEL}$")
+
+@bot.message_handler(commands=['capital'])
+def voir_capital(message):
+    if message.chat.id != ADMIN_ID: return
+    bot.send_message(ADMIN_ID, f"💰 **SOLDE ACTUEL DU COMPTE** 💰\n──────────────────\n💵 Montant : `{CAPITAL_ACTUEL}$`\n──────────────────\n⚖️ *Prêt pour la prochaine session !*", parse_mode="Markdown")
+
+@bot.message_handler(func=lambda m: m.text and m.text.startswith("PRIME-"))
+def activer_cle(message):
+    cle = message.text.strip()
+    if cle in cles_generees:
+        infos_cle = cles_generees[cle]
+        if infos_cle["user_id"] != message.chat.id:
+            bot.send_message(message.chat.id, "❌ **ACCÈS REFUSÉ**", parse_mode="Markdown")
+            return
+        jours = infos_cle["jours"]
+        if jours == 999:
+            utilisateurs_autorises[message.chat.id] = "LIFETIME"
+            duree_texte = "À VIE 👑"
+        else:
+            expiration = datetime.datetime.now() + datetime.timedelta(days=jours)
+            utilisateurs_autorises[message.chat.id] = expiration
+            duree_texte = f"jusqu'au {expiration.strftime('%d/%m/%Y à %H:%M')}"
+        del cles_generees[cle] 
+        bot.send_message(message.chat.id, f"✅ **CLÉ ACCEPTÉE !** 🎉\n\nVotre abonnement est activé {duree_texte}.\n\nTapez /start pour lancer le Terminal Prime.", parse_mode="Markdown")
+    else: bot.send_message(message.chat.id, "❌ **Clé invalide, expirée ou déjà utilisée.**", parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("admin_"))
+def gerer_acces(call):
+    if call.from_user.id != ADMIN_ID: return
+    action, user_id = call.data.split("_")[1], int(call.data.split("_")[2])
+    if action == "accepter":
+        markup = InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            InlineKeyboardButton("1 Semaine", callback_data=f"gen_7_{user_id}"),
+            InlineKeyboardButton("2 Semaines 🔥", callback_data=f"gen_14_{user_id}"),
+            InlineKeyboardButton("1 Mois", callback_data=f"gen_30_{user_id}"),
+            InlineKeyboardButton("2 Mois 💎", callback_data=f"gen_60_{user_id}"),
+            InlineKeyboardButton("3 Mois ✨", callback_data=f"gen_90_{user_id}"),
+            InlineKeyboardButton("À Vie 👑", callback_data=f"gen_999_{user_id}")
+        )
+        bot.edit_message_text(f"✅ Utilisateur `{user_id}` accepté.\nChoisis la durée :", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+    elif action == "refuser": bot.edit_message_text("❌ Demande refusée.", call.message.chat.id, call.message.message_id)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("gen_"))
+def creer_cle(call):
+    if call.from_user.id != ADMIN_ID: return
+    jours, user_id = int(call.data.split("_")[1]), int(call.data.split("_")[2])
+    cle = generer_cle()
+    cles_generees[cle] = {"jours": jours, "user_id": user_id}
+    duree_texte = {7:"1 Semaine", 14:"2 Semaines", 30:"1 Mois", 60:"2 Mois", 90:"3 Mois", 999:"À VIE"}.get(jours, f"{jours} Jours")
+    msg = f"🔑 **CLÉ GÉNÉRÉE** 🔑\n\n⏳ Durée : {duree_texte}\n👤 ID : `{user_id}`\n\nCopie ce message à ton client :\n\n`{cle}`"
+    bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, parse_mode="Markdown")
 
 # ==========================================
 # COMMANDES TÉLÉGRAM ET MENUS VIP
@@ -321,29 +491,58 @@ def bienvenue(message):
     if not est_autorise(user_id):
         markup = InlineKeyboardMarkup(row_width=2)
         markup.add(InlineKeyboardButton("✅ Accepter", callback_data=f"admin_accepter_{user_id}"), InlineKeyboardButton("❌ Ignorer", callback_data=f"admin_refuser_{user_id}"))
-        try: bot.send_message(ADMIN_ID, f"🚨 **NOUVEAU CLIENT POTENTIEL** 🚨\n\n🆔 `{user_id}`", reply_markup=markup, parse_mode="Markdown")
+        try: bot.send_message(ADMIN_ID, f"🚨 **NOUVEAU CLIENT POTENTIEL** 🚨\n\n🆔 `{user_id}`\n\nGénérer un abonnement ?", reply_markup=markup, parse_mode="Markdown")
         except: pass
-        return bot.send_message(user_id, "🔒 **ACCÈS RESTREINT** 🔒\n\n📲 **Contact: [@hermann1123](https://t.me/hermann1123)**", parse_mode="Markdown")
+        return bot.send_message(user_id, "🔒 **ACCÈS RESTREINT - TERMINAL PRIVÉ** 🔒\n\nCe système est une intelligence artificielle de trading haute précision sous licence payante.\n\n📲 **Pour obtenir votre clé d'accès (Abonnement), veuillez contacter le fondateur : [@hermann1123](https://t.me/hermann1123)**", parse_mode="Markdown", disable_web_page_preview=True)
 
     utilisateurs_actifs.add(user_id)
-    niveaux_martingale[user_id] = niveaux_martingale.get(user_id, 0) # Init martingale
-    bot.send_message(message.chat.id, "🏴‍☠️ **TERMINAL PRIME - V10 (MARTINGALE)** 💸\n\nRadar institutionnel et système de recouvrement de pertes activés.", reply_markup=obtenir_clavier(), parse_mode="Markdown")
+    niveaux_martingale[user_id] = niveaux_martingale.get(user_id, 0)
+    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION GOD MODE BÉTON (V11)** 🔥
+    
+Bienvenue dans le radar institutionnel. Ce système est doté d'un cerveau de volatilité combiné à la Martingale Sécurisée.
+
+📖 **MODE D'EMPLOI :**
+1️⃣ **SÉLECTION :** Clique sur "📊 CHOISIR UNE DEVISE" pour verrouiller un actif.
+2️⃣ **RADAR :** Clique sur "🚀 LANCER L'ANALYSE" pour déclencher le scan Sniper.
+3️⃣ **MARTINGALE :** Laissez le bot calculer automatiquement vos mises !
+
+⚠️ **ATTENTION : RÉGLEZ SOIGNEUSEMENT L'HORLOGE DE POCKET BROKER SELON LE SIGNAL !** ⏱️"""
+    bot.send_message(message.chat.id, texte_bienvenue, reply_markup=obtenir_clavier(), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
 def horaires_trading(message):
-    bot.send_message(message.chat.id, "🕒 **GUIDE DES HORAIRES (GMT)** 🕒\n\n✅ 08h-11h : EUR/USD, GBP/USD\n🔥 13h30-16h30 : EUR/USD, AUD/USD\n🌉 20h-08h : AUD/JPY, USD/JPY, EUR/JPY", parse_mode="Markdown")
+    if not est_autorise(message.chat.id): return
+    texte = """🕒 **GUIDE DES HORAIRES DE TRADING (Heure GMT)** 🕒
+
+✅ **SESSION SEMAINE 1 (08h00 - 11h00) :** EUR/USD, GBP/USD
+🔥 **SESSION SEMAINE 2 (13h30 - 16h30) :** EUR/USD, AUD/USD
+🌉 **SESSION SEMAINE 3 (20h00 - 08h00) :** AUD/JPY, USD/JPY, EUR/JPY
+🪙 **SESSION WEEK-END (Samedi/Dimanche) :** CRYPTOMONNAIES UNIQUEMENT"""
+    bot.send_message(message.chat.id, texte, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "📊 CHOISIR UNE DEVISE")
 def devises(message):
     if not est_autorise(message.chat.id): return
     markup = InlineKeyboardMarkup(row_width=3)
-    if datetime.datetime.now().weekday() >= 5:
-        markup.add(InlineKeyboardButton("🪙 BTC/USD", callback_data="set_BTCUSD"), InlineKeyboardButton("🔷 ETH/USD", callback_data="set_ETHUSD"), InlineKeyboardButton("⚡ LTC/USD", callback_data="set_LTCUSD"))
-        msg = "Mode Week-End 🪙 : Crypto :"
+    jour_semaine = datetime.datetime.now().weekday()
+    
+    if jour_semaine >= 5:
+        markup.add(
+            InlineKeyboardButton("🪙 BTC/USD", callback_data="set_BTCUSD"),
+            InlineKeyboardButton("🔷 ETH/USD", callback_data="set_ETHUSD"),
+            InlineKeyboardButton("⚡ LTC/USD", callback_data="set_LTCUSD")
+        )
+        message_texte = "Mode Week-End 🪙 : Les banques sont fermées. Sélectionne la Crypto :"
     else:
-        markup.add(InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="set_EURUSD"), InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY"), InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD"))
-        msg = "Mode Semaine 💱 : Sélectionne ta cible :"
-    bot.send_message(message.chat.id, msg, reply_markup=markup)
+        markup.add(
+            InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD"), InlineKeyboardButton("🇨🇦 CAD/JPY", callback_data="set_CADJPY"), InlineKeyboardButton("🇨🇭 CHF/JPY", callback_data="set_CHFJPY"),
+            InlineKeyboardButton("🇪🇺 EUR/JPY", callback_data="set_EURJPY"), InlineKeyboardButton("🇺🇸 USD/CAD", callback_data="set_USDCAD"), InlineKeyboardButton("🇦🇺 AUD/JPY", callback_data="set_AUDJPY"),
+            InlineKeyboardButton("🇪🇺 EUR/AUD", callback_data="set_EURAUD"), InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="set_EURUSD"), InlineKeyboardButton("🇦🇺 AUD/CAD", callback_data="set_AUDCAD"),
+            InlineKeyboardButton("🇺🇸 USD/CHF", callback_data="set_USDCHF"), InlineKeyboardButton("🇨🇦 CAD/CHF", callback_data="set_CADCHF"), InlineKeyboardButton("🇪🇺 EUR/CHF", callback_data="set_EURCHF"),
+            InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY")
+        )
+        message_texte = "Mode Semaine 💱 : Arsenal Pocket Broker synchronisé. Sélectionne ta cible :"
+    bot.send_message(message.chat.id, message_texte, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
 def save_devise(call):
@@ -353,46 +552,65 @@ def save_devise(call):
     user_prefs[call.from_user.id] = actif
     nom_affiche = f"{actif[:3]}/{actif[3:]}"
     
-    msg = bot.send_message(chat_id, "⏳ *Initialisation de l'analyse Élite...*", parse_mode="Markdown")
+    try:
+        msg = bot.send_message(chat_id, "⏳ *Initialisation du scan BÉTON (Divergence/Pinbar)...*", parse_mode="Markdown")
+        time.sleep(1)
+        bot.edit_message_text("⚙️ *Lecture de l'Order Flow et calcul de la Volatilité ATR...*", chat_id, msg.message_id, parse_mode="Markdown")
+        time.sleep(1)
+    except: return
+        
     action, confiance, exp_texte, duree_secondes, rsi_val, stoch_val, bb_status, score = analyser_binaire_pro(actif)
     
-    if action and "⚠️" in action: return bot.edit_message_text(f"{action}", chat_id, msg.message_id)
-    elif not action: return bot.edit_message_text("❌ Attente du setup parfait. Les filtres RSI/MTF bloquent l'entrée.", chat_id, msg.message_id)
+    if action and "⚠️" in action:
+        try: bot.edit_message_text(f"{action}", chat_id, msg.message_id)
+        except: pass
+        return
+    elif not action:
+        try: bot.edit_message_text("❌ Échec des filtres. En attente de la Divergence parfaite.", chat_id, msg.message_id)
+        except: pass
+        return
 
-    maintenant = time.time()
-    secondes_restantes = (60 - datetime.datetime.now().second) + 60
-    if (60 - datetime.datetime.now().second) < 15: secondes_restantes += 60
-    heure_entree_dt = datetime.datetime.now() + datetime.timedelta(seconds=secondes_restantes)
+    maintenant = datetime.datetime.now()
+    secondes_restantes = (60 - maintenant.second) + 60
+    if (60 - maintenant.second) < 15: secondes_restantes += 60
+    heure_entree_dt = maintenant + datetime.timedelta(seconds=secondes_restantes)
     
-    trades_en_cours[chat_id] = {
-        'symbole': actif,
-        'action': "CALL" if "ACHAT" in action else "PUT",
-        'prix_entree': None, 
-        'heure_entree': maintenant + secondes_restantes,
-        'heure_sortie': maintenant + secondes_restantes + duree_secondes
-    }
-
-    # 🔥 CALCUL DE LA MISE AVEC MARTINGALE
-    palier_actuel = niveaux_martingale.get(chat_id, 0)
-    mise_base = CAPITAL_ACTUEL * 0.02
-    mise_calculee = mise_base * (COEF_MARTINGALE ** palier_actuel)
+    # CALCUL DYNAMIQUE DE LA MISE AVEC MARTINGALE
+    palier = niveaux_martingale.get(chat_id, 0)
+    mise_de_base = CAPITAL_ACTUEL * 0.02
+    mise_calculee = mise_de_base * (COEF_MARTINGALE ** palier)
+    info_palier = "Mise de Base" if palier == 0 else f"MARTINGALE (Palier {palier})"
     
-    info_palier = "Base" if palier_actuel == 0 else f"Martingale {palier_actuel}"
-    alerte_mg = "⚠️ **ATTENTION : TRADE DE RATTRAPAGE** ⚠️\n" if palier_actuel > 0 else ""
+    titre_signal = "🔥 SIGNAL VALIDÉ BÉTON 🔥" 
+    jauge_visuelle = generer_jauge(score * 10) 
 
-    signal = f"""💎 SIGNAL ÉLITE VALIDÉ V10 💎
+    signal = f"""{titre_signal}
 ──────────────────
 🛰 **ACTIF :** {nom_affiche}
 🎯 **ACTION :** {action}
 ⏳ **EXPIRATION :** {exp_texte}
 ──────────────────
-🛡️ **CONFIRMATION :** {bb_status} ✅
+🧠 **CONFIANCE :** {jauge_visuelle}
+🛡️ **FILTRE BÉTON :** {bb_status} ✅
+
+📊 **VALIDATION MULTI-CERVEAU :**
+➤ **RSI :** 🟢 Validé ({rsi_val})
+➤ **Stochastique :** 🟢 Validé ({stoch_val})
 ──────────────────
 📍 **ORDRE À : {heure_entree_dt.strftime("%H:%M:00")}** 👈
-{alerte_mg}💵 **MISE :** {int(mise_calculee)}$ (Palier : {info_palier})"""
+💵 **MISE :** {int(mise_calculee)}$ ({info_palier})
+──────────────────
+⚠️ *Préparez l'ordre sur Pocket Broker.*"""
 
-    bot.delete_message(chat_id, msg.message_id)
-    bot.send_message(chat_id, signal, parse_mode="Markdown")
+    try:
+        bot.delete_message(chat_id, msg.message_id)
+        bot.send_message(chat_id, signal, parse_mode="Markdown")
+    except: pass
+
+    action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
+    trades_en_cours[chat_id] = {'symbole': actif, 'action': action_simplifiee}
+    Timer(secondes_restantes, relever_prix_entree, args=[chat_id, actif]).start()
+    Timer(secondes_restantes + duree_secondes, verifier_resultat, args=[chat_id]).start()
 
 @bot.message_handler(func=lambda m: m.text == "🚀 LANCER L'ANALYSE")
 def lancer(message):
@@ -401,9 +619,46 @@ def lancer(message):
     if not actif: return bot.send_message(message.chat.id, "⚠️ Choisis d'abord une devise !")
     save_devise(type('obj', (object,), {'data': f"set_{actif}", 'message': message, 'from_user': message.from_user})())
 
+@bot.message_handler(commands=['vision'])
+def vision_marche(message):
+    if not est_autorise(message.chat.id): return
+    commande = message.text.split()
+    if len(commande) < 2: return bot.send_message(message.chat.id, "⚠️ Précise la devise. Exemple : `/vision EURUSD`", parse_mode="Markdown")
+    symbole = commande[1].upper()
+    try: msg = bot.send_message(message.chat.id, f"🔍 *Scan aux rayons X de {symbole}...*", parse_mode="Markdown")
+    except: return
+    
+    candles = obtenir_donnees_deriv(symbole)
+    if not candles: return bot.edit_message_text("⚠️ Impossible de scanner (manque de données).", message.chat.id, msg.message_id)
+        
+    try:
+        df = pd.DataFrame([{'close': float(c['close']), 'high': float(c['high']), 'low': float(c['low'])} for c in candles])
+        indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
+        bb_haute, bb_basse = indicateur_bb.bollinger_hband().iloc[-1], indicateur_bb.bollinger_lband().iloc[-1]
+        stoch_k = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch().iloc[-1]
+        rsi = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi().iloc[-1]
+        ema_200 = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator().iloc[-1]
+        prix_actuel = df['close'].iloc[-1]
+        
+        position_bb = "🔴 Au Plafond (Touche la bande haute)" if prix_actuel >= bb_haute else "🟢 Au Plancher (Touche la bande basse)" if prix_actuel <= bb_basse else "⚪ Au Milieu (Zone neutre)"
+        nom_affiche = f"{symbole[:3]}/{symbole[3:]}"
+        
+        rapport = f"""👁️ **VISION RAYONS X : {nom_affiche}** 👁️
+──────────────────
+💰 **Prix actuel :** `{prix_actuel:.5f}`
+🛡️ **EMA 200 (Tendance) :** `{ema_200:.5f}`
+📏 **Position Bollinger :** {position_bb}
+
+📊 **Niveau RSI :** `{rsi:.2f}` *(Rappel: >60 = Surchauffe, <40 = Essoufflé)*
+📉 **Niveau Stochastique :** `{stoch_k:.2f}` *(Rappel: >80 = Surachat, <20 = Survente)*
+──────────────────"""
+        rapport += "\n⚠️ *Le prix teste les limites, tiens-toi prêt !*" if position_bb != "⚪ Au Milieu (Zone neutre)" else "\n💤 *Le marché respire tranquillement.*"
+        bot.edit_message_text(rapport, message.chat.id, msg.message_id, parse_mode="Markdown")
+    except Exception as e: bot.edit_message_text(f"❌ Erreur : {e}", message.chat.id, msg.message_id)
+
 if __name__ == "__main__":
     keep_alive()
-    threading.Thread(target=demarrer_flux_deriv, daemon=True).start()
-    threading.Thread(target=gestionnaire_trades, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition V10 (Martingale) Démarrée.", flush=True)
+    Thread(target=scanner_marche_auto, daemon=True).start()
+    Thread(target=gestion_horaires_et_bilan, daemon=True).start()
+    print("⬛ BOÎTE NOIRE : Édition BÉTON DYNAMIQUE (V11) Démarrée.", flush=True)
     bot.infinity_polling()
