@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAGUU1HjmZfarjqZeiOuCMX_6s525lxpUs0"
+TELEGRAM_TOKEN = "8658287331:AAFZteJ5CH4oEvFJCS3laQtH1rbMOXE39Sk"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -312,30 +312,61 @@ def analyser_binaire_pro(symbole):
 
         action, confiance, bb_status, score_algo = None, 0, "Au Milieu", 5
         
+                # ... (Garde le début de la fonction jusqu'au calcul de l'expiration) ...
+        
         # Expiration (Ton système de base)
         if atr_actuel > (atr_moyen * 1.5): duree_secondes, expiration_texte = 120, "2 MINUTES (Vitesse Élevée ⚡)"
         elif atr_actuel < (atr_moyen * 0.8): duree_secondes, expiration_texte = 600, "10 MINUTES (Marché Lent 🐢)"
         else: duree_secondes, expiration_texte = 300, "5 MINUTES (Standard 💎)"
 
-        # NOUVELLE LOGIQUE COMBINÉE : Tes indicateurs (VSA/FVG) + Mes filtres (Rejet/ADX/Divergence)
-        if c <= bb_b and tendance_haussiere and marche_en_mouvement and rejet_haussier and divergence_haussiere:
-            action, confiance = "🟢 ACHAT (CALL)", 99
-            score_algo = 10
-            bb_status = "Bande Basse + Rejet + ADX + DIVERGENCE"
-            if vsa_valide: bb_status += " + VSA"
-            if fvg_haussier: bb_status += " + SMC"
+        # ---------------------------------------------------------
+        # SYSTÈME DE SCORING (Pour débloquer les signaux)
+        # ---------------------------------------------------------
+        
+        # 1. Les bases obligatoires (Tendance + Bollinger + Mouvement)
+        condition_achat_base = (c <= bb_b) and tendance_haussiere and marche_en_mouvement
+        condition_vente_base = (c >= bb_h) and tendance_baissiere and marche_en_mouvement
 
-        elif c >= bb_h and tendance_baissiere and marche_en_mouvement and rejet_baissier and divergence_baissiere:
-            action, confiance = "🔴 VENTE (PUT)", 99
-            score_algo = 10
-            bb_status = "Bande Haute + Rejet + ADX + DIVERGENCE"
-            if vsa_valide: bb_status += " + VSA"
-            if fvg_baissier: bb_status += " + SMC"
+        if condition_achat_base:
+            action, confiance = "🟢 ACHAT (CALL)", 85
+            score_algo = 7.0
+            bb_status = "Bande Basse + Tendance + ADX"
+            
+            # Ajout des Bonus de confirmation
+            if rejet_haussier:
+                score_algo += 1.2
+                bb_status += " + Rejet Pinbar"
+                confiance += 5
+            if divergence_haussiere:
+                score_algo += 2.0
+                bb_status += " + DIVERGENCE 🚀"
+                confiance += 9
+                
+            # Déclencheur : Il faut la base + au moins un bonus (Score >= 8.5)
+            if score_algo >= 8.5:
+                return action, min(confiance, 99), expiration_texte, duree_secondes, rsi_val, stoch_val, bb_status, score_algo
 
-        if action and score_algo >= 9:
-            return action, confiance, expiration_texte, duree_secondes, rsi_val, stoch_val, bb_status, score_algo
-        else:
-            return f"⚠️ Marché instable ou en attente d'un setup parfait (Divergence/Pinbar).", None, None, None, None, None, None, None
+        elif condition_vente_base:
+            action, confiance = "🔴 VENTE (PUT)", 85
+            score_algo = 7.0
+            bb_status = "Bande Haute + Tendance + ADX"
+            
+            # Ajout des Bonus de confirmation
+            if rejet_baissier:
+                score_algo += 1.2
+                bb_status += " + Rejet Pinbar"
+                confiance += 5
+            if divergence_baissiere:
+                score_algo += 2.0
+                bb_status += " + DIVERGENCE ☄️"
+                confiance += 9
+                
+            # Déclencheur : Il faut la base + au moins un bonus (Score >= 8.5)
+            if score_algo >= 8.5:
+                return action, min(confiance, 99), expiration_texte, duree_secondes, rsi_val, stoch_val, bb_status, score_algo
+
+        # Si aucune condition n'est remplie ou score insuffisant
+        return f"⚠️ En attente d'une confirmation de rebond (Pinbar ou Divergence).", None, None, None, None, None, None, None
             
     except Exception as e: 
         return None, None, None, None, None, None, None, None
