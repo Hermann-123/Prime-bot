@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAHY2RI-epznQ8EWX1WSX7FgAkl31YweiG0"
+TELEGRAM_TOKEN = "8658287331:AAEmwLMtrA9GSt8WcbOFXyPFCdld3SrDNx0"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -37,7 +37,7 @@ user_prefs = {}
 trades_en_cours = {}
 utilisateurs_actifs = set()
 derniere_alerte_auto = {}
-cooldown_actifs = {} # Mémoire anti-fakeout (stocke l'heure ET le sens perdu)
+cooldown_actifs = {} 
 niveaux_martingale = {} 
 
 utilisateurs_autorises = {
@@ -70,7 +70,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition GOD MODE PULLBACK (V13 - FANTÔME)"
+    return "Terminal Prime VIP : Édition GOD MODE PULLBACK + PRICE ACTION"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -241,9 +241,8 @@ def verifier_resultat(chat_id):
         if palier_actuel > 0:
             stats_journee['OTM'] += 1
             stats_journee['details'].append(f"❌ {type_emoji} {nom_paire} ({action})")
-            
-        # Le bouclier Anti-Fakeout enregistre le SENS du trade perdu
-        cooldown_actifs[symbole] = {'time': time.time(), 'action': action}
+            # ACTIVATION DU BOUCLIER UNIQUEMENT SI LE VRAI CAPITAL EST PERDU
+            cooldown_actifs[symbole] = {'time': time.time(), 'action': action}
     
     try: 
         bot.send_message(chat_id, texte, parse_mode="Markdown")
@@ -253,7 +252,7 @@ def verifier_resultat(chat_id):
     if chat_id in trades_en_cours: del trades_en_cours[chat_id]
 
 # ==========================================
-# MOTEUR D'ANALYSE ( V13 - PULLBACK & FANTÔME )
+# MOTEUR D'ANALYSE ( PULLBACK + PRICE ACTION VIP )
 # ==========================================
 
 def analyser_binaire_pro(symbole):
@@ -271,52 +270,74 @@ def analyser_binaire_pro(symbole):
         indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
         df['bb_haute'] = indicateur_bb.bollinger_hband()
         df['bb_basse'] = indicateur_bb.bollinger_lband()
-        df['bb_milieu'] = indicateur_bb.bollinger_mavg() # La ligne médiane (SMA 20)
+        df['bb_milieu'] = indicateur_bb.bollinger_mavg()
         
         df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
         df['stoch_k'] = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch()
         df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
         df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
         df['adx'] = ta.trend.ADXIndicator(high=df['high'], low=df['low'], close=df['close'], window=14).adx()
+        
+        df['meche_haute'] = df['high'] - df[['open', 'close']].max(axis=1)
+        df['meche_basse'] = df[['open', 'close']].min(axis=1) - df['low']
 
         atr_actuel = df['atr'].iloc[-1]
         atr_moyen = df['atr'].rolling(window=20).mean().iloc[-1]
         
         last = df.iloc[-1]
+        prev = df.iloc[-2]
         c = last['close']
         rsi_val, stoch_val = round(last['rsi'], 1), round(last['stoch_k'], 1)
         
+        # --- DÉTECTION DES BOUGIES VIP (PRICE ACTION) ---
+        last_is_green = last['close'] > last['open']
+        last_is_red = last['close'] < last['open']
+        prev_is_green = prev['close'] > prev['open']
+        prev_is_red = prev['close'] < prev['open']
+        
+        # Avalement (Engulfing)
+        avalement_haussier = prev_is_red and last_is_green and (last['close'] > prev['open']) and (last['open'] <= prev['close'])
+        avalement_baissier = prev_is_green and last_is_red and (last['close'] < prev['open']) and (last['open'] >= prev['close'])
+        
+        # Pinbar (Marteau / Étoile Filante) avec rejet violent
+        rejet_haussier = last['meche_basse'] > (last['corps_bougie'] * 2.0)
+        rejet_baissier = last['meche_haute'] > (last['corps_bougie'] * 2.0)
+
         # --- LOGIQUE V13 : PULLBACK (Suivi de Tendance Actif) ---
-        # 1. Détection de la tendance lourde
         tendance_haussiere = c > df['ema_200'].iloc[-1]
         tendance_baissiere = c < df['ema_200'].iloc[-1]
+        marche_en_mouvement = last['adx'] > 18 
         
-        # 2. Vérification du carburant (Le marché bouge-t-il ?)
-        marche_en_mouvement = last['adx'] > 18 # Assez sensible pour attraper les tendances 
-        
-        # 3. Les conditions de "Respiration" (Pullback)
-        # ACHAT : Tendance Haussière + Le Stochastique a respiré en bas (< 35) + RSI propre (> 45)
+        # Conditions de "Respiration" (Pullback)
         condition_achat = tendance_haussiere and marche_en_mouvement and (stoch_val < 35) and (rsi_val > 45)
-        
-        # VENTE : Tendance Baissière + Le Stochastique a respiré en haut (> 65) + RSI propre (< 55)
         condition_vente = tendance_baissiere and marche_en_mouvement and (stoch_val > 65) and (rsi_val < 55)
 
         action, confiance, bb_status, score_algo = None, 0, "En Attente", 5
         
-        # Calculateur Dynamique de l'Expiration
         if atr_actuel > (atr_moyen * 1.5): duree_secondes, expiration_texte = 120, "2 MINUTES (Vitesse Élevée ⚡)"
         elif atr_actuel < (atr_moyen * 0.8): duree_secondes, expiration_texte = 600, "10 MINUTES (Marché Lent 🐢)"
         else: duree_secondes, expiration_texte = 300, "5 MINUTES (Standard 💎)"
 
+        # ANALYSE ET APPLICATION DES BONUS PRICE ACTION
         if condition_achat:
             action, confiance = "🟢 ACHAT (CALL)", 85
             score_algo = 9.0
             bb_status = "🎯 Pullback Haussier (Stochastique Bas)"
             
+            if avalement_haussier or rejet_haussier:
+                score_algo = 10.0
+                confiance = 99
+                bb_status = "👑 PULLBACK + PRICE ACTION (Avalement/Marteau) 🚀"
+            
         elif condition_vente:
             action, confiance = "🔴 VENTE (PUT)", 85
             score_algo = 9.0
             bb_status = "🎯 Pullback Baissier (Stochastique Haut)"
+            
+            if avalement_baissier or rejet_baissier:
+                score_algo = 10.0
+                confiance = 99
+                bb_status = "👑 PULLBACK + PRICE ACTION (Avalement/Étoile) ☄️"
 
         if action:
             # BOUCLIER ANTI-FAKEOUT DIRECTIONNEL
@@ -382,7 +403,14 @@ def save_devise(call):
 
     # 💎 SI PALIER 1 ou 2 -> ALERTE VIP PREMIUM
     else:
-        titre_signal = "🚨 ALERTE PULLBACK INSTITUTIONNELLE 🚨" if score >= 9 else "⚡ FRAPPE DE RATTRAPAGE VIP ⚡"
+        # MISE À JOUR DU TITRE SELON LE SCORE (PRICE ACTION)
+        if score >= 10:
+            titre_signal = "👑 CONFIGURATION SUPRÊME (PRICE ACTION) 👑"
+        elif score >= 9:
+            titre_signal = "🚨 ALERTE PULLBACK INSTITUTIONNELLE 🚨"
+        else:
+            titre_signal = "⚡ FRAPPE DE RATTRAPAGE VIP ⚡"
+            
         signal = f"""{titre_signal}
 
 🌐 **ACTIF :** {nom_affiche}
@@ -429,7 +457,7 @@ def bienvenue(message):
 
     utilisateurs_actifs.add(user_id)
     niveaux_martingale[user_id] = niveaux_martingale.get(user_id, 0)
-    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - V13 PULLBACK & FANTÔME** 🔥
+    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - V13 (PULLBACK + PRICE ACTION)** 🔥
     
 Bienvenue dans le radar institutionnel. Ce système traque les tendances et utilise le **Mode Fantôme**.
 
@@ -549,5 +577,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestion_horaires_et_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition V13 PULLBACK FANTÔME Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition PULLBACK + PRICE ACTION Démarrée.", flush=True)
     bot.infinity_polling()
