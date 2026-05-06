@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAEmwLMtrA9GSt8WcbOFXyPFCdld3SrDNx0"
+TELEGRAM_TOKEN = "8658287331:AAG-ZKL58l0w9mS6fjCaodEDryb-kmPuGEo"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -70,7 +70,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition GOD MODE PULLBACK + PRICE ACTION"
+    return "Terminal Prime VIP : Édition GOD MODE PULLBACK + PRICE ACTION (FOCUS ACTIVÉ)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -231,7 +231,7 @@ def verifier_resultat(chat_id):
         if palier_actuel < MAX_MARTINGALE:
             niveaux_martingale[chat_id] = palier_actuel + 1
             if palier_actuel == 0:
-                texte = f"⚠️ **PIÈGE DÉTECTÉ (Mode Fantôme)**\nLe trade virtuel a échoué ! La voie est libre.\n🔥 **PRÉPAREZ-VOUS POUR LE PALIER 1** 🔥"
+                texte = f"⚠️ **PIÈGE DÉTECTÉ (Mode Fantôme)**\nLe trade virtuel a échoué ! La voie est libre.\n🔥 **PRÉPAREZ-VOUS POUR LE PALIER 1 ({nom_paire})** 🔥"
             else:
                 texte = f"❌ **PERTE (OTM)**\n⚠️ Signal {nom_paire} ({action})\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`\n⚠️ **MARTINGALE ACTIVÉE (Palier {palier_actuel + 1})**"
         else:
@@ -249,6 +249,7 @@ def verifier_resultat(chat_id):
         if palier_actuel > 0 or gagne: bot.send_message(ADMIN_ID, texte, parse_mode="Markdown")
     except: pass
         
+    # Fin de l'attente, on déverrouille le Focus
     if chat_id in trades_en_cours: del trades_en_cours[chat_id]
 
 # ==========================================
@@ -361,6 +362,14 @@ def analyser_binaire_pro(symbole):
 def save_devise(call):
     chat_id = call.message.chat.id
     if not est_autorise(chat_id): return
+    
+    # --- SÉCURITÉ : VERROUILLAGE FOCUS ---
+    if chat_id in trades_en_cours:
+        symbole_en_cours = trades_en_cours[chat_id]['symbole']
+        bot.answer_callback_query(call.id, f"⚠️ Trade en cours sur {symbole_en_cours}. Patientez !", show_alert=True)
+        return
+    # -------------------------------------
+    
     actif = call.data.replace("set_", "")
     user_prefs[call.from_user.id] = actif
     nom_affiche = f"{actif[:3]}/{actif[3:]}"
@@ -435,7 +444,9 @@ def save_devise(call):
     except: pass
 
     action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
+    # Verrouillage Activé !
     trades_en_cours[chat_id] = {'symbole': actif, 'action': action_simplifiee}
+    
     Timer(secondes_restantes, relever_prix_entree, args=[chat_id, actif]).start()
     Timer(secondes_restantes + duree_secondes, verifier_resultat, args=[chat_id]).start()
 
@@ -457,14 +468,15 @@ def bienvenue(message):
 
     utilisateurs_actifs.add(user_id)
     niveaux_martingale[user_id] = niveaux_martingale.get(user_id, 0)
-    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - V13 (PULLBACK + PRICE ACTION)** 🔥
+    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - V13 (PULLBACK + FOCUS)** 🔥
     
-Bienvenue dans le radar institutionnel. Ce système traque les tendances et utilise le **Mode Fantôme**.
+Bienvenue dans le radar institutionnel. Ce système traque les tendances et gère ton focus.
 
 📖 **COMMENT ÇA MARCHE ?**
 1️⃣ Le bot trade le Palier 0 de manière INVISIBLE (Pullback).
 2️⃣ **Tu ne trades pas ce signal ! Laisse-le purger le marché.**
-3️⃣ S'il perd son trade virtuel, il déclenche l'Alerte VIP. C'est LÀ que tu entres avec la Martingale 1 !
+3️⃣ S'il perd son trade virtuel, il déclenche l'Alerte VIP (Palier 1).
+4️⃣ **FOCUS :** Une fois en attente d'un résultat, le bot bloque tout pour t'empêcher de faire de l'overtrading.
 
 ⚠️ **ATTENTION : RÉGLEZ SOIGNEUSEMENT L'HORLOGE DE POCKET BROKER !** ⏱️"""
     bot.send_message(message.chat.id, texte_bienvenue, reply_markup=obtenir_clavier(), parse_mode="Markdown")
@@ -496,7 +508,15 @@ def devises(message):
 
 @bot.message_handler(func=lambda m: m.text == "🚀 LANCER L'ANALYSE")
 def lancer(message):
-    if not est_autorise(message.chat.id): return
+    chat_id = message.chat.id
+    if not est_autorise(chat_id): return
+    
+    # --- SÉCURITÉ : VERROUILLAGE FOCUS ---
+    if chat_id in trades_en_cours:
+        symbole_en_cours = trades_en_cours[chat_id]['symbole']
+        return bot.send_message(chat_id, f"⚠️ **FOCUS ACTIVÉ** : Le bot surveille actuellement le résultat de **{symbole_en_cours}**. Veuillez patienter.", parse_mode="Markdown")
+    # -------------------------------------
+    
     actif = user_prefs.get(message.from_user.id)
     if not actif: return bot.send_message(message.chat.id, "⚠️ Choisis d'abord une devise !")
     save_devise(type('obj', (object,), {'data': f"set_{actif}", 'message': message, 'from_user': message.from_user})())
@@ -533,7 +553,9 @@ def scanner_marche_auto():
     while True:
         try:
             time.sleep(60)
-            utilisateurs_a_alerter = [uid for uid in utilisateurs_actifs if est_autorise(uid)]
+            
+            # --- VERROUILLAGE 1 : On ignore les utilisateurs en attente d'un résultat
+            utilisateurs_a_alerter = [uid for uid in utilisateurs_actifs if est_autorise(uid) and uid not in trades_en_cours]
             if not utilisateurs_a_alerter: continue
                 
             maintenant = datetime.datetime.now()
@@ -552,6 +574,17 @@ def scanner_marche_auto():
                     alerte_msg = f"🔔 **MOUVEMENT DÉTECTÉ SUR {nom_affiche}** 🔔\n\n👇 *Clique pour que le bot gère l'entrée (Fantôme ou VIP) !*"
                         
                     for chat_id in utilisateurs_a_alerter:
+                        
+                        # --- VERROU DE FOCUS MARTINGALE ---
+                        palier_actuel = niveaux_martingale.get(chat_id, 0)
+                        devise_en_cours = user_prefs.get(chat_id)
+                        
+                        # Si l'utilisateur est en plein rattrapage (Palier 1 ou 2), 
+                        # on bloque toutes les alertes qui ne sont pas sa devise !
+                        if palier_actuel > 0 and actif != devise_en_cours:
+                            continue 
+                        # ----------------------------------
+                        
                         try: bot.send_message(chat_id, alerte_msg, reply_markup=markup, parse_mode="Markdown")
                         except: pass
         except: pass
@@ -577,5 +610,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestion_horaires_et_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition PULLBACK + PRICE ACTION Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition V13 PULLBACK + FOCUS Démarrée.", flush=True)
     bot.infinity_polling()
