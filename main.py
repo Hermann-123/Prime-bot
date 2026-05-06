@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAFTMMBwN0wriH9eNGnbU8Ki6vLU9n5Los4"
+TELEGRAM_TOKEN = "8658287331:AAEPLltvg8ZcqCzOiopGfGcPvV7F1-N-b-8"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -27,7 +27,7 @@ FMP_API_KEY = os.environ.get("FMP_API_KEY", "D0srw6sB3otYTc00UdBE9otPIbhkKV8X")
 
 # 🔴 CONFIGURATION MARTINGALE SÉCURISÉE
 COEF_MARTINGALE = 2.5
-MAX_MARTINGALE = 3  # <--- Change cette ligne pour autoriser le 3ème tir
+MAX_MARTINGALE = 3  # <--- Le bot est autorisé à aller jusqu'au 3ème Palier
 
 # ==========================================
 # VARIABLES D'ÉTAT ET ROUTAGE
@@ -474,7 +474,7 @@ def save_devise(call):
         if (60 - maintenant.second) < 15: 
             secondes_restantes += 60
         
-    heure_entree_p0 = maint-enant + datetime.timedelta(seconds=secondes_restantes)
+    heure_entree_p0 = maintenant + datetime.timedelta(seconds=secondes_restantes)
     
     fmt = "%H:%M:%S" if mode_actuel == "SCALP" else "%H:%M:00"
     jauge_visuelle = generer_jauge(score * 10) 
@@ -527,7 +527,6 @@ def save_devise(call):
 🛡️ {bb_status}
 
 📌 *Instruction : Laissez le bot encaisser le premier faux mouvement à l'heure du Fantôme. S'il perd, entrez en force au Palier 1 !*"""
-
 
     else:
         # Affichage classique Standard
