@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAF85Poh7yWC42faZmy7BCfsZiupI5ppyYQ"
+TELEGRAM_TOKEN = "8658287331:AAFTMMBwN0wriH9eNGnbU8Ki6vLU9n5Los4"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -27,7 +27,7 @@ FMP_API_KEY = os.environ.get("FMP_API_KEY", "D0srw6sB3otYTc00UdBE9otPIbhkKV8X")
 
 # 🔴 CONFIGURATION MARTINGALE SÉCURISÉE
 COEF_MARTINGALE = 2.5
-MAX_MARTINGALE = 2
+MAX_MARTINGALE = 3  # <--- Change cette ligne pour autoriser le 3ème tir
 
 # ==========================================
 # VARIABLES D'ÉTAT ET ROUTAGE
@@ -474,7 +474,7 @@ def save_devise(call):
         if (60 - maintenant.second) < 15: 
             secondes_restantes += 60
         
-    heure_entree_p0 = maintenant + datetime.timedelta(seconds=secondes_restantes)
+    heure_entree_p0 = maint-enant + datetime.timedelta(seconds=secondes_restantes)
     
     fmt = "%H:%M:%S" if mode_actuel == "SCALP" else "%H:%M:00"
     jauge_visuelle = generer_jauge(score * 10) 
@@ -486,37 +486,48 @@ def save_devise(call):
         temps_pause = 60
         heure_entree_p1 = heure_entree_p0 + datetime.timedelta(seconds=duree_secondes + temps_pause)
         heure_entree_p2 = heure_entree_p1 + datetime.timedelta(seconds=duree_secondes + temps_pause)
+        heure_entree_p3 = heure_entree_p2 + datetime.timedelta(seconds=duree_secondes + temps_pause)
         
-        str_p0, str_p1, str_p2 = heure_entree_p0.strftime(fmt), heure_entree_p1.strftime(fmt), heure_entree_p2.strftime(fmt)
+        str_p0 = heure_entree_p0.strftime(fmt)
+        str_p1 = heure_entree_p1.strftime(fmt)
+        str_p2 = heure_entree_p2.strftime(fmt)
+        str_p3 = heure_entree_p3.strftime(fmt)
         
-        # MODIFICATION : Intégration du Fantôme (Palier 0 = 0$)
+        # Calcul des mises réelles après le Fantôme
         mise_p1 = int(CAPITAL_ACTUEL * 0.02)
         mise_p2 = int(mise_p1 * COEF_MARTINGALE)
+        mise_p3 = int(mise_p2 * COEF_MARTINGALE)
         
         signal = f"""⚡ **SCALP HAUTE FRÉQUENCE** ⚡
-
+──────────────────
 🌐 **ACTIF :** {nom_affiche}
+👻 **TIR INITIAL (Fantôme)**
+⏱ Heure : `{str_p0}` 
 👉 **ACTION :** {action}
 ⏳ **EXPIRATION :** {exp_texte}
-🧠 **CONFIANCE :** {jauge_visuelle}
-
+💵 Mise : `0$ (TEST VIRTUEL)`
+──────────────────
 📋 **PLAN DE TIR (AVEC BOUCLIER FANTÔME) :**
 ──────────────────
-👻 **1️⃣ TIR INITIAL (Fantôme)**
-⏱ Heure : `{str_p0}` 
-💵 Mise : `0$ (TEST VIRTUEL - NE PAS CLIQUER)`
-
-🔥 **2️⃣ SI FANTÔME PERD ➔ PALIER 1 (Vrai Tir)**
-⏱ Heure : `{str_p1}` *(1 min de pause pour préparer)*
+💥 **1️⃣ SI FANTÔME PERD ➔ PALIER 1 (Vrai Tir)**
+👉 **ACTION :** {action}
+⏱ Heure : `{str_p1}`
 💵 Mise : `{mise_p1}$`
-
-💥 **3️⃣ SI PALIER 1 PERD ➔ PALIER 2 (Martingale)**
-⏱ Heure : `{str_p2}` *(1 min de pause pour préparer)*
+──────────────────
+💥 **2️⃣ SI PALIER 1 PERD ➔ PALIER 2 (Martingale)**
+👉 **ACTION :** {action}
+⏱ Heure : `{str_p2}`
 💵 Mise : `{mise_p2}$`
+──────────────────
+💥 **3️⃣ SI PALIER 2 PERD ➔ PALIER 3 (Martingale)**
+👉 **ACTION :** {action}
+⏱ Heure : `{str_p3}`
+💵 Mise : `{mise_p3}$`
 ──────────────────
 🛡️ {bb_status}
 
 📌 *Instruction : Laissez le bot encaisser le premier faux mouvement à l'heure du Fantôme. S'il perd, entrez en force au Palier 1 !*"""
+
 
     else:
         # Affichage classique Standard
