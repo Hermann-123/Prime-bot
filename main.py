@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAEUeMdQrtGzCfeIqi8VjuQs4SqnHF1HZ6g"
+TELEGRAM_TOKEN = "8658287331:AAF85Poh7yWC42faZmy7BCfsZiupI5ppyYQ"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -244,9 +244,15 @@ def verifier_resultat(chat_id):
     
     if gagne:
         niveaux_martingale[chat_id] = 0 # RESET
-        texte = f"✅ **CIBLE ABATTUE (ITM)**\n🚀 {nom_paire} ({action})\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`\n🔓 *Radar déverrouillé, reprise du scan...*"
-        stats_journee['ITM'] += 1
-        stats_journee['details'].append(f"✅ {type_emoji} {nom_paire} ({action})")
+        
+        # GESTION DES MESSAGES DE VICTOIRE (FANTÔME VS VRAI TRADE)
+        if palier_actuel == 0:
+            texte = f"👻 **FANTÔME RÉUSSI (ITM)**\nLe trade virtuel sur {nom_paire} est passé sans nous. Le bot reprend ses recherches.\n🔓 *Radar déverrouillé.*"
+        else:
+            texte = f"✅ **CIBLE ABATTUE (ITM)**\n🚀 {nom_paire} ({action})\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`\n🔓 *Radar déverrouillé, reprise du scan...*"
+            stats_journee['ITM'] += 1
+            stats_journee['details'].append(f"✅ {type_emoji} {nom_paire} ({action})")
+            
         if symbole in cooldown_actifs: del cooldown_actifs[symbole]
         
         # PORTE OUVERTE
@@ -256,7 +262,11 @@ def verifier_resultat(chat_id):
         if palier_actuel < MAX_MARTINGALE:
             niveaux_martingale[chat_id] = palier_actuel + 1
             
-            texte = f"⚠️ **TIR RATÉ - PRÉPARATION PALIER {palier_actuel + 1}**\n📉 Sortie : `{prix_sortie}`\n\n🤫 *Silence radio activé. Je bloque les autres signaux pour te laisser exécuter ton Plan de Tir sur {nom_paire} !*"
+            # GESTION DES MESSAGES D'ÉCHEC ET SILENCE RADIO
+            if palier_actuel == 0:
+                texte = f"⚠️ **PIÈGE BROKER DÉTECTÉ (Fantôme Échoué)**\n📉 Sortie : `{prix_sortie}`\n\n🔥 Le piège est désamorcé ! **PRÉPAREZ-VOUS POUR LE PALIER 1 ({nom_paire})**.\n🤫 *Silence radio activé pendant votre tir.*"
+            else:
+                texte = f"⚠️ **TIR RATÉ - PRÉPARATION PALIER {palier_actuel + 1}**\n📉 Sortie : `{prix_sortie}`\n\n🤫 *Silence radio maintenu.*"
             
             # 🔴 SILENCE RADIO : On relance le timer (Pause de 1 min + Durée du trade)
             duree_blocage = 120 if mode_trade == "SCALP" else 360 
@@ -265,8 +275,9 @@ def verifier_resultat(chat_id):
         else:
             niveaux_martingale[chat_id] = 0
             texte = f"🛑 **FIN DE SÉQUENCE ATTEINTE (OTM)**\n⚠️ {nom_paire} ({action})\nRepli tactique. Radar réactivé."
-            stats_journee['OTM'] += 1
-            stats_journee['details'].append(f"❌ {type_emoji} {nom_paire} ({action})")
+            if palier_actuel > 0:
+                stats_journee['OTM'] += 1
+                stats_journee['details'].append(f"❌ {type_emoji} {nom_paire} ({action})")
             cooldown_actifs[symbole] = {'time': time.time(), 'action': action}
             
             # PORTE OUVERTE
@@ -451,12 +462,17 @@ def save_devise(call):
         return
 
     maintenant = datetime.datetime.now()
+    
+    # ⏱️ NOUVEAU CALCUL DE LA MARGE DE SÉCURITÉ DE PRÉPARATION
     if mode_actuel == "SCALP":
         secondes_restantes = (60 - maintenant.second)
-        if secondes_restantes < 5: secondes_restantes += 60 
+        # Si moins de 45 secondes pour se préparer, on ajoute une minute complète !
+        if secondes_restantes < 45: 
+            secondes_restantes += 60 
     else:
         secondes_restantes = (60 - maintenant.second) + 60
-        if (60 - maintenant.second) < 15: secondes_restantes += 60
+        if (60 - maintenant.second) < 15: 
+            secondes_restantes += 60
         
     heure_entree_p0 = maintenant + datetime.timedelta(seconds=secondes_restantes)
     
@@ -472,8 +488,9 @@ def save_devise(call):
         heure_entree_p2 = heure_entree_p1 + datetime.timedelta(seconds=duree_secondes + temps_pause)
         
         str_p0, str_p1, str_p2 = heure_entree_p0.strftime(fmt), heure_entree_p1.strftime(fmt), heure_entree_p2.strftime(fmt)
-        mise_p0 = int(CAPITAL_ACTUEL * 0.02)
-        mise_p1 = int(mise_p0 * COEF_MARTINGALE)
+        
+        # MODIFICATION : Intégration du Fantôme (Palier 0 = 0$)
+        mise_p1 = int(CAPITAL_ACTUEL * 0.02)
         mise_p2 = int(mise_p1 * COEF_MARTINGALE)
         
         signal = f"""⚡ **SCALP HAUTE FRÉQUENCE** ⚡
@@ -483,23 +500,23 @@ def save_devise(call):
 ⏳ **EXPIRATION :** {exp_texte}
 🧠 **CONFIANCE :** {jauge_visuelle}
 
-📋 **PLAN DE TIR (SÉQUENCE MARTINGALE) :**
+📋 **PLAN DE TIR (AVEC BOUCLIER FANTÔME) :**
 ──────────────────
-1️⃣ **TIR INITIAL (Base)**
+👻 **1️⃣ TIR INITIAL (Fantôme)**
 ⏱ Heure : `{str_p0}` 
-💵 Mise : `{mise_p0}$`
+💵 Mise : `0$ (TEST VIRTUEL - NE PAS CLIQUER)`
 
-2️⃣ **SI PERTE ➔ PALIER 1**
+🔥 **2️⃣ SI FANTÔME PERD ➔ PALIER 1 (Vrai Tir)**
 ⏱ Heure : `{str_p1}` *(1 min de pause pour préparer)*
 💵 Mise : `{mise_p1}$`
 
-3️⃣ **SI PERTE ➔ PALIER 2**
+💥 **3️⃣ SI PALIER 1 PERD ➔ PALIER 2 (Martingale)**
 ⏱ Heure : `{str_p2}` *(1 min de pause pour préparer)*
 💵 Mise : `{mise_p2}$`
 ──────────────────
 🛡️ {bb_status}
 
-📌 *Instruction : Ne passez au palier suivant QUE si le précédent se clôture en perte. Entrez pile à la seconde 00 et gardez TOUJOURS la même direction !*"""
+📌 *Instruction : Laissez le bot encaisser le premier faux mouvement à l'heure du Fantôme. S'il perd, entrez en force au Palier 1 !*"""
 
     else:
         # Affichage classique Standard
