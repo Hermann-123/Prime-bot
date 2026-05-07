@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAEPLltvg8ZcqCzOiopGfGcPvV7F1-N-b-8"
+TELEGRAM_TOKEN = "8658287331:AAEuuYUoHmX12NOPaMkylSsREVHnUu2I9m4"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -52,8 +52,6 @@ stats_journee = {
     'details': []
 }
 
-bilan_envoye_aujourdhui = False
-
 CRYPTO_PAIRS = ["BTCUSD", "ETHUSD", "LTCUSD"]
 FOREX_PAIRS = [
     "AUDUSD", "CADJPY", "CHFJPY", "EURJPY", "USDCAD", 
@@ -69,7 +67,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition HYBRIDE V13.5 (Standard + Scalp + Silence Radio)"
+    return "Terminal Prime VIP : Édition HYBRIDE V13.6 (Standard + Scalp + Rayon X)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -216,6 +214,42 @@ def obtenir_prix_actuel_deriv(symbole_brut):
     return None
 
 # ==========================================
+# RAYON X (VISION MARCHE)
+# ==========================================
+
+@bot.message_handler(commands=['vision'])
+def vision_marche(message):
+    if not est_autorise(message.chat.id): return
+    if message.chat.id in trades_en_cours:
+        return bot.send_message(message.chat.id, "⚠️ **SILENCE RADIO** : Vous êtes en plein combat !", parse_mode="Markdown")
+        
+    commande = message.text.split()
+    if len(commande) < 2: return bot.send_message(message.chat.id, "⚠️ Précise la devise. Exemple : `/vision EURUSD`", parse_mode="Markdown")
+    symbole = commande[1].upper()
+    
+    try: msg = bot.send_message(message.chat.id, f"🔍 *Scan aux rayons X de {symbole}...*", parse_mode="Markdown")
+    except: return
+    
+    candles = obtenir_donnees_deriv(symbole)
+    if not candles: return bot.edit_message_text("⚠️ Impossible de scanner le marché actuel.", message.chat.id, msg.message_id)
+        
+    try:
+        df = pd.DataFrame([{'close': float(c['close']), 'high': float(c['high']), 'low': float(c['low'])} for c in candles])
+        indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
+        bb_haute, bb_basse = indicateur_bb.bollinger_hband().iloc[-1], indicateur_bb.bollinger_lband().iloc[-1]
+        stoch_k = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close']).stoch().iloc[-1]
+        rsi = ta.momentum.RSIIndicator(close=df['close']).rsi().iloc[-1]
+        ema_200 = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator().iloc[-1]
+        adx = ta.trend.ADXIndicator(high=df['high'], low=df['low'], close=df['close']).adx().iloc[-1]
+        prix_actuel = df['close'].iloc[-1]
+        
+        rapport = f"👁️ **VISION RAYONS X : {symbole}** 👁️\n──────────────────\n💰 **Prix :** `{prix_actuel:.5f}`\n🛡️ **Tendance (EMA 200) :** `{'Hausse 🟢' if prix_actuel > ema_200 else 'Baisse 🔴'}`\n🚀 **Force (ADX) :** `{adx:.2f}`\n📊 **RSI :** `{rsi:.2f}`\n📉 **Stochastique :** `{stoch_k:.2f}`\n──────────────────"
+        bot.edit_message_text(rapport, message.chat.id, msg.message_id, parse_mode="Markdown")
+    except Exception as e: 
+        bot.edit_message_text("❌ Erreur lors de l'analyse.", message.chat.id, msg.message_id)
+
+
+# ==========================================
 # SYSTÈME DE VÉRIFICATION & SILENCE RADIO
 # ==========================================
 
@@ -226,6 +260,10 @@ def relever_prix_entree(chat_id, symbole):
 
 def verifier_resultat(chat_id):
     global stats_journee, cooldown_actifs, niveaux_martingale
+    
+    # ⏱️ AMORTISSEUR BROKER : On laisse 3 secondes au broker pour figer définitivement sa bougie
+    time.sleep(3)
+    
     trade = trades_en_cours.get(chat_id)
     if not trade or not trade.get('prix_entree'): return
 
@@ -236,7 +274,6 @@ def verifier_resultat(chat_id):
     prix_entree = trade['prix_entree']
     action = trade['action']
     palier_actuel = niveaux_martingale.get(chat_id, 0)
-    mode_trade = mode_trading.get(chat_id, "STANDARD")
 
     gagne = (action == "CALL" and prix_sortie > prix_entree) or (action == "PUT" and prix_sortie < prix_entree)
     nom_paire = f"{symbole[:3]}/{symbole[3:]}"
@@ -255,7 +292,7 @@ def verifier_resultat(chat_id):
             
         if symbole in cooldown_actifs: del cooldown_actifs[symbole]
         
-        # PORTE OUVERTE
+        # LE TRADE EST GAGNÉ, ON DÉTRUIT LE VERROU
         if chat_id in trades_en_cours: del trades_en_cours[chat_id]
         
     else:
@@ -268,8 +305,8 @@ def verifier_resultat(chat_id):
             else:
                 texte = f"⚠️ **TIR RATÉ - PRÉPARATION PALIER {palier_actuel + 1}**\n📉 Sortie : `{prix_sortie}`\n\n🤫 *Silence radio maintenu.*"
             
-            # 🔴 SILENCE RADIO : On relance le timer (Pause de 1 min + Durée du trade)
-            duree_blocage = 120 if mode_trade == "SCALP" else 360 
+            # 🔴 SILENCE RADIO DYNAMIQUE : On relance le timer (Pause de 1 min + Durée du trade)
+            duree_blocage = trade.get('duree', 60) + 60
             Timer(duree_blocage, verifier_resultat, args=[chat_id]).start()
             
         else:
@@ -280,15 +317,12 @@ def verifier_resultat(chat_id):
                 stats_journee['details'].append(f"❌ {type_emoji} {nom_paire} ({action})")
             cooldown_actifs[symbole] = {'time': time.time(), 'action': action}
             
-            # PORTE OUVERTE
+            # LA SÉQUENCE EST MORTE, ON DÉTRUIT LE VERROU
             if chat_id in trades_en_cours: del trades_en_cours[chat_id]
     
     try: 
         bot.send_message(chat_id, texte, parse_mode="Markdown")
-        # CORRECTION DOUBLE MESSAGE ADMIN : On envoie la copie admin SEULEMENT si ce n'est pas le compte du boss
-        if chat_id != ADMIN_ID:
-            if palier_actuel > 0 or gagne:
-                bot.send_message(ADMIN_ID, f"👑 COPIE ADMIN :\n{texte}", parse_mode="Markdown")
+        # LA LIGNE QUI SPAMMAIT L'ADMIN A ÉTÉ SUPPRIMÉE ICI.
     except: pass
 
 # ==========================================
@@ -423,7 +457,7 @@ def bienvenue(message):
     niveaux_martingale[user_id] = niveaux_martingale.get(user_id, 0)
     mode_trading[user_id] = mode_trading.get(user_id, "STANDARD")
     
-    texte = """🏴‍☠️ **TERMINAL PRIME - V13.5 HYBRIDE** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - V13.6 HYBRIDE** 🔥
     
 Le bot intègre maintenant les 2 stratégies suprêmes. Utilise le bouton **MODE** en bas pour basculer :
 🛡️ **STANDARD :** Tendances et Pullbacks (5 Min).
@@ -464,17 +498,14 @@ def save_devise(call):
     maintenant = datetime.datetime.now()
     
     # ⏱️ NOUVEAU CALCUL DE LA MARGE DE SÉCURITÉ DE PRÉPARATION
-    if mode_actuel == "SCALP":
-        secondes_restantes = (60 - maintenant.second)
-        # Si moins de 45 secondes pour se préparer, on ajoute une minute complète !
-        if secondes_restantes < 45: 
-            secondes_restantes += 60 
-    else:
-        secondes_restantes = (60 - maintenant.second) + 60
-        if (60 - maintenant.second) < 15: 
-            secondes_restantes += 60
+    sec_rest = (60 - maintenant.second)
+    # 45s pour Scalp, 15s pour Standard
+    if mode_actuel == "SCALP" and sec_rest < 45: 
+        sec_rest += 60 
+    elif mode_actuel == "STANDARD" and sec_rest < 15: 
+        sec_rest += 60
         
-    heure_entree_p0 = maintenant + datetime.timedelta(seconds=secondes_restantes)
+    heure_entree_p0 = maintenant + datetime.timedelta(seconds=sec_rest)
     
     fmt = "%H:%M:%S" if mode_actuel == "SCALP" else "%H:%M:00"
     jauge_visuelle = generer_jauge(score * 10) 
@@ -532,12 +563,12 @@ def save_devise(call):
         # Affichage classique Standard
         str_p0 = heure_entree_p0.strftime(fmt)
         palier = niveaux_martingale.get(chat_id, 0)
-        mise_calculee = (CAPITAL_ACTUEL * 0.02) * (COEF_MARTINGALE ** palier)
+        mise_calculee = int((CAPITAL_ACTUEL * 0.02) * (COEF_MARTINGALE ** palier))
         
         if palier == 0:
-            signal = f"""👻 **MODE FANTÔME (PULLBACK STANDARD)** 👻\n──────────────────\n🌐 **ACTIF :** {nom_affiche}\n🎯 **ACTION :** {action}\n\n*Le bot prend ce trade virtuellement. NE RENTREZ PAS. L'alerte VIP se déclenchera s'il échoue.*"""
+            signal = f"""👻 **MODE FANTÔME (PULLBACK STANDARD)** 👻\n──────────────────\n🌐 **ACTIF :** {nom_affiche}\n⏱ **HEURE :** {str_p0}\n👉 **ACTION :** {action}\n\n*Le bot prend ce trade virtuellement. NE RENTREZ PAS. L'alerte VIP se déclenchera s'il échoue.*"""
         else:
-            signal = f"""🚨 **ALERTE PULLBACK VIP** 🚨\n\n🌐 **ACTIF :** {nom_affiche}\n⏱ **ENTRÉE :** {str_p0}\n⏳ **EXPIRATION :** {exp_texte}\n\n👉 **ACTION :** {action}\n🛡️ {bb_status}\n🧠 Confiance : {jauge_visuelle}\n\n💵 **MISE CALCULÉE :** {int(mise_calculee)}$\n*(Statut : MARTINGALE Palier {palier})*"""
+            signal = f"""🚨 **ALERTE PULLBACK VIP** 🚨\n\n🌐 **ACTIF :** {nom_affiche}\n⏱ **ENTRÉE :** {str_p0}\n⏳ **EXPIRATION :** {exp_texte}\n\n👉 **ACTION :** {action}\n🛡️ {bb_status}\n🧠 Confiance : {jauge_visuelle}\n\n💵 **MISE CALCULÉE :** {mise_calculee}$\n*(Statut : MARTINGALE Palier {palier})*"""
 
     try:
         bot.delete_message(chat_id, msg.message_id)
@@ -545,10 +576,12 @@ def save_devise(call):
     except: pass
 
     action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
-    trades_en_cours[chat_id] = {'symbole': actif, 'action': action_simplifiee}
     
-    Timer(secondes_restantes, relever_prix_entree, args=[chat_id, actif]).start()
-    Timer(secondes_restantes + duree_secondes, verifier_resultat, args=[chat_id]).start()
+    # 🔒 VERROUILLAGE STRICT : On enregistre la durée pour que le timer du palier suivant soit exact.
+    trades_en_cours[chat_id] = {'symbole': actif, 'action': action_simplifiee, 'duree': duree_secondes}
+    
+    Timer(sec_rest, relever_prix_entree, args=[chat_id, actif]).start()
+    Timer(sec_rest + duree_secondes, verifier_resultat, args=[chat_id]).start()
 
 @bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
 def horaires_trading(message):
@@ -586,6 +619,7 @@ def scanner_marche_auto():
     while True:
         try:
             time.sleep(30)
+            # 🛡️ LE MUR DE SÉCURITÉ : Si tu es dans trades_en_cours, le scanner t'ignore totalement.
             utilisateurs_libres = [uid for uid in utilisateurs_actifs if est_autorise(uid) and uid not in trades_en_cours]
             if not utilisateurs_libres: continue
                 
@@ -593,35 +627,33 @@ def scanner_marche_auto():
             devises_a_surveiller = CRYPTO_PAIRS if maintenant.weekday() >= 5 else FOREX_PAIRS
             
             for actif in devises_a_surveiller:
-                users_std = [u for u in utilisateurs_libres if mode_trading.get(u, "STANDARD") == "STANDARD"]
-                if users_std:
-                    action, conf, exp, dur, rsi, stoch, bb, sc = analyser_binaire_pro(actif, "STANDARD")
+                for mode in ["STANDARD", "SCALP"]:
+                    # REPOS : 10 minutes pour Standard (600s), 2 minutes pour Scalp (120s)
+                    delai_repos = 600 if mode == "STANDARD" else 120
+                    
+                    if actif in derniere_alerte_auto and (time.time() - derniere_alerte_auto[actif] < delai_repos): 
+                        continue
+                        
+                    action, conf, exp, dur, rsi, stoch, bb, sc = analyser_binaire_pro(actif, mode)
+                    
                     if action and "⚠️" not in action:
-                        if actif not in derniere_alerte_auto or (time.time() - derniere_alerte_auto[actif] > 3600):
-                            derniere_alerte_auto[actif] = time.time()
-                            markup = InlineKeyboardMarkup().add(InlineKeyboardButton(f"📊 Verrouiller {actif[:3]}/{actif[3:]}", callback_data=f"set_{actif}"))
-                            for uid in users_std:
-                                palier = niveaux_martingale.get(uid, 0)
-                                if palier == 0 or actif == user_prefs.get(uid):
-                                    try: bot.send_message(uid, f"🔔 **PULLBACK 5 MIN : {actif[:3]}/{actif[3:]}**", reply_markup=markup)
-                                    except: pass
-
-                users_sclp = [u for u in utilisateurs_libres if mode_trading.get(u, "STANDARD") == "SCALP"]
-                if users_sclp:
-                    action, conf, exp, dur, rsi, stoch, bb, sc = analyser_binaire_pro(actif, "SCALP")
-                    if action and "⚠️" not in action:
-                        if actif not in derniere_alerte_auto or (time.time() - derniere_alerte_auto[actif] > 120):
-                            derniere_alerte_auto[actif] = time.time()
-                            markup = InlineKeyboardMarkup().add(InlineKeyboardButton(f"⚡ Frapper {actif[:3]}/{actif[3:]}", callback_data=f"set_{actif}"))
-                            for uid in users_sclp:
-                                palier = niveaux_martingale.get(uid, 0)
-                                if palier == 0 or actif == user_prefs.get(uid):
-                                    try: bot.send_message(uid, f"🔔 **PIC VOLATILITÉ 1 MIN : {actif[:3]}/{actif[3:]}**\n👉 Dégaine vite !", reply_markup=markup)
-                                    except: pass
-        except: pass
+                        derniere_alerte_auto[actif] = time.time()
+                        
+                        markup = InlineKeyboardMarkup().add(InlineKeyboardButton(
+                            f"⚡ Frapper {actif[:3]}/{actif[3:]}" if mode == "SCALP" else f"📊 Verrouiller {actif[:3]}/{actif[3:]}", 
+                            callback_data=f"set_{actif}"
+                        ))
+                        
+                        for uid in utilisateurs_libres:
+                            # On envoie l'alerte uniquement si l'utilisateur est dans le bon mode
+                            if mode_trading.get(uid, "STANDARD") == mode:
+                                msg = f"🔔 **PIC VOLATILITÉ 1 MIN : {actif[:3]}/{actif[3:]}**\n👉 Dégaine vite !" if mode == "SCALP" else f"🔔 **PULLBACK 5 MIN : {actif[:3]}/{actif[3:]}**"
+                                try: bot.send_message(uid, msg, reply_markup=markup)
+                                except: pass
+        except Exception as e: pass
 
 if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition V13.5 HYBRIDE PRIME Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition V13.6 HYBRIDE PRIME Démarrée.", flush=True)
     bot.infinity_polling()
