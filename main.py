@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAEuuYUoHmX12NOPaMkylSsREVHnUu2I9m4"
+TELEGRAM_TOKEN = "8658287331:AAEH7A_5MV9v-ahJpcPDQKmbPHhyT5IYA5c"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -51,6 +51,8 @@ stats_journee = {
     'OTM': 0, 
     'details': []
 }
+
+bilan_envoye_aujourdhui = False
 
 CRYPTO_PAIRS = ["BTCUSD", "ETHUSD", "LTCUSD"]
 FOREX_PAIRS = [
@@ -631,13 +633,17 @@ def scanner_marche_auto():
                     # REPOS : 10 minutes pour Standard (600s), 2 minutes pour Scalp (120s)
                     delai_repos = 600 if mode == "STANDARD" else 120
                     
-                    if actif in derniere_alerte_auto and (time.time() - derniere_alerte_auto[actif] < delai_repos): 
+                    # ⚠️ LA CORRECTION VITALE : On crée une mémoire séparée (ex: EURUSD_STANDARD et EURUSD_SCALP)
+                    cle_memoire = f"{actif}_{mode}"
+                    
+                    if cle_memoire in derniere_alerte_auto and (time.time() - derniere_alerte_auto[cle_memoire] < delai_repos): 
                         continue
                         
                     action, conf, exp, dur, rsi, stoch, bb, sc = analyser_binaire_pro(actif, mode)
                     
                     if action and "⚠️" not in action:
-                        derniere_alerte_auto[actif] = time.time()
+                        # On enregistre le tir sur la mémoire indépendante du mode
+                        derniere_alerte_auto[cle_memoire] = time.time()
                         
                         markup = InlineKeyboardMarkup().add(InlineKeyboardButton(
                             f"⚡ Frapper {actif[:3]}/{actif[3:]}" if mode == "SCALP" else f"📊 Verrouiller {actif[:3]}/{actif[3:]}", 
@@ -645,7 +651,7 @@ def scanner_marche_auto():
                         ))
                         
                         for uid in utilisateurs_libres:
-                            # On envoie l'alerte uniquement si l'utilisateur est dans le bon mode
+                            # On envoie l'alerte uniquement si l'utilisateur est réglé sur CE mode
                             if mode_trading.get(uid, "STANDARD") == mode:
                                 msg = f"🔔 **PIC VOLATILITÉ 1 MIN : {actif[:3]}/{actif[3:]}**\n👉 Dégaine vite !" if mode == "SCALP" else f"🔔 **PULLBACK 5 MIN : {actif[:3]}/{actif[3:]}**"
                                 try: bot.send_message(uid, msg, reply_markup=markup)
