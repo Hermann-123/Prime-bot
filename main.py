@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAEH7A_5MV9v-ahJpcPDQKmbPHhyT5IYA5c"
+TELEGRAM_TOKEN = "8658287331:AAEQXNjHrArIVlpgu2ksTaP5o30Bo4l2Ln"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -69,7 +69,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition HYBRIDE V13.6 (Standard + Scalp + Rayon X)"
+    return "Terminal Prime VIP : Édition HYBRIDE V13.6 (Standard + Scalp + Rayon X + Override)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -267,6 +267,7 @@ def verifier_resultat(chat_id):
     time.sleep(3)
     
     trade = trades_en_cours.get(chat_id)
+    # Si le trade n'existe plus (ex: annulé par le bouton OVERRIDE), le thread meurt ici silencieusement.
     if not trade or not trade.get('prix_entree'): return
 
     symbole = trade['symbole']
@@ -281,6 +282,8 @@ def verifier_resultat(chat_id):
     nom_paire = f"{symbole[:3]}/{symbole[3:]}"
     type_emoji = "🪙" if symbole in CRYPTO_PAIRS else "💱"
     
+    markup = None # Initialisation du clavier
+
     if gagne:
         niveaux_martingale[chat_id] = 0 # RESET
         
@@ -307,6 +310,10 @@ def verifier_resultat(chat_id):
             else:
                 texte = f"⚠️ **TIR RATÉ - PRÉPARATION PALIER {palier_actuel + 1}**\n📉 Sortie : `{prix_sortie}`\n\n🤫 *Silence radio maintenu.*"
             
+            # 🔘 AJOUT DU BOUTON OVERRIDE (Annulation du décalage Deriv/Pocket)
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("✅ GAGNÉ SUR POCKET (Reprendre)", callback_data="force_win"))
+
             # 🔴 SILENCE RADIO DYNAMIQUE : On relance le timer (Pause de 1 min + Durée du trade)
             duree_blocage = trade.get('duree', 60) + 60
             Timer(duree_blocage, verifier_resultat, args=[chat_id]).start()
@@ -323,9 +330,43 @@ def verifier_resultat(chat_id):
             if chat_id in trades_en_cours: del trades_en_cours[chat_id]
     
     try: 
-        bot.send_message(chat_id, texte, parse_mode="Markdown")
-        # LA LIGNE QUI SPAMMAIT L'ADMIN A ÉTÉ SUPPRIMÉE ICI.
+        if markup:
+            bot.send_message(chat_id, texte, parse_mode="Markdown", reply_markup=markup)
+        else:
+            bot.send_message(chat_id, texte, parse_mode="Markdown")
     except: pass
+
+# ==========================================
+# BOUTON OVERRIDE (DÉCALAGE BROKER)
+# ==========================================
+
+@bot.callback_query_handler(func=lambda c: c.data == "force_win")
+def override_victoire_manuelle(call):
+    chat_id = call.message.chat.id
+    
+    # 1. On récupère les infos avant de détruire le verrou
+    if chat_id in trades_en_cours:
+        symbole = trades_en_cours[chat_id].get('symbole', 'Inconnu')
+        action = trades_en_cours[chat_id].get('action', '')
+        
+        # 2. On comptabilise la victoire dans les stats
+        stats_journee['ITM'] += 1
+        stats_journee['details'].append(f"✅ (Manuel) {symbole} ({action})")
+        
+        # 3. On détruit le verrou (ce qui va tuer le Timer de Silence Radio au prochain passage)
+        del trades_en_cours[chat_id]
+        
+    # 4. On remet la Martingale à 0 pour protéger le prochain trade
+    niveaux_martingale[chat_id] = 0
+    
+    bot.answer_callback_query(call.id, "✅ Victoire validée ! Le radar est libéré.", show_alert=True)
+    
+    try:
+        # On supprime le bouton pour empêcher le joueur de cliquer 10 fois dessus
+        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+    except: pass
+    
+    bot.send_message(chat_id, "🔄 **CORRECTION MANUELLE APPLIQUÉE**\nLe décalage broker a été ignoré. Silence Radio détruit. Le bot reprend son scan...", parse_mode="Markdown")
 
 # ==========================================
 # MOTEUR D'ANALYSE HYBRIDE (STANDARD / SCALP)
