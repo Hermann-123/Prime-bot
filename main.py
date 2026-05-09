@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAFL_3xIhH890Ex4t01-eENDfXHky5doTNQ"
+TELEGRAM_TOKEN = "8658287331:AAGYHsgjfhk3RKHbFGQkgNGDbxOqIqmX7QU"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -69,7 +69,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition HYBRIDE V13.6 (Standard + Scalp + Rayon X + Override)"
+    return "Terminal Prime VIP : Édition HYBRIDE V14.5 (Armure Scalp + Override)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -267,7 +267,6 @@ def verifier_resultat(chat_id):
     time.sleep(3)
     
     trade = trades_en_cours.get(chat_id)
-    # Si le trade n'existe plus (ex: annulé par le bouton OVERRIDE), le thread meurt ici silencieusement.
     if not trade or not trade.get('prix_entree'): return
 
     symbole = trade['symbole']
@@ -282,12 +281,11 @@ def verifier_resultat(chat_id):
     nom_paire = f"{symbole[:3]}/{symbole[3:]}"
     type_emoji = "🪙" if symbole in CRYPTO_PAIRS else "💱"
     
-    markup = None # Initialisation du clavier
+    markup = None
 
     if gagne:
         niveaux_martingale[chat_id] = 0 # RESET
         
-        # GESTION DES MESSAGES DE VICTOIRE (FANTÔME VS VRAI TRADE)
         if palier_actuel == 0:
             texte = f"👻 **FANTÔME RÉUSSI (ITM)**\nLe trade virtuel sur {nom_paire} est passé sans nous. Le bot reprend ses recherches.\n🔓 *Radar déverrouillé.*"
         else:
@@ -296,25 +294,20 @@ def verifier_resultat(chat_id):
             stats_journee['details'].append(f"✅ {type_emoji} {nom_paire} ({action})")
             
         if symbole in cooldown_actifs: del cooldown_actifs[symbole]
-        
-        # LE TRADE EST GAGNÉ, ON DÉTRUIT LE VERROU
         if chat_id in trades_en_cours: del trades_en_cours[chat_id]
         
     else:
         if palier_actuel < MAX_MARTINGALE:
             niveaux_martingale[chat_id] = palier_actuel + 1
             
-            # GESTION DES MESSAGES D'ÉCHEC ET SILENCE RADIO
             if palier_actuel == 0:
                 texte = f"⚠️ **PIÈGE BROKER DÉTECTÉ (Fantôme Échoué)**\n📉 Sortie : `{prix_sortie}`\n\n🔥 Le piège est désamorcé ! **PRÉPAREZ-VOUS POUR LE PALIER 1 ({nom_paire})**.\n🤫 *Silence radio activé pendant votre tir.*"
             else:
                 texte = f"⚠️ **TIR RATÉ - PRÉPARATION PALIER {palier_actuel + 1}**\n📉 Sortie : `{prix_sortie}`\n\n🤫 *Silence radio maintenu.*"
             
-            # 🔘 AJOUT DU BOUTON OVERRIDE (Annulation du décalage Deriv/Pocket)
             markup = InlineKeyboardMarkup()
             markup.add(InlineKeyboardButton("✅ GAGNÉ SUR POCKET (Reprendre)", callback_data="force_win"))
 
-            # 🔴 SILENCE RADIO DYNAMIQUE : On relance le timer (Pause de 1 min + Durée du trade)
             duree_blocage = trade.get('duree', 60) + 60
             Timer(duree_blocage, verifier_resultat, args=[chat_id]).start()
             
@@ -326,7 +319,6 @@ def verifier_resultat(chat_id):
                 stats_journee['details'].append(f"❌ {type_emoji} {nom_paire} ({action})")
             cooldown_actifs[symbole] = {'time': time.time(), 'action': action}
             
-            # LA SÉQUENCE EST MORTE, ON DÉTRUIT LE VERROU
             if chat_id in trades_en_cours: del trades_en_cours[chat_id]
     
     try: 
@@ -344,32 +336,25 @@ def verifier_resultat(chat_id):
 def override_victoire_manuelle(call):
     chat_id = call.message.chat.id
     
-    # 1. On récupère les infos avant de détruire le verrou
     if chat_id in trades_en_cours:
         symbole = trades_en_cours[chat_id].get('symbole', 'Inconnu')
         action = trades_en_cours[chat_id].get('action', '')
         
-        # 2. On comptabilise la victoire dans les stats
         stats_journee['ITM'] += 1
         stats_journee['details'].append(f"✅ (Manuel) {symbole} ({action})")
-        
-        # 3. On détruit le verrou (ce qui va tuer le Timer de Silence Radio au prochain passage)
         del trades_en_cours[chat_id]
         
-    # 4. On remet la Martingale à 0 pour protéger le prochain trade
     niveaux_martingale[chat_id] = 0
-    
     bot.answer_callback_query(call.id, "✅ Victoire validée ! Le radar est libéré.", show_alert=True)
     
     try:
-        # On supprime le bouton pour empêcher le joueur de cliquer 10 fois dessus
         bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
     except: pass
     
     bot.send_message(chat_id, "🔄 **CORRECTION MANUELLE APPLIQUÉE**\nLe décalage broker a été ignoré. Silence Radio détruit. Le bot reprend son scan...", parse_mode="Markdown")
 
 # ==========================================
-# MOTEUR D'ANALYSE HYBRIDE (STANDARD / SCALP)
+# MOTEUR D'ANALYSE HYBRIDE (STANDARD / SCALP ARMURE)
 # ==========================================
 
 def analyser_binaire_pro(symbole, mode="STANDARD"):
@@ -382,7 +367,11 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
     
     try:
         df = pd.DataFrame([{'open': float(c['open']), 'close': float(c['close']), 'high': float(c['high']), 'low': float(c['low'])} for c in candles])
+        
+        # --- CALCUL DES FONDAMENTAUX POUR LES DEUX MODES ---
         df['corps_bougie'] = abs(df['close'] - df['open'])
+        df['meche_haute'] = df['high'] - df[['open', 'close']].max(axis=1)
+        df['meche_basse'] = df[['open', 'close']].min(axis=1) - df['low']
         df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
         df['stoch_k'] = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch()
         
@@ -399,8 +388,6 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
             df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
             df['adx'] = ta.trend.ADXIndicator(high=df['high'], low=df['low'], close=df['close'], window=14).adx()
             df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
-            df['meche_haute'] = df['high'] - df[['open', 'close']].max(axis=1)
-            df['meche_basse'] = df[['open', 'close']].min(axis=1) - df['low']
             
             atr_actuel = df['atr'].iloc[-1]
             atr_moyen = df['atr'].rolling(window=20).mean().iloc[-1]
@@ -413,6 +400,8 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
             
             avalement_haussier = prev_is_red and last_is_green and (last['close'] > prev['open']) and (last['open'] <= prev['close'])
             avalement_baissier = prev_is_green and last_is_red and (last['close'] < prev['open']) and (last['open'] >= prev['close'])
+            
+            # Rejet validé si la mèche est au moins 2 fois plus grande que le corps
             rejet_haussier = last['meche_basse'] > (last['corps_bougie'] * 2.0)
             rejet_baissier = last['meche_haute'] > (last['corps_bougie'] * 2.0)
 
@@ -434,20 +423,38 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
                     score_algo, confiance, bb_status = 10.0, 99, "👑 PULLBACK + PRICE ACTION ☄️"
 
         # ----------------------------------------
-        # 🔥 LOGIQUE V14 (SCALP 1 MIN AJUSTÉ)
+        # 🔥 LOGIQUE V14.5 (SCALP ARMURE 1 MIN)
         # ----------------------------------------
         elif mode == "SCALP":
-            # Bollinger ajusté à 2.2 pour 15-20 opportunités par jour
+            # Bollinger ajusté à 2.2 
             indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2.2)
-            bb_haute, bb_basse = indicateur_bb.bollinger_hband().iloc[-1], indicateur_bb.bollinger_lband().iloc[-1]
+            bb_haute = indicateur_bb.bollinger_hband().iloc[-1]
+            bb_basse = indicateur_bb.bollinger_lband().iloc[-1]
             
-            duree_secondes, expiration_texte = 60, "1 MINUTE (SCALP EXTRÊME ⚡)"
+            # FILTRE 3 : ANTI-SQUEEZE
+            df['bb_width'] = indicateur_bb.bollinger_wband()
+            bb_w_actuel = df['bb_width'].iloc[-1]
+            bb_w_moyen = df['bb_width'].rolling(window=20).mean().iloc[-1]
+            squeeze_detecte = bb_w_actuel < (bb_w_moyen * 0.8)
+
+            # FILTRE 2 : MINI-TENDANCE (EMA 50)
+            df['ema_50'] = ta.trend.EMAIndicator(close=df['close'], window=50).ema_indicator()
+            ema_50 = df['ema_50'].iloc[-1]
+            tendance_h_rapide = c > ema_50
+            tendance_b_rapide = c < ema_50
+
+            # FILTRE 1 : PRICE ACTION (Rejet validé si mèche > corps)
+            rejet_bas = last['meche_basse'] > (last['corps_bougie'] * 1.0)
+            rejet_haut = last['meche_haute'] > (last['corps_bougie'] * 1.0)
             
-            # Épuisement RSI 30/70
-            if (c <= bb_basse) and (rsi_val < 30):
-                action, confiance, score_algo, bb_status = "🟢 ACHAT (CALL)", 90, 9.0, "⚡ CASSURE BROKER BASSE"
-            elif (c >= bb_haute) and (rsi_val > 70):
-                action, confiance, score_algo, bb_status = "🔴 VENTE (PUT)", 90, 9.0, "⚡ CASSURE BROKER HAUTE"
+            duree_secondes, expiration_texte = 60, "1 MINUTE (SCALP ARMURE 🛡️)"
+            
+            if not squeeze_detecte:
+                # Épuisement RSI 30/70 + Touche BB + Tendance de fond + Preuve de rejet
+                if (last['low'] <= bb_basse) and (rsi_val < 30) and tendance_h_rapide and rejet_bas:
+                    action, confiance, score_algo, bb_status = "🟢 ACHAT (CALL)", 95, 9.5, "🛡️ SCALP ARMURE : Rejet Bas + Tendance"
+                elif (last['high'] >= bb_haute) and (rsi_val > 70) and tendance_b_rapide and rejet_haut:
+                    action, confiance, score_algo, bb_status = "🔴 VENTE (PUT)", 95, 9.5, "🛡️ SCALP ARMURE : Rejet Haut + Tendance"
 
         if action:
             action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
@@ -500,11 +507,11 @@ def bienvenue(message):
     niveaux_martingale[user_id] = niveaux_martingale.get(user_id, 0)
     mode_trading[user_id] = mode_trading.get(user_id, "STANDARD")
     
-    texte = """🏴‍☠️ **TERMINAL PRIME - V13.6 HYBRIDE** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - V14.5 HYBRIDE ARMURE** 🔥
     
-Le bot intègre maintenant les 2 stratégies suprêmes. Utilise le bouton **MODE** en bas pour basculer :
+Le bot intègre maintenant les 2 stratégies suprêmes, filtrées avec Intelligence.
 🛡️ **STANDARD :** Tendances et Pullbacks (5 Min).
-🔥 **SCALP :** Anticipation du Broker avec Plan Séquentiel (1 Min)."""
+🔥 **SCALP :** Anticipation du Broker avec Rejets, Tendance Rapide et Anti-Squeeze (1 Min)."""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
@@ -540,9 +547,7 @@ def save_devise(call):
 
     maintenant = datetime.datetime.now()
     
-    # ⏱️ NOUVEAU CALCUL DE LA MARGE DE SÉCURITÉ DE PRÉPARATION
     sec_rest = (60 - maintenant.second)
-    # 45s pour Scalp, 15s pour Standard
     if mode_actuel == "SCALP" and sec_rest < 45: 
         sec_rest += 60 
     elif mode_actuel == "STANDARD" and sec_rest < 15: 
@@ -553,9 +558,6 @@ def save_devise(call):
     fmt = "%H:%M:%S" if mode_actuel == "SCALP" else "%H:%M:00"
     jauge_visuelle = generer_jauge(score * 10) 
     
-    # -----------------------------------------------
-    # PLAN DE TIR SÉQUENTIEL (SCALP) vs STANDARD
-    # -----------------------------------------------
     if mode_actuel == "SCALP":
         temps_pause = 60
         heure_entree_p1 = heure_entree_p0 + datetime.timedelta(seconds=duree_secondes + temps_pause)
@@ -567,12 +569,11 @@ def save_devise(call):
         str_p2 = heure_entree_p2.strftime(fmt)
         str_p3 = heure_entree_p3.strftime(fmt)
         
-        # Calcul des mises réelles après le Fantôme
         mise_p1 = int(CAPITAL_ACTUEL * 0.02)
         mise_p2 = int(mise_p1 * COEF_MARTINGALE)
         mise_p3 = int(mise_p2 * COEF_MARTINGALE)
         
-        signal = f"""⚡ **SCALP HAUTE FRÉQUENCE** ⚡
+        signal = f"""⚡ **SCALP ARMURE HAUTE FRÉQUENCE** ⚡
 ──────────────────
 🌐 **ACTIF :** {nom_affiche}
 👻 **TIR INITIAL (Fantôme)**
@@ -603,7 +604,6 @@ def save_devise(call):
 📌 *Instruction : Laissez le bot encaisser le premier faux mouvement à l'heure du Fantôme. S'il perd, entrez en force au Palier 1 !*"""
 
     else:
-        # Affichage classique Standard
         str_p0 = heure_entree_p0.strftime(fmt)
         palier = niveaux_martingale.get(chat_id, 0)
         mise_calculee = int((CAPITAL_ACTUEL * 0.02) * (COEF_MARTINGALE ** palier))
@@ -620,7 +620,6 @@ def save_devise(call):
 
     action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
     
-    # 🔒 VERROUILLAGE STRICT : On enregistre la durée pour que le timer du palier suivant soit exact.
     trades_en_cours[chat_id] = {'symbole': actif, 'action': action_simplifiee, 'duree': duree_secondes}
     
     Timer(sec_rest, relever_prix_entree, args=[chat_id, actif]).start()
@@ -662,7 +661,6 @@ def scanner_marche_auto():
     while True:
         try:
             time.sleep(30)
-            # 🛡️ LE MUR DE SÉCURITÉ : Si tu es dans trades_en_cours, le scanner t'ignore totalement.
             utilisateurs_libres = [uid for uid in utilisateurs_actifs if est_autorise(uid) and uid not in trades_en_cours]
             if not utilisateurs_libres: continue
                 
@@ -671,10 +669,7 @@ def scanner_marche_auto():
             
             for actif in devises_a_surveiller:
                 for mode in ["STANDARD", "SCALP"]:
-                    # REPOS : 10 minutes pour Standard (600s), 2 minutes pour Scalp (120s)
                     delai_repos = 600 if mode == "STANDARD" else 120
-                    
-                    # ⚠️ LA CORRECTION VITALE : On crée une mémoire séparée (ex: EURUSD_STANDARD et EURUSD_SCALP)
                     cle_memoire = f"{actif}_{mode}"
                     
                     if cle_memoire in derniere_alerte_auto and (time.time() - derniere_alerte_auto[cle_memoire] < delai_repos): 
@@ -683,7 +678,6 @@ def scanner_marche_auto():
                     action, conf, exp, dur, rsi, stoch, bb, sc = analyser_binaire_pro(actif, mode)
                     
                     if action and "⚠️" not in action:
-                        # On enregistre le tir sur la mémoire indépendante du mode
                         derniere_alerte_auto[cle_memoire] = time.time()
                         
                         markup = InlineKeyboardMarkup().add(InlineKeyboardButton(
@@ -692,9 +686,8 @@ def scanner_marche_auto():
                         ))
                         
                         for uid in utilisateurs_libres:
-                            # On envoie l'alerte uniquement si l'utilisateur est réglé sur CE mode
                             if mode_trading.get(uid, "STANDARD") == mode:
-                                msg = f"🔔 **PIC VOLATILITÉ 1 MIN : {actif[:3]}/{actif[3:]}**\n👉 Dégaine vite !" if mode == "SCALP" else f"🔔 **PULLBACK 5 MIN : {actif[:3]}/{actif[3:]}**"
+                                msg = f"🔔 **PIC VOLATILITÉ ARMURE : {actif[:3]}/{actif[3:]}**\n👉 Dégaine vite !" if mode == "SCALP" else f"🔔 **PULLBACK 5 MIN : {actif[:3]}/{actif[3:]}**"
                                 try: bot.send_message(uid, msg, reply_markup=markup)
                                 except: pass
         except Exception as e: pass
@@ -702,5 +695,5 @@ def scanner_marche_auto():
 if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition V13.6 HYBRIDE PRIME Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition V14.5 ARMURE SCALP Démarrée.", flush=True)
     bot.infinity_polling()
