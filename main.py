@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAE8nUTRpmeKcM7Cy-Z8HVrXzRIOYmFnFsE"
+TELEGRAM_TOKEN = "8658287331:AAHYtXPxfBBqkYGfiRpSyXjoWliMFOSV4t4"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -67,7 +67,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition V16.8 ULTIMATE (Exception 10/10)"
+    return "Terminal Prime VIP : Édition V16.9 ULTIMATE (Crypto Exclusivement Week-end)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -140,7 +140,7 @@ def activer_vip(message):
     except: pass
 
 # ==========================================
-# VERROUILLAGE TEMPOREL & EXCEPTION 10/10 (V16.8)
+# VERROUILLAGE TEMPOREL & EXCEPTION 10/10 (V16.9)
 # ==========================================
 
 def est_symbole_autorise(symbole):
@@ -159,23 +159,28 @@ def est_symbole_autorise(symbole):
     elif jour == 5: est_week_end = True
     elif jour == 6 and heure_dec < 21.0: est_week_end = True
 
+    # 1. GESTION DU WEEK-END
     if est_week_end:
         if symbole in CRYPTO_PAIRS:
             return "AUTORISE", ""
         else:
             return "BLOCAGE_TOTAL", f"🔒 **ACCÈS REFUSÉ** : Le marché Forex est fermé (OTC manipulé). Seules les cryptos sont autorisées le week-end."
 
+    # 2. SEMAINE - LES CRYPTOS SONT STRICTEMENT INTERDITES
     if symbole in CRYPTO_PAIRS:
-        return "AUTORISE", ""
+        return "BLOCAGE_TOTAL", "🔒 **ACCÈS REFUSÉ** : Les Cryptomonnaies sont verrouillées la semaine. Elles sont réservées exclusivement pour le week-end."
 
+    # 3. SEMAINE - COUVRE FEU (17h30 à 00h00 GMT)
     if heure_dec >= 17.5:
         return "HORS_SESSION", f"🛑 **REPLI TACTIQUE** : Couvre-feu en cours (17h30 - 00h00 GMT)."
 
+    # 4. SEMAINE - ASIE (00h00 à 08h00 GMT)
     if heure_dec >= 0.0 and heure_dec < 8.0:
         paires_autorisees = ["AUDJPY", "CADJPY", "CHFJPY", "USDJPY", "AUDCAD"]
         if symbole in paires_autorisees: return "AUTORISE", ""
         return "HORS_SESSION", f"🔒 **ACCÈS REFUSÉ** : Hors Session Asiatique."
 
+    # 5. SEMAINE - EUROPE (07h00 à 12h00 GMT)
     if heure_dec >= 7.0 and heure_dec < 12.0:
         paires_autorisees = ["EURUSD", "EURJPY", "EURAUD", "EURCHF", "USDCHF", "CADCHF"]
         if heure_dec < 8.0: 
@@ -184,6 +189,7 @@ def est_symbole_autorise(symbole):
         if symbole in paires_autorisees: return "AUTORISE", ""
         return "HORS_SESSION", f"🔒 **ACCÈS REFUSÉ** : Hors Session Européenne."
 
+    # 6. SEMAINE - ZONE DE GUERRE US/CA (12h00 à 17h30 GMT)
     if heure_dec >= 12.0 and heure_dec < 17.5:
         paires_autorisees = ["EURUSD", "USDCAD", "AUDUSD"]
         if symbole in paires_autorisees: return "AUTORISE", ""
@@ -386,7 +392,7 @@ def override_victoire_manuelle(call):
     bot.send_message(chat_id, "🔄 **CORRECTION MANUELLE APPLIQUÉE**", parse_mode="Markdown")
 
 # ==========================================
-# MOTEUR ULTIMATE V16.8 (MTFA + VOLUME + PRICE ACTION)
+# MOTEUR ULTIMATE V16.9 (MTFA + VOLUME + PRICE ACTION)
 # ==========================================
 
 def analyser_binaire_pro(symbole, mode="STANDARD"):
@@ -521,9 +527,10 @@ def bienvenue(message):
     utilisateurs_actifs.add(user_id)
     niveaux_martingale[user_id] = niveaux_martingale.get(user_id, 0)
     mode_trading[user_id] = mode_trading.get(user_id, "STANDARD")
-    texte = """🏴‍☠️ **TERMINAL PRIME - V16.8 ULTIMATE** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - V16.9 ULTIMATE** 🔥
     
-Module activé : Exception du Sniper. L'IA bloquera les fausses devises, sauf si le setup est un 10/10 parfait."""
+Modules activés : Exception du Sniper & Verrouillage Temporel. 
+🪙 *Les Cryptomonnaies sont verrouillées la semaine et actives uniquement le week-end.*"""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
@@ -539,7 +546,7 @@ def save_devise(call):
     # 🔒 VÉRIFICATION DU STATUT TEMPOREL
     statut, msg_erreur = est_symbole_autorise(actif)
     
-    # Si le week-end est fermé totalement (OTC)
+    # Si le week-end est fermé totalement (OTC) OU Crypto tentée la semaine
     if statut == "BLOCAGE_TOTAL":
         bot.send_message(chat_id, msg_erreur, parse_mode="Markdown")
         return
@@ -631,9 +638,9 @@ def horaires_trading(message):
 🇪🇺 **Session Europe (07h00 - 12h00) :** EUR, USD, CHF
 🔥 **Zone de Guerre (12h00 - 17h30) :** EUR/USD, AUD/USD, USD/CAD
 🛑 **Repli Tactique (17h30 - 00h00) :** Le Forex est bloqué.
-🪙 **Week-end (Ven 21h - Dim 21h) :** Seules les Cryptos fonctionnent.
+🪙 **Week-end (Ven 21h - Dim 21h) :** EXCLUSIVEMENT pour les Cryptos (bloquées la semaine).
 
-*(Note : Si le bot repère un setup parfait à 10/10 hors de sa session, il forcera l'alerte !)*"""
+*(Note : Si le bot repère un setup parfait à 10/10 hors de sa session Forex, il forcera l'alerte !)*"""
     bot.send_message(message.chat.id, texte, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "📊 CHOISIR UNE DEVISE")
@@ -649,7 +656,7 @@ def devises(message):
         InlineKeyboardButton("🇺🇸 USD/CHF", callback_data="set_USDCHF"), InlineKeyboardButton("🇨🇦 CAD/CHF", callback_data="set_CADCHF"), InlineKeyboardButton("🇪🇺 EUR/CHF", callback_data="set_EURCHF"),
         InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY")
     )
-    bot.send_message(message.chat.id, "Sélectionne ta cible (L'IA filtrera selon l'heure ou forcera le 10/10) :", reply_markup=markup)
+    bot.send_message(message.chat.id, "Sélectionne ta cible (L'IA bloquera les devises fermées) :", reply_markup=markup)
 
 @bot.message_handler(func=lambda m: m.text == "🚀 LANCER L'ANALYSE")
 def lancer(message):
@@ -659,7 +666,7 @@ def lancer(message):
     actif = user_prefs.get(message.from_user.id)
     if not actif: return bot.send_message(message.chat.id, "⚠️ Choisis d'abord une devise !")
     
-    # Validation initiale du bouton Lancer (Refuse seulement si BLOCAGE_TOTAL le week-end)
+    # Validation initiale du bouton Lancer
     statut, msg_erreur = est_symbole_autorise(actif)
     if statut == "BLOCAGE_TOTAL": 
         return bot.send_message(chat_id, msg_erreur, parse_mode="Markdown")
@@ -676,7 +683,7 @@ def scanner_marche_auto():
             for paire in CRYPTO_PAIRS + FOREX_PAIRS:
                 statut, _ = est_symbole_autorise(paire)
                 
-                # Le scanner ignore les paires du week-end (OTC Manipulé)
+                # Le scanner ignore complètement les paires en BLOCAGE_TOTAL (OTC ou Cryptos la semaine)
                 if statut == "BLOCAGE_TOTAL": continue
                     
                 for mode in ["STANDARD", "SCALP"]:
@@ -705,5 +712,5 @@ def scanner_marche_auto():
 if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition V16.8 ULTIMATE Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition V16.9 ULTIMATE Démarrée.", flush=True)
     bot.infinity_polling()
