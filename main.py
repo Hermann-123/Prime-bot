@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAHYtXPxfBBqkYGfiRpSyXjoWliMFOSV4t4"
+TELEGRAM_TOKEN = "8658287331:AAEmiu8i4IWUVPynr9J-HE0MPttHdBv77Ac"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -67,7 +67,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition V16.9 ULTIMATE (Crypto Exclusivement Week-end)"
+    return "Terminal Prime VIP : Édition V17.0 ULTIMATE (Auto-Sync & Bilan 18h)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -92,12 +92,6 @@ def est_autorise(user_id):
             except: pass
             return False
     return False
-
-def generer_jauge(pourcentage):
-    if pourcentage >= 99: return "[██████████] 👑 MAX"
-    pleins = int(pourcentage / 10)
-    vides = 10 - pleins
-    return f"[{'█' * pleins}{'░' * vides}] {pourcentage}%"
 
 @bot.message_handler(commands=['keygen'])
 def generer_cle(message):
@@ -140,14 +134,10 @@ def activer_vip(message):
     except: pass
 
 # ==========================================
-# VERROUILLAGE TEMPOREL & EXCEPTION 10/10 (V16.9)
+# VERROUILLAGE TEMPOREL & EXCEPTION 10/10
 # ==========================================
 
 def est_symbole_autorise(symbole):
-    """
-    Retourne (statut, message).
-    statut = "AUTORISE", "HORS_SESSION", "BLOCAGE_TOTAL"
-    """
     now = datetime.datetime.utcnow()
     jour = now.weekday()
     heure = now.hour
@@ -159,43 +149,30 @@ def est_symbole_autorise(symbole):
     elif jour == 5: est_week_end = True
     elif jour == 6 and heure_dec < 21.0: est_week_end = True
 
-    # 1. GESTION DU WEEK-END
     if est_week_end:
-        if symbole in CRYPTO_PAIRS:
-            return "AUTORISE", ""
-        else:
-            return "BLOCAGE_TOTAL", f"🔒 **ACCÈS REFUSÉ** : Le marché Forex est fermé (OTC manipulé). Seules les cryptos sont autorisées le week-end."
+        if symbole in CRYPTO_PAIRS: return "AUTORISE", ""
+        else: return "BLOCAGE_TOTAL", f"🔒 **ACCÈS REFUSÉ** : Le marché Forex est fermé (OTC manipulé). Seules les cryptos sont autorisées le week-end."
 
-    # 2. SEMAINE - LES CRYPTOS SONT STRICTEMENT INTERDITES
     if symbole in CRYPTO_PAIRS:
         return "BLOCAGE_TOTAL", "🔒 **ACCÈS REFUSÉ** : Les Cryptomonnaies sont verrouillées la semaine. Elles sont réservées exclusivement pour le week-end."
 
-    # 3. SEMAINE - COUVRE FEU (17h30 à 00h00 GMT)
-    if heure_dec >= 17.5:
-        return "HORS_SESSION", f"🛑 **REPLI TACTIQUE** : Couvre-feu en cours (17h30 - 00h00 GMT)."
-
-    # 4. SEMAINE - ASIE (00h00 à 08h00 GMT)
+    if heure_dec >= 17.5: return "HORS_SESSION", f"🛑 **REPLI TACTIQUE** : Couvre-feu en cours (17h30 - 00h00 GMT)."
+    
     if heure_dec >= 0.0 and heure_dec < 8.0:
-        paires_autorisees = ["AUDJPY", "CADJPY", "CHFJPY", "USDJPY", "AUDCAD"]
-        if symbole in paires_autorisees: return "AUTORISE", ""
+        if symbole in ["AUDJPY", "CADJPY", "CHFJPY", "USDJPY", "AUDCAD"]: return "AUTORISE", ""
         return "HORS_SESSION", f"🔒 **ACCÈS REFUSÉ** : Hors Session Asiatique."
 
-    # 5. SEMAINE - EUROPE (07h00 à 12h00 GMT)
     if heure_dec >= 7.0 and heure_dec < 12.0:
-        paires_autorisees = ["EURUSD", "EURJPY", "EURAUD", "EURCHF", "USDCHF", "CADCHF"]
-        if heure_dec < 8.0: 
-            paires_autorisees.extend(["AUDJPY", "CADJPY", "CHFJPY", "USDJPY", "AUDCAD"])
-            
-        if symbole in paires_autorisees: return "AUTORISE", ""
+        paires = ["EURUSD", "EURJPY", "EURAUD", "EURCHF", "USDCHF", "CADCHF"]
+        if heure_dec < 8.0: paires.extend(["AUDJPY", "CADJPY", "CHFJPY", "USDJPY", "AUDCAD"])
+        if symbole in paires: return "AUTORISE", ""
         return "HORS_SESSION", f"🔒 **ACCÈS REFUSÉ** : Hors Session Européenne."
 
-    # 6. SEMAINE - ZONE DE GUERRE US/CA (12h00 à 17h30 GMT)
     if heure_dec >= 12.0 and heure_dec < 17.5:
-        paires_autorisees = ["EURUSD", "USDCAD", "AUDUSD"]
-        if symbole in paires_autorisees: return "AUTORISE", ""
+        if symbole in ["EURUSD", "USDCAD", "AUDUSD"]: return "AUTORISE", ""
         return "HORS_SESSION", f"🔒 **ACCÈS REFUSÉ** : Hors Zone de Guerre US/CA."
 
-    return "BLOCAGE_TOTAL", "🛑 Erreur temporelle inconnue."
+    return "BLOCAGE_TOTAL", "🛑 Erreur temporelle."
 
 # ==========================================
 # FONCTIONS PRO & ROUTEUR DERIV
@@ -298,7 +275,7 @@ def vision_marche(message):
     except: bot.edit_message_text("❌ Erreur d'analyse.", message.chat.id, msg.message_id)
 
 # ==========================================
-# MOTEUR SYNCHRONISÉ MARTINGALE
+# MOTEUR SYNCHRONISÉ MARTINGALE V17.0
 # ==========================================
 
 def relever_prix_entree(chat_id, symbole):
@@ -353,24 +330,32 @@ def verifier_resultat(chat_id):
         try: bot.send_message(chat_id, texte, parse_mode="Markdown")
         except: pass
     else:
+        # SI PERTE (Fantôme ou Palier précédent)
         if palier_actuel < MAX_MARTINGALE:
             niveaux_martingale[chat_id] = palier_actuel + 1
             if chat_id in trades_en_cours: del trades_en_cours[chat_id] 
             
-            mode = mode_trading.get(chat_id, "STANDARD")
-            temps_pause = 60 if mode == "SCALP" else 0
-            
-            if palier_actuel == 0: msg_fail = f"⚠️ **PIÈGE BROKER DÉTECTÉ (Fantôme Échoué)**\n📉 Sortie : `{prix_sortie}`"
-            else: msg_fail = f"⚠️ **TIR RATÉ (Palier {palier_actuel} Échoué)**\n📉 Sortie : `{prix_sortie}`"
+            # Annonce de la perte
+            if palier_actuel == 0: 
+                msg_fail = f"⚠️ **PIÈGE BROKER DÉTECTÉ (Fantôme Échoué)**\n📉 Sortie : `{prix_sortie}`"
+            else: 
+                msg_fail = f"⚠️ **TIR RATÉ (Palier {palier_actuel} Échoué)**\n📉 Sortie : `{prix_sortie}`"
 
-            if temps_pause > 0:
-                msg_fail += f"\n\n⏳ *Pause stratégique de 60s avant le signal du Palier {palier_actuel + 1}...*"
-                bot.send_message(chat_id, msg_fail, parse_mode="Markdown")
-                Timer(temps_pause, lancer_nouveau_palier, args=[chat_id, symbole, action, trade['duree'], palier_actuel + 1]).start()
-            else:
-                bot.send_message(chat_id, msg_fail, parse_mode="Markdown")
-                lancer_nouveau_palier(chat_id, symbole, action, trade['duree'], palier_actuel + 1)
+            # ⏳ PAUSE TACTIQUE DE PRÉPARATION (Calcul automatique de la synchronisation)
+            msg_fail += f"\n\n🔥 **PRÉPAREZ-VOUS POUR LE PALIER {palier_actuel + 1} ({nom_paire}).**\n⏳ *Vous avez ~1 minute pour préparer le broker. L'IA attendra l'ouverture précise de la prochaine bougie...*"
+            bot.send_message(chat_id, msg_fail, parse_mode="Markdown")
+            
+            # Le bot calcule les secondes restantes jusqu'à la prochaine minute pleine (xx:yy:00)
+            maintenant = datetime.datetime.now()
+            sec_rest = 60 - maintenant.second
+            # On s'assure de laisser un délai minimum au trader (au moins 15s)
+            if sec_rest < 15: sec_rest += 60 
+
+            # Lancement parfaitement synchronisé !
+            Timer(sec_rest, lancer_nouveau_palier, args=[chat_id, symbole, action, trade['duree'], palier_actuel + 1]).start()
+            
         else:
+            # ARRÊT MAX MARTINGALE
             niveaux_martingale[chat_id] = 0
             texte = f"🛑 **FIN DE SÉQUENCE ATTEINTE (OTM)**\n⚠️ {nom_paire} ({action})\n📉 Sortie : `{prix_sortie}`\nRepli tactique."
             if palier_actuel > 0: stats_journee['OTM'] += 1
@@ -392,7 +377,7 @@ def override_victoire_manuelle(call):
     bot.send_message(chat_id, "🔄 **CORRECTION MANUELLE APPLIQUÉE**", parse_mode="Markdown")
 
 # ==========================================
-# MOTEUR ULTIMATE V16.9 (MTFA + VOLUME + PRICE ACTION)
+# MOTEUR ULTIMATE V17.0 (MTFA + VOLUME + PRICE ACTION)
 # ==========================================
 
 def analyser_binaire_pro(symbole, mode="STANDARD"):
@@ -527,10 +512,10 @@ def bienvenue(message):
     utilisateurs_actifs.add(user_id)
     niveaux_martingale[user_id] = niveaux_martingale.get(user_id, 0)
     mode_trading[user_id] = mode_trading.get(user_id, "STANDARD")
-    texte = """🏴‍☠️ **TERMINAL PRIME - V16.9 ULTIMATE** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - V17.0 ULTIMATE** 🔥
     
-Modules activés : Exception du Sniper & Verrouillage Temporel. 
-🪙 *Les Cryptomonnaies sont verrouillées la semaine et actives uniquement le week-end.*"""
+Mise à jour activée : Auto-Sync & Bilan Journalier à 18h00 GMT. 
+⏳ *Pause d'une minute calculée entre les Paliers pour préparation.*"""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
@@ -543,10 +528,7 @@ def save_devise(call):
     
     actif = call.data.replace("set_", "")
     
-    # 🔒 VÉRIFICATION DU STATUT TEMPOREL
     statut, msg_erreur = est_symbole_autorise(actif)
-    
-    # Si le week-end est fermé totalement (OTC) OU Crypto tentée la semaine
     if statut == "BLOCAGE_TOTAL":
         bot.send_message(chat_id, msg_erreur, parse_mode="Markdown")
         return
@@ -560,7 +542,6 @@ def save_devise(call):
         
     action, confiance, exp_texte, duree_secondes, rsi_val, stoch_val, bb_status, score = analyser_binaire_pro(actif, mode_actuel)
     
-    # EXCEPTION DU SNIPER : Si la session est mauvaise mais qu'on n'a PAS de 10/10
     if statut == "HORS_SESSION":
         if score is None or score < 10.0:
             try: bot.edit_message_text(f"{msg_erreur}\n\n*(Le setup n'est pas un 10/10 parfait pour forcer l'entrée)*", chat_id, msg.message_id, parse_mode="Markdown")
@@ -585,15 +566,12 @@ def save_devise(call):
     if palier == 0 and score >= 10.0:
         palier = 1 
         niveaux_martingale[chat_id] = 1 
-        if statut == "HORS_SESSION":
-            fantome_texte = "👑 **EXCEPTION 10/10 HORS SESSION !**\nSetup parfait validé, on attaque en réel direct malgré l'horaire !"
-        else:
-            fantome_texte = "🧠 **FANTÔME DÉSACTIVÉ PAR L'IA**\nSetup parfait validé, on attaque en réel direct !"
+        if statut == "HORS_SESSION": fantome_texte = "👑 **EXCEPTION 10/10 HORS SESSION !**\nSetup parfait validé, on attaque en réel direct !"
+        else: fantome_texte = "🧠 **FANTÔME DÉSACTIVÉ PAR L'IA**\nSetup parfait validé, on attaque en réel direct !"
     else:
         fantome_texte = "*Le bot prend ce trade virtuellement (Fantôme). NE RENTREZ PAS.*"
 
     mise_calculee = int((CAPITAL_ACTUEL * 0.02) * (COEF_MARTINGALE ** (palier - 1 if palier > 0 else 0)))
-
     str_p0 = heure_entree_p0.strftime(fmt)
 
     if palier == 0:
@@ -606,7 +584,7 @@ def save_devise(call):
 
 {fantome_texte}
 ──────────────────
-*(Si échec, le signal complet du Palier 1 arrivera automatiquement)*"""
+*(Si échec, vous aurez ~1 minute pour préparer le Palier 1)*"""
     else:
         signal = f"""🚨 **ALERTE DE TIR RÉEL VIP** 🚨
 ──────────────────
@@ -640,14 +618,13 @@ def horaires_trading(message):
 🛑 **Repli Tactique (17h30 - 00h00) :** Le Forex est bloqué.
 🪙 **Week-end (Ven 21h - Dim 21h) :** EXCLUSIVEMENT pour les Cryptos (bloquées la semaine).
 
-*(Note : Si le bot repère un setup parfait à 10/10 hors de sa session Forex, il forcera l'alerte !)*"""
+*(Bilan Automatique à 18h00 GMT)*"""
     bot.send_message(message.chat.id, texte, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "📊 CHOISIR UNE DEVISE")
 def devises(message):
     if not est_autorise(message.chat.id): return
     markup = InlineKeyboardMarkup(row_width=3)
-    
     markup.add(
         InlineKeyboardButton("🪙 BTC/USD", callback_data="set_BTCUSD"), InlineKeyboardButton("🔷 ETH/USD", callback_data="set_ETHUSD"), InlineKeyboardButton("⚡ LTC/USD", callback_data="set_LTCUSD"),
         InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD"), InlineKeyboardButton("🇨🇦 CAD/JPY", callback_data="set_CADJPY"), InlineKeyboardButton("🇨🇭 CHF/JPY", callback_data="set_CHFJPY"),
@@ -666,10 +643,8 @@ def lancer(message):
     actif = user_prefs.get(message.from_user.id)
     if not actif: return bot.send_message(message.chat.id, "⚠️ Choisis d'abord une devise !")
     
-    # Validation initiale du bouton Lancer
     statut, msg_erreur = est_symbole_autorise(actif)
-    if statut == "BLOCAGE_TOTAL": 
-        return bot.send_message(chat_id, msg_erreur, parse_mode="Markdown")
+    if statut == "BLOCAGE_TOTAL": return bot.send_message(chat_id, msg_erreur, parse_mode="Markdown")
         
     save_devise(type('obj', (object,), {'data': f"set_{actif}", 'message': message, 'from_user': message.from_user})())
 
@@ -682,8 +657,6 @@ def scanner_marche_auto():
                 
             for paire in CRYPTO_PAIRS + FOREX_PAIRS:
                 statut, _ = est_symbole_autorise(paire)
-                
-                # Le scanner ignore complètement les paires en BLOCAGE_TOTAL (OTC ou Cryptos la semaine)
                 if statut == "BLOCAGE_TOTAL": continue
                     
                 for mode in ["STANDARD", "SCALP"]:
@@ -694,9 +667,7 @@ def scanner_marche_auto():
                     action, conf, exp, dur, rsi, stoch, bb, sc = analyser_binaire_pro(paire, mode)
                     
                     if action and "⚠️" not in action:
-                        # Si hors session, on exige un score parfait de 10/10 pour alerter
-                        if statut == "HORS_SESSION" and (sc is None or sc < 10.0):
-                            continue
+                        if statut == "HORS_SESSION" and (sc is None or sc < 10.0): continue
                             
                         derniere_alerte_auto[cle_memoire] = time.time()
                         markup = InlineKeyboardMarkup().add(InlineKeyboardButton(f"⚡ Frapper {paire[:3]}/{paire[3:]}" if mode == "SCALP" else f"📊 Verrouiller {paire[:3]}/{paire[3:]}", callback_data=f"set_{paire}"))
@@ -709,8 +680,52 @@ def scanner_marche_auto():
                                 except: pass
         except Exception as e: pass
 
+# ==========================================
+# TÂCHE PLANIFIÉE : BILAN À 18H00 GMT
+# ==========================================
+
+def gestionnaire_bilan():
+    global stats_journee
+    bilan_envoye_aujourdhui = False
+    
+    while True:
+        try:
+            now = datetime.datetime.utcnow()
+            
+            # Envoi du bilan à 18h00 pile GMT
+            if now.hour == 18 and now.minute == 0:
+                if not bilan_envoye_aujourdhui:
+                    total_trades = stats_journee['ITM'] + stats_journee['OTM']
+                    winrate = (stats_journee['ITM'] / total_trades * 100) if total_trades > 0 else 0
+                    
+                    texte_bilan = f"📊 **BILAN JOURNALIER DU TERMINAL (18h00 GMT)** 📊\n"
+                    texte_bilan += f"──────────────────\n"
+                    texte_bilan += f"✅ **CIBLES ABATTUES (ITM) :** {stats_journee['ITM']}\n"
+                    texte_bilan += f"❌ **TIRS RATÉS (OTM) :** {stats_journee['OTM']}\n"
+                    texte_bilan += f"🎯 **TAUX DE RÉUSSITE :** {winrate:.1f}%\n"
+                    texte_bilan += f"──────────────────\n"
+                    texte_bilan += f"*Nettoyage des serveurs. Prêt pour la Session Asiatique de Minuit.*"
+                    
+                    for uid in utilisateurs_actifs:
+                        if est_autorise(uid):
+                            try: bot.send_message(uid, texte_bilan, parse_mode="Markdown")
+                            except: pass
+                    
+                    # Remise à zéro des compteurs pour le jour suivant
+                    stats_journee = {'ITM': 0, 'OTM': 0, 'details': []}
+                    bilan_envoye_aujourdhui = True
+            
+            # Réinitialisation de la sécurité à 18h05 pour le lendemain
+            elif now.hour == 18 and now.minute > 5:
+                bilan_envoye_aujourdhui = False
+                
+        except Exception as e:
+            pass
+        time.sleep(30) # Vérifie l'heure toutes les 30 secondes
+
 if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition V16.9 ULTIMATE Démarrée.", flush=True)
+    Thread(target=gestionnaire_bilan, daemon=True).start() # Activation du rapport 18h00
+    print("⬛ BOÎTE NOIRE : Édition V17.0 ULTIMATE Démarrée.", flush=True)
     bot.infinity_polling()
