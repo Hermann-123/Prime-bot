@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAEmiu8i4IWUVPynr9J-HE0MPttHdBv77Ac"
+TELEGRAM_TOKEN = "8658287331:AAHxgpK9ZWCSPKmdFRKO2pMy6e3ucRAHj3o"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -67,7 +67,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition V17.0 ULTIMATE (Auto-Sync & Bilan 18h)"
+    return "Terminal Prime VIP : Édition V17.3 ULTIMATE (Signal Immédiat M-1 & Flash Tir)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -275,7 +275,7 @@ def vision_marche(message):
     except: bot.edit_message_text("❌ Erreur d'analyse.", message.chat.id, msg.message_id)
 
 # ==========================================
-# MOTEUR SYNCHRONISÉ MARTINGALE V17.0
+# MOTEUR DE TIR V17.3 (SIGNAL INSTANTANÉ & FLASH)
 # ==========================================
 
 def relever_prix_entree(chat_id, symbole):
@@ -283,16 +283,54 @@ def relever_prix_entree(chat_id, symbole):
     if prix and chat_id in trades_en_cours and trades_en_cours[chat_id]['symbole'] == symbole:
         trades_en_cours[chat_id]['prix_entree'] = prix
 
-def lancer_nouveau_palier(chat_id, symbole, action_brute, duree, palier):
+def preparer_nouveau_palier(chat_id, symbole, action_brute, duree, palier):
+    """
+    Calcule et envoie le signal complet IMMÉDIATEMENT,
+    et déclenche un compte à rebours caché pour l'ordre de tir flash.
+    """
     nom_paire = f"{symbole[:3]}/{symbole[3:]}"
     mise = int((CAPITAL_ACTUEL * 0.02) * (COEF_MARTINGALE ** palier))
     exp_texte = f"{int(duree/60)} MIN" if duree >= 60 else f"{duree} SEC"
     action_affichage = "🟢 ACHAT (CALL)" if action_brute == "CALL" else "🔴 VENTE (PUT)"
-    heure_actuelle = datetime.datetime.now().strftime("%H:%M:%S")
     
-    texte = f"🚨 **TIR IMMÉDIAT : PALIER {palier}** 🚨\n──────────────────\n🌐 **ACTIF :** {nom_paire}\n⏱ **HEURE EXACTE :** `{heure_actuelle}`\n👉 **ACTION :** {action_affichage}\n⏳ **DURÉE :** {exp_texte}\n💵 **MISE :** `{mise}$`\n──────────────────\n🔥 **CLIQUEZ SUR {action_affichage} MAINTENANT !**"
+    maintenant = datetime.datetime.now()
+    sec_rest = 60 - maintenant.second
+    # S'il reste moins de 15 secondes, on donne une minute de plus pour la préparation
+    if sec_rest < 15: sec_rest += 60 
     
-    markup = InlineKeyboardMarkup().add(InlineKeyboardButton("✅ GAGNÉ SUR POCKET (Reprendre)", callback_data="force_win"))
+    heure_entree = maintenant + datetime.timedelta(seconds=sec_rest)
+    heure_texte = heure_entree.strftime("%H:%M:00")
+    
+    texte = f"🚨 **SIGNAL DE TIR : PALIER {palier}** 🚨\n"
+    texte += f"──────────────────\n"
+    texte += f"🌐 **ACTIF :** {nom_paire}\n"
+    texte += f"⏱ **ENTRÉE EXACTE :** `{heure_texte}`\n"
+    texte += f"👉 **ACTION :** {action_affichage}\n"
+    texte += f"⏳ **DURÉE :** {exp_texte}\n"
+    texte += f"💵 **MISE :** `{mise}$`\n"
+    texte += f"──────────────────\n"
+    texte += f"⏳ *Préparez le broker. L'IA enverra un flash pour valider le tir à la seconde 00.*"
+    
+    try: bot.send_message(chat_id, texte, parse_mode="Markdown")
+    except: pass
+    
+    # Le bot attend la fin du compte à rebours pour envoyer le message de "CLIC"
+    Timer(sec_rest, executer_tir_flash, args=[chat_id, symbole, action_brute, duree, palier]).start()
+
+def executer_tir_flash(chat_id, symbole, action_brute, duree, palier):
+    """
+    Envoie le signal bref "CLIQUEZ" à la seconde 00 et lance la surveillance du trade.
+    """
+    action_affichage = "🟢 ACHAT (CALL)" if action_brute == "CALL" else "🔴 VENTE (PUT)"
+    nom_paire = f"{symbole[:3]}/{symbole[3:]}"
+    
+    if palier == 0:
+        texte = f"👻 **LE FANTÔME EST LANCÉ ({nom_paire})** 👻\nL'IA observe le marché virtuellement..."
+        markup = None
+    else:
+        texte = f"🔥 **TIR IMMÉDIAT : PALIER {palier} ({nom_paire})** 🔥\n👉 **CLIQUEZ SUR {action_affichage} MAINTENANT !**"
+        markup = InlineKeyboardMarkup().add(InlineKeyboardButton("✅ GAGNÉ SUR POCKET", callback_data="force_win"))
+        
     try: bot.send_message(chat_id, texte, parse_mode="Markdown", reply_markup=markup)
     except: pass
     
@@ -335,24 +373,16 @@ def verifier_resultat(chat_id):
             niveaux_martingale[chat_id] = palier_actuel + 1
             if chat_id in trades_en_cours: del trades_en_cours[chat_id] 
             
-            # Annonce de la perte
+            # Annonce Immédiate de la perte
             if palier_actuel == 0: 
-                msg_fail = f"⚠️ **PIÈGE BROKER DÉTECTÉ (Fantôme Échoué)**\n📉 Sortie : `{prix_sortie}`"
+                msg_fail = f"⚠️ **PIÈGE BROKER DÉTECTÉ (Fantôme Échoué)**\n📉 Sortie : `{prix_sortie}`\n\n⚡ *Génération instantanée du signal Palier 1...*"
             else: 
-                msg_fail = f"⚠️ **TIR RATÉ (Palier {palier_actuel} Échoué)**\n📉 Sortie : `{prix_sortie}`"
-
-            # ⏳ PAUSE TACTIQUE DE PRÉPARATION (Calcul automatique de la synchronisation)
-            msg_fail += f"\n\n🔥 **PRÉPAREZ-VOUS POUR LE PALIER {palier_actuel + 1} ({nom_paire}).**\n⏳ *Vous avez ~1 minute pour préparer le broker. L'IA attendra l'ouverture précise de la prochaine bougie...*"
+                msg_fail = f"⚠️ **TIR RATÉ (Palier {palier_actuel} Échoué)**\n📉 Sortie : `{prix_sortie}`\n\n⚡ *Génération instantanée du palier suivant...*"
+                
             bot.send_message(chat_id, msg_fail, parse_mode="Markdown")
             
-            # Le bot calcule les secondes restantes jusqu'à la prochaine minute pleine (xx:yy:00)
-            maintenant = datetime.datetime.now()
-            sec_rest = 60 - maintenant.second
-            # On s'assure de laisser un délai minimum au trader (au moins 15s)
-            if sec_rest < 15: sec_rest += 60 
-
-            # Lancement parfaitement synchronisé !
-            Timer(sec_rest, lancer_nouveau_palier, args=[chat_id, symbole, action, trade['duree'], palier_actuel + 1]).start()
+            # Déclenchement instantané du signal de préparation du prochain palier
+            preparer_nouveau_palier(chat_id, symbole, action, trade['duree'], palier_actuel + 1)
             
         else:
             # ARRÊT MAX MARTINGALE
@@ -377,7 +407,7 @@ def override_victoire_manuelle(call):
     bot.send_message(chat_id, "🔄 **CORRECTION MANUELLE APPLIQUÉE**", parse_mode="Markdown")
 
 # ==========================================
-# MOTEUR ULTIMATE V17.0 (MTFA + VOLUME + PRICE ACTION)
+# MOTEUR ULTIMATE V17.3 (MTFA + VOLUME + PRICE ACTION)
 # ==========================================
 
 def analyser_binaire_pro(symbole, mode="STANDARD"):
@@ -512,10 +542,10 @@ def bienvenue(message):
     utilisateurs_actifs.add(user_id)
     niveaux_martingale[user_id] = niveaux_martingale.get(user_id, 0)
     mode_trading[user_id] = mode_trading.get(user_id, "STANDARD")
-    texte = """🏴‍☠️ **TERMINAL PRIME - V17.0 ULTIMATE** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - V17.3 ULTIMATE** 🔥
     
-Mise à jour activée : Auto-Sync & Bilan Journalier à 18h00 GMT. 
-⏳ *Pause d'une minute calculée entre les Paliers pour préparation.*"""
+Mise à jour Finale : Envoi Immédiat du Signal de Palier & Flash Tir synchronisé.
+📊 *Rapport Journalier Automatique programmé à 18h00 GMT.*"""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
@@ -559,7 +589,7 @@ def save_devise(call):
     elif mode_actuel == "STANDARD" and sec_rest < 15: sec_rest += 60
         
     heure_entree_p0 = maintenant + datetime.timedelta(seconds=sec_rest)
-    fmt = "%H:%M:%S"
+    str_p0 = heure_entree_p0.strftime("%H:%M:00")
     
     palier = niveaux_martingale.get(chat_id, 0)
     
@@ -572,19 +602,18 @@ def save_devise(call):
         fantome_texte = "*Le bot prend ce trade virtuellement (Fantôme). NE RENTREZ PAS.*"
 
     mise_calculee = int((CAPITAL_ACTUEL * 0.02) * (COEF_MARTINGALE ** (palier - 1 if palier > 0 else 0)))
-    str_p0 = heure_entree_p0.strftime(fmt)
 
     if palier == 0:
         signal = f"""👻 **MODE FANTÔME (PALIER 0)** 👻
 ──────────────────
 🌐 **ACTIF :** {nom_affiche}
-⏱ **HEURE EXACTE :** `{str_p0}`
+⏱ **ENTRÉE EXACTE :** `{str_p0}`
 👉 **ACTION :** {action}
 ⏳ **DURÉE :** {exp_texte}
 
 {fantome_texte}
 ──────────────────
-*(Si échec, vous aurez ~1 minute pour préparer le Palier 1)*"""
+*(Si échec, le bot générera instantanément le signal Palier 1)*"""
     else:
         signal = f"""🚨 **ALERTE DE TIR RÉEL VIP** 🚨
 ──────────────────
@@ -603,9 +632,9 @@ def save_devise(call):
         bot.send_message(chat_id, signal, parse_mode="Markdown")
     except: pass
 
-    trades_en_cours[chat_id] = {'symbole': actif, 'action': "CALL" if "ACHAT" in action else "PUT", 'duree': duree_secondes}
-    Timer(sec_rest, relever_prix_entree, args=[chat_id, actif]).start()
-    Timer(sec_rest + duree_secondes, verifier_resultat, args=[chat_id]).start()
+    # Lancement du flash-timer (le compte à rebours silencieux)
+    action_brute = "CALL" if "ACHAT" in action else "PUT"
+    Timer(sec_rest, executer_tir_flash, args=[chat_id, actif, action_brute, duree_secondes, palier]).start()
 
 @bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
 def horaires_trading(message):
@@ -721,11 +750,11 @@ def gestionnaire_bilan():
                 
         except Exception as e:
             pass
-        time.sleep(30) # Vérifie l'heure toutes les 30 secondes
+        time.sleep(30)
 
 if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
-    Thread(target=gestionnaire_bilan, daemon=True).start() # Activation du rapport 18h00
-    print("⬛ BOÎTE NOIRE : Édition V17.0 ULTIMATE Démarrée.", flush=True)
+    Thread(target=gestionnaire_bilan, daemon=True).start()
+    print("⬛ BOÎTE NOIRE : Édition V17.3 ULTIMATE Démarrée.", flush=True)
     bot.infinity_polling()
