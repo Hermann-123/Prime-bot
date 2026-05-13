@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAGPbWpWtsD-m4sJIYr6FxPStNwYHqKP93E"
+TELEGRAM_TOKEN = "8658287331:AAEI-a198wup_GgblvzGosR_e4KFvq2nvWw"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -67,7 +67,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition V17.3 ULTIMATE (Signal Immédiat M-1 & Flash Tir)"
+    return "Terminal Prime VIP : Édition V17.4 ULTIMATE (Filtres Anti-Spike & Micro-Pip)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -407,7 +407,7 @@ def override_victoire_manuelle(call):
     bot.send_message(chat_id, "🔄 **CORRECTION MANUELLE APPLIQUÉE**", parse_mode="Markdown")
 
 # ==========================================
-# MOTEUR ULTIMATE V17.3 (MTFA + VOLUME + PRICE ACTION)
+# MOTEUR ULTIMATE V17.4 (MTFA + VOLUME + FILTRES ANTI-PIPETTES)
 # ==========================================
 
 def analyser_binaire_pro(symbole, mode="STANDARD"):
@@ -429,7 +429,12 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
             
             df['volume_proxy'] = df['high'] - df['low']
             df['volume_moyen'] = df['volume_proxy'].rolling(window=10).mean()
-            volume_ok = df['volume_proxy'].iloc[-1] > df['volume_moyen'].iloc[-1]
+            
+            vol_actuel = df['volume_proxy'].iloc[-1]
+            vol_moyen = df['volume_moyen'].iloc[-1]
+            
+            # 🛡️ FILTRE 1 : ANTI-SPIKE (Évite les explosions de volatilité)
+            volume_ok = (vol_actuel > vol_moyen) and (vol_actuel < (vol_moyen * 2.5))
 
             avg_taille = df['taille_bougie'].iloc[-4:-1].mean()
             avg_corps = df['corps_bougie'].iloc[-4:-1].mean()
@@ -444,6 +449,9 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
             rsi_val, stoch_val = round(last['rsi'], 1), round(last['stoch_k'], 1)
             action, confiance, bb_status, score_algo = None, 0, "En Attente", 5
             
+            # 🛡️ FILTRE 3 : ANTI-MICRO-PIP (Corps Minimum)
+            vrai_corps = last['corps_bougie'] > (last['taille_bougie'] * 0.25)
+            
             last_is_green = last['close'] > last['open']
             last_is_red = last['close'] < last['open']
             prev_is_green = prev['close'] > prev['open']
@@ -453,7 +461,6 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
             rejet_baissier = last['meche_haute'] > (last['corps_bougie'] * 2.0)
             avalement_haussier = prev_is_red and last_is_green and (last['close'] > prev['open']) and (last['open'] <= prev['close'])
             avalement_baissier = prev_is_green and last_is_red and (last['close'] < prev['open']) and (last['open'] >= prev['close'])
-            doji = last['corps_bougie'] <= (last['taille_bougie'] * 0.1)
             harami_bull = prev_is_red and last_is_green and (last['open'] > prev['close']) and (last['close'] < prev['open'])
             harami_bear = prev_is_green and last_is_red and (last['open'] < prev['close']) and (last['close'] > prev['open'])
             
@@ -466,16 +473,16 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
                 duree_secondes = tf
                 exp_texte = f"{int(tf/60)} MIN"
                 
-                if tendance_haussiere and volume_ok and (stoch_val < 35) and (rsi_val > 45):
+                if tendance_haussiere and volume_ok and vrai_corps and (stoch_val < 35) and (rsi_val > 45):
                     action, confiance, score_algo = "🟢 ACHAT (CALL)", 85, 8.0
                     bb_status = f"🎯 Pullback {exp_texte} + Volume OK"
-                    if avalement_haussier or rejet_haussier or harami_bull or (doji and p_prev['close'] > p_prev['open']):
+                    if avalement_haussier or rejet_haussier or harami_bull:
                         score_algo, confiance, bb_status = 10.0, 99, f"👑 SETUP ULTIME 10/10 🚀"
                         
-                elif tendance_baissiere and volume_ok and (stoch_val > 65) and (rsi_val < 55):
+                elif tendance_baissiere and volume_ok and vrai_corps and (stoch_val > 65) and (rsi_val < 55):
                     action, confiance, score_algo = "🔴 VENTE (PUT)", 85, 8.0
                     bb_status = f"🎯 Pullback {exp_texte} + Volume OK"
-                    if avalement_baissier or rejet_baissier or harami_bear or (doji and p_prev['close'] < p_prev['open']):
+                    if avalement_baissier or rejet_baissier or harami_bear:
                         score_algo, confiance, bb_status = 10.0, 99, f"👑 SETUP ULTIME 10/10 ☄️"
 
             elif mode == "SCALP":
@@ -488,7 +495,7 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
                 ema_50 = df['ema_50'].iloc[-1]
                 duree_secondes, exp_texte = 60, "1 MINUTE (SCALP 🛡️)"
                 
-                if not squeeze and volume_ok:
+                if not squeeze and volume_ok and vrai_corps:
                     if (last['low'] <= bb_basse) and (rsi_val < 30) and (c > ema_50) and rejet_haussier:
                         action, confiance, score_algo, bb_status = "🟢 ACHAT (CALL)", 95, 9.5, "🛡️ Rejet Bas + Volume"
                     elif (last['high'] >= bb_haute) and (rsi_val > 70) and (c < ema_50) and rejet_baissier:
@@ -542,10 +549,10 @@ def bienvenue(message):
     utilisateurs_actifs.add(user_id)
     niveaux_martingale[user_id] = niveaux_martingale.get(user_id, 0)
     mode_trading[user_id] = mode_trading.get(user_id, "STANDARD")
-    texte = """🏴‍☠️ **TERMINAL PRIME - V17.3 ULTIMATE** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - V17.4 ULTIMATE** 🔥
     
-Mise à jour Finale : Envoi Immédiat du Signal de Palier & Flash Tir synchronisé.
-📊 *Rapport Journalier Automatique programmé à 18h00 GMT.*"""
+Mise à jour activée : 🛡️ **Bouclier Anti Micro-Pip & Anti-Spike**. 
+L'algorithme filtre les volatilités excessives et intègre l'envoi immédiat du signal."""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
@@ -756,5 +763,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestionnaire_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition V17.3 ULTIMATE Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition V17.4 ULTIMATE Démarrée.", flush=True)
     bot.infinity_polling()
