@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAHgea6DWMGV7-rzPkQtGY7aGuOwOOkxkFY"
+TELEGRAM_TOKEN = "8658287331:AAFFLvv7lJNRqCTWC4btVaj0GJ76Qe-zr-4"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -67,7 +67,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition V17.6 ULTIMATE (10/10 Direct & Temps Étendu)"
+    return "Terminal Prime VIP : Édition V17.7 ULTIMATE (Double Tendance + 10/10 Direct)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -267,15 +267,20 @@ def vision_marche(message):
         vol_actuel = df['volume_proxy'].iloc[-1]
         etat_vol = "Actif 💥" if vol_actuel > vol_moyen else "Faible 💤"
         ema_200 = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator().iloc[-1]
+        ema_50 = ta.trend.EMAIndicator(close=df['close'], window=50).ema_indicator().iloc[-1]
         rsi = ta.momentum.RSIIndicator(close=df['close']).rsi().iloc[-1]
         stoch_k = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close']).stoch().iloc[-1]
         prix_actuel = df['close'].iloc[-1]
-        rapport = f"👁️ **VISION RAYONS X : {symbole}** 👁️\n──────────────────\n💰 **Prix :** `{prix_actuel:.5f}`\n🛡️ **Tendance (EMA 200) :** `{'Hausse 🟢' if prix_actuel > ema_200 else 'Baisse 🔴'}`\n⛽ **Volume/Tick :** `{etat_vol}`\n📊 **RSI :** `{rsi:.2f}`\n📉 **Stochastique :** `{stoch_k:.2f}`\n──────────────────"
+        
+        # 🛡️ Mise à jour Vision pour la Double Tendance
+        tendance = "Hausse 🟢" if (prix_actuel > ema_50 and ema_50 > ema_200) else "Baisse 🔴" if (prix_actuel < ema_50 and ema_50 < ema_200) else "Incertaine ⚠️"
+        
+        rapport = f"👁️ **VISION RAYONS X : {symbole}** 👁️\n──────────────────\n💰 **Prix :** `{prix_actuel:.5f}`\n🛡️ **Tendance Globale :** `{tendance}`\n⛽ **Volume/Tick :** `{etat_vol}`\n📊 **RSI :** `{rsi:.2f}`\n📉 **Stochastique :** `{stoch_k:.2f}`\n──────────────────"
         bot.edit_message_text(rapport, message.chat.id, msg.message_id, parse_mode="Markdown")
     except: bot.edit_message_text("❌ Erreur d'analyse.", message.chat.id, msg.message_id)
 
 # ==========================================
-# MOTEUR DE TIR V17.6 (SIGNAL INSTANTANÉ & FLASH)
+# MOTEUR DE TIR V17.7 (SIGNAL INSTANTANÉ & FLASH)
 # ==========================================
 
 def relever_prix_entree(chat_id, symbole):
@@ -393,7 +398,7 @@ def override_victoire_manuelle(call):
     bot.send_message(chat_id, "🔄 **CORRECTION MANUELLE APPLIQUÉE**", parse_mode="Markdown")
 
 # ==========================================
-# MOTEUR ULTIMATE V17.6 (MTFA + VOLUME + FILTRES ANTI-PIPETTES)
+# MOTEUR ULTIMATE V17.7 (DOUBLE EMA + 10/10)
 # ==========================================
 
 def analyser_binaire_pro(symbole, mode="STANDARD"):
@@ -426,11 +431,17 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
             if avg_corps > 0 and (avg_taille > avg_corps * 3.5):
                 return "⚠️ Filtre Anti-Chaos activé (Marché Hache-Viande).", None, None, None, None, None, None, None
 
+            # 🛡️ FILTRES DE DOUBLE TENDANCE
+            df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
+            df['ema_50'] = ta.trend.EMAIndicator(close=df['close'], window=50).ema_indicator()
+
             df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
             df['stoch_k'] = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close']).stoch()
             
             last, prev, p_prev = df.iloc[-1], df.iloc[-2], df.iloc[-3]
             c = last['close']
+            ema200_val = last['ema_200']
+            ema50_val = last['ema_50']
             rsi_val, stoch_val = round(last['rsi'], 1), round(last['stoch_k'], 1)
             action, confiance, bb_status, score_algo = None, 0, "En Attente", 5
             
@@ -450,22 +461,23 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
             
             if mode == "STANDARD":
                 indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
-                df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
                 
-                tendance_haussiere = c > df['ema_200'].iloc[-1]
-                tendance_baissiere = c < df['ema_200'].iloc[-1]
+                # LA MAGIE DU DOUBLE ALIGNEMENT (Évite les crashs soudains)
+                tendance_haussiere = (c > ema50_val) and (ema50_val > ema200_val)
+                tendance_baissiere = (c < ema50_val) and (ema50_val < ema200_val)
+                
                 duree_secondes = tf
                 exp_texte = f"{int(tf/60)} MIN"
                 
                 if tendance_haussiere and volume_ok and vrai_corps and (stoch_val < 35) and (rsi_val > 45):
                     action, confiance, score_algo = "🟢 ACHAT (CALL)", 85, 8.0
-                    bb_status = f"🎯 Pullback {exp_texte} + Volume OK"
+                    bb_status = f"🎯 Pullback {exp_texte} + Tendance Alignée"
                     if avalement_haussier or rejet_haussier or harami_bull:
                         score_algo, confiance, bb_status = 10.0, 99, f"👑 SETUP ULTIME 10/10 🚀"
                         
                 elif tendance_baissiere and volume_ok and vrai_corps and (stoch_val > 65) and (rsi_val < 55):
                     action, confiance, score_algo = "🔴 VENTE (PUT)", 85, 8.0
-                    bb_status = f"🎯 Pullback {exp_texte} + Volume OK"
+                    bb_status = f"🎯 Pullback {exp_texte} + Tendance Alignée"
                     if avalement_baissier or rejet_baissier or harami_bear:
                         score_algo, confiance, bb_status = 10.0, 99, f"👑 SETUP ULTIME 10/10 ☄️"
 
@@ -475,14 +487,12 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
                 df['bb_width'] = indicateur_bb.bollinger_wband()
                 squeeze = df['bb_width'].iloc[-1] < (df['bb_width'].rolling(window=20).mean().iloc[-1] * 0.8)
 
-                df['ema_50'] = ta.trend.EMAIndicator(close=df['close'], window=50).ema_indicator()
-                ema_50 = df['ema_50'].iloc[-1]
                 duree_secondes, exp_texte = 60, "1 MINUTE (SCALP 🛡️)"
                 
                 if not squeeze and volume_ok and vrai_corps:
-                    if (last['low'] <= bb_basse) and (rsi_val < 30) and (c > ema_50) and rejet_haussier:
+                    if (last['low'] <= bb_basse) and (rsi_val < 30) and (c > ema50_val) and rejet_haussier:
                         action, confiance, score_algo, bb_status = "🟢 ACHAT (CALL)", 95, 9.5, "🛡️ Rejet Bas + Volume"
-                    elif (last['high'] >= bb_haute) and (rsi_val > 70) and (c < ema_50) and rejet_baissier:
+                    elif (last['high'] >= bb_haute) and (rsi_val > 70) and (c < ema50_val) and rejet_baissier:
                         action, confiance, score_algo, bb_status = "🔴 VENTE (PUT)", 95, 9.5, "🛡️ Rejet Haut + Volume"
 
             if action:
@@ -533,10 +543,11 @@ def bienvenue(message):
     utilisateurs_actifs.add(user_id)
     niveaux_martingale[user_id] = niveaux_martingale.get(user_id, 0)
     mode_trading[user_id] = mode_trading.get(user_id, "STANDARD")
-    texte = """🏴‍☠️ **TERMINAL PRIME - V17.6 ULTIMATE 💎** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - V17.7 ULTIMATE 🛡️** 🔥
     
-Mise à jour activée : 💎 **10/10 DIRECT & TEMPS ÉTENDU**. 
-Les signaux parfaits ignorent le Fantôme, attaquent directement en Palier 1, et vous octroient **une minute de préparation supplémentaire** !"""
+Mise à jour activée : 🛡️ **BOUCLIER DOUBLE TENDANCE (EMA50 + EMA200)**. 
+L'algorithme annule désormais tout signal d'achat lors d'un crash du marché (couteau qui tombe).
+💎 **10/10 DIRECT & TEMPS ÉTENDU** toujours actif."""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
@@ -581,7 +592,7 @@ def save_devise(call):
         
     palier = niveaux_martingale.get(chat_id, 0)
     
-    # 💎 LOGIQUE V17.6 : LES 10/10 SAUTENT LE FANTÔME + GAGNENT 1 MINUTE
+    # 💎 LOGIQUE V17.7 : LES 10/10 SAUTENT LE FANTÔME + GAGNENT 1 MINUTE
     if palier == 0 and score is not None and score >= 10.0:
         palier = 1 
         niveaux_martingale[chat_id] = 1 
@@ -753,5 +764,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestionnaire_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition V17.6 ULTIMATE Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition V17.7 ULTIMATE Démarrée.", flush=True)
     bot.infinity_polling()
