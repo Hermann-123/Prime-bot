@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAEI-a198wup_GgblvzGosR_e4KFvq2nvWw"
+TELEGRAM_TOKEN = "8658287331:AAFo3FPsNnqmy1JUHN6ItF7cTV4y-e-e4QM"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -67,7 +67,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition V17.4 ULTIMATE (Filtres Anti-Spike & Micro-Pip)"
+    return "Terminal Prime VIP : Édition V17.5 ULTIMATE (Sécurité Fantôme 100%)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -275,7 +275,7 @@ def vision_marche(message):
     except: bot.edit_message_text("❌ Erreur d'analyse.", message.chat.id, msg.message_id)
 
 # ==========================================
-# MOTEUR DE TIR V17.3 (SIGNAL INSTANTANÉ & FLASH)
+# MOTEUR DE TIR V17.5 (SIGNAL INSTANTANÉ & FLASH)
 # ==========================================
 
 def relever_prix_entree(chat_id, symbole):
@@ -407,7 +407,7 @@ def override_victoire_manuelle(call):
     bot.send_message(chat_id, "🔄 **CORRECTION MANUELLE APPLIQUÉE**", parse_mode="Markdown")
 
 # ==========================================
-# MOTEUR ULTIMATE V17.4 (MTFA + VOLUME + FILTRES ANTI-PIPETTES)
+# MOTEUR ULTIMATE V17.5 (MTFA + VOLUME + FILTRES ANTI-PIPETTES)
 # ==========================================
 
 def analyser_binaire_pro(symbole, mode="STANDARD"):
@@ -549,10 +549,10 @@ def bienvenue(message):
     utilisateurs_actifs.add(user_id)
     niveaux_martingale[user_id] = niveaux_martingale.get(user_id, 0)
     mode_trading[user_id] = mode_trading.get(user_id, "STANDARD")
-    texte = """🏴‍☠️ **TERMINAL PRIME - V17.4 ULTIMATE** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - V17.5 ULTIMATE** 🔥
     
-Mise à jour activée : 🛡️ **Bouclier Anti Micro-Pip & Anti-Spike**. 
-L'algorithme filtre les volatilités excessives et intègre l'envoi immédiat du signal."""
+Mise à jour activée : 🛡️ **Sécurité Absolue (Test Fantôme 100%)**. 
+Tous les signaux, y compris les setups 10/10, sont désormais obligés de passer le test Fantôme avant d'engager votre capital."""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
@@ -600,13 +600,14 @@ def save_devise(call):
     
     palier = niveaux_martingale.get(chat_id, 0)
     
-    if palier == 0 and score >= 10.0:
-        palier = 1 
-        niveaux_martingale[chat_id] = 1 
-        if statut == "HORS_SESSION": fantome_texte = "👑 **EXCEPTION 10/10 HORS SESSION !**\nSetup parfait validé, on attaque en réel direct !"
-        else: fantome_texte = "🧠 **FANTÔME DÉSACTIVÉ PAR L'IA**\nSetup parfait validé, on attaque en réel direct !"
+    # Nouvelle logique V17.5 : TOUS LES TRADES PASSENT PAR LE FANTÔME (PALIER 0)
+    if palier == 0:
+        if score is not None and score >= 10.0:
+            fantome_texte = "👑 **SETUP ULTIME 10/10 DÉTECTÉ**\n*Sécurité absolue : L'IA impose le test Fantôme avant tout tir réel. NE RENTREZ PAS.*"
+        else:
+            fantome_texte = "*Le bot prend ce trade virtuellement (Fantôme). NE RENTREZ PAS.*"
     else:
-        fantome_texte = "*Le bot prend ce trade virtuellement (Fantôme). NE RENTREZ PAS.*"
+        fantome_texte = ""
 
     mise_calculee = int((CAPITAL_ACTUEL * 0.02) * (COEF_MARTINGALE ** (palier - 1 if palier > 0 else 0)))
 
@@ -763,5 +764,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestionnaire_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition V17.4 ULTIMATE Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition V17.5 ULTIMATE Démarrée.", flush=True)
     bot.infinity_polling()
