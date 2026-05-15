@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAHJNnZ_W8MkkpGY3taW-j0STNWhL7WDiUs"
+TELEGRAM_TOKEN = "8658287331:AAHSVaQRoPcE1ake0a-lkxdpjtVCjHQzj_Q"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -67,7 +67,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition V17.9 ULTIMATE (SMC / Price Action)"
+    return "Terminal Prime VIP : Édition V17.10 ULTIMATE (SMC + Killswitch Anti-Fusée)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -239,7 +239,6 @@ def verifier_correlation(symbole_base, action_visee):
     if not candles: return True 
     try:
         df_c = pd.DataFrame([{'close': float(c['close'])} for c in candles])
-        # On utilise le Price Action pur pour vérifier la corrélation globale
         c_recent_high = df_c['high'].iloc[-20:-1].max()
         c_recent_low = df_c['low'].iloc[-20:-1].min()
         c_prix = df_c['close'].iloc[-1]
@@ -260,7 +259,7 @@ def vision_marche(message):
     commande = message.text.split()
     if len(commande) < 2: return bot.send_message(message.chat.id, "⚠️ Précise la devise.")
     symbole = commande[1].upper()
-    try: msg = bot.send_message(message.chat.id, f"🔍 *Scan aux rayons X (SMC)...*", parse_mode="Markdown")
+    try: msg = bot.send_message(message.chat.id, f"🔍 *Scan aux rayons X (SMC + Killswitch)...*", parse_mode="Markdown")
     except: return
     candles = obtenir_donnees_deriv(symbole)
     if not candles: return bot.edit_message_text("⚠️ Impossible de scanner.", message.chat.id, msg.message_id)
@@ -289,7 +288,7 @@ def vision_marche(message):
     except: bot.edit_message_text("❌ Erreur d'analyse.", message.chat.id, msg.message_id)
 
 # ==========================================
-# MOTEUR DE TIR V17.9 (SIGNAL INSTANTANÉ & FLASH)
+# MOTEUR DE TIR V17.10 (SIGNAL INSTANTANÉ & FLASH)
 # ==========================================
 
 def relever_prix_entree(chat_id, symbole):
@@ -374,6 +373,25 @@ def verifier_resultat(chat_id):
         except: pass
     else:
         if palier_actuel < MAX_MARTINGALE:
+            # V17.10 : On vérifie l'état d'urgence avant de relancer la Martingale !
+            candles_urgence = obtenir_donnees_deriv(symbole, trade['duree'])
+            if candles_urgence:
+                df_urg = pd.DataFrame([{'open': float(c['open']), 'close': float(c['close'])} for c in candles_urgence])
+                last_3 = df_urg.iloc[-3:]
+                fusee_haussiere = all(row['close'] > row['open'] for _, row in last_3.iterrows())
+                fusee_baissiere = all(row['close'] < row['open'] for _, row in last_3.iterrows())
+                
+                # Si le marché est une fusée contre nous, on stoppe net la Martingale.
+                if (action == "PUT" and fusee_haussiere) or (action == "CALL" and fusee_baissiere):
+                    niveaux_martingale[chat_id] = 0
+                    msg_urgence = f"🛑 **KILLSWITCH ACTIVÉ (ANTI-FUSÉE)** 🛑\nLe marché a explosé contre nous de manière anormale sur {nom_paire}.\nMartingale annulée pour protéger le capital. Repli tactique immédiat."
+                    stats_journee['OTM'] += 1
+                    cooldown_actifs[symbole] = {'time': time.time(), 'action': action}
+                    if chat_id in trades_en_cours: del trades_en_cours[chat_id]
+                    try: bot.send_message(chat_id, msg_urgence, parse_mode="Markdown")
+                    except: pass
+                    return # On sort de la fonction, pas de nouveau palier.
+
             niveaux_martingale[chat_id] = palier_actuel + 1
             if chat_id in trades_en_cours: del trades_en_cours[chat_id] 
             
@@ -407,7 +425,7 @@ def override_victoire_manuelle(call):
     bot.send_message(chat_id, "🔄 **CORRECTION MANUELLE APPLIQUÉE**", parse_mode="Markdown")
 
 # ==========================================
-# MOTEUR ULTIMATE V17.9 (SMC PUR / PRICE ACTION)
+# MOTEUR ULTIMATE V17.10 (SMC + KILLSWITCH)
 # ==========================================
 
 def analyser_binaire_pro(symbole, mode="STANDARD"):
@@ -466,9 +484,13 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
             corps_prev = prev['corps_bougie']
             danger_rejet_baisse = prev['meche_haute'] > (corps_prev * 1.5) if corps_prev > 0 else False
             danger_rejet_hausse = prev['meche_basse'] > (corps_prev * 1.5) if corps_prev > 0 else False
+
+            # 🛡️ BOUTON D'ARRÊT D'URGENCE (KILLSWITCH ANTI-FUSÉE)
+            # On vérifie si les 3 dernières bougies sont toutes du même sens avec des vrais corps
+            fusee_haussiere = last_is_green and prev_is_green and (p_prev['close'] > p_prev['open']) and vrai_corps
+            fusee_baissiere = last_is_red and prev_is_red and (p_prev['close'] < p_prev['open']) and vrai_corps
             
             # 🧱 LOGIQUE SMC (SMART MONEY CONCEPTS)
-            # 1. Analyse de la Structure de Marché (Order Flow)
             swing_high_1 = df['high'].iloc[-20:-10].max()
             swing_low_1 = df['low'].iloc[-20:-10].min()
             swing_high_2 = df['high'].iloc[-10:-1].max()
@@ -477,13 +499,11 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
             structure_haussiere = (swing_high_2 > swing_high_1) and (swing_low_2 >= swing_low_1)
             structure_baissiere = (swing_low_2 < swing_low_1) and (swing_high_2 <= swing_high_1)
 
-            # 2. Zones de Retracement (Premium & Discount)
             prix_moyen_recent = df['close'].iloc[-6:-1].mean()
             dans_zone_discount = c < prix_moyen_recent 
             dans_zone_premium = c > prix_moyen_recent 
 
             if mode == "STANDARD":
-                # ⏱️ PROTOCOLE HIT & RUN (3 MINUTES)
                 if tf == 300:
                     duree_secondes = 180 
                     exp_texte = "3 MIN (HIT & RUN ⚡)"
@@ -491,8 +511,8 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
                     duree_secondes = tf
                     exp_texte = f"{int(tf/60)} MIN"
                 
-                # SMC CALL (Recherche d'un Order Block Haussier / Pullback Discount)
-                if structure_haussiere and dans_zone_discount and volume_ok and vrai_corps and not danger_rejet_baisse:
+                # SMC CALL
+                if structure_haussiere and dans_zone_discount and volume_ok and vrai_corps and not danger_rejet_baisse and not fusee_baissiere:
                     if (stoch_val < 40) and (rsi_val > 40): 
                         action, confiance, score_algo = "🟢 ACHAT (CALL)", 85, 8.0
                         bb_status = f"🎯 SMC : Order Block (Zone Discount)"
@@ -500,8 +520,8 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
                         action, confiance, score_algo = "🟢 ACHAT (CALL)", 99, 10.0
                         bb_status = f"👑 SMC ULTIME : Prise de Liquidité 🚀"
                         
-                # SMC PUT (Recherche d'un Order Block Baissier / Pullback Premium)
-                elif structure_baissiere and dans_zone_premium and volume_ok and vrai_corps and not danger_rejet_hausse:
+                # SMC PUT
+                elif structure_baissiere and dans_zone_premium and volume_ok and vrai_corps and not danger_rejet_hausse and not fusee_haussiere:
                     if (stoch_val > 60) and (rsi_val < 60):
                         action, confiance, score_algo = "🔴 VENTE (PUT)", 85, 8.0
                         bb_status = f"🎯 SMC : Order Block (Zone Premium)"
@@ -510,7 +530,6 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
                         bb_status = f"👑 SMC ULTIME : Prise de Liquidité ☄️"
 
             elif mode == "SCALP":
-                # En scalp SMC, on utilise les bandes comme Liquidity Pools (Prises de liquidité externes)
                 indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2.2)
                 bb_haute, bb_basse = indicateur_bb.bollinger_hband().iloc[-1], indicateur_bb.bollinger_lband().iloc[-1]
                 df['bb_width'] = indicateur_bb.bollinger_wband()
@@ -519,9 +538,9 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
                 duree_secondes, exp_texte = 60, "1 MINUTE (SCALP 🛡️)"
                 
                 if not squeeze and volume_ok and vrai_corps:
-                    if (last['low'] <= bb_basse) and rejet_haussier and not danger_rejet_baisse:
+                    if (last['low'] <= bb_basse) and rejet_haussier and not danger_rejet_baisse and not fusee_baissiere:
                         action, confiance, score_algo, bb_status = "🟢 ACHAT (CALL)", 95, 9.5, "🛡️ SMC Scalp : Chasse aux Stops Bas"
-                    elif (last['high'] >= bb_haute) and rejet_baissier and not danger_rejet_hausse:
+                    elif (last['high'] >= bb_haute) and rejet_baissier and not danger_rejet_hausse and not fusee_haussiere:
                         action, confiance, score_algo, bb_status = "🔴 VENTE (PUT)", 95, 9.5, "🛡️ SMC Scalp : Chasse aux Stops Haut"
 
             if action:
@@ -572,10 +591,10 @@ def bienvenue(message):
     utilisateurs_actifs.add(user_id)
     niveaux_martingale[user_id] = niveaux_martingale.get(user_id, 0)
     mode_trading[user_id] = mode_trading.get(user_id, "STANDARD")
-    texte = """🏴‍☠️ **TERMINAL PRIME - V17.9 ULTIMATE 🧠** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - V17.10 ULTIMATE 🛑** 🔥
     
-Mise à jour activée : 🧠 **MOTEUR SMART MONEY CONCEPTS (SMC)**. 
-Les indicateurs de retard (EMA) ont été supprimés. L'IA traque désormais les *Order Blocks*, les prises de liquidité institutionnelles, et conserve son protocole Hit & Run (3 MIN) pour des frappes chirurgicales."""
+Mise à jour activée : 🛑 **KILLSWITCH ANTI-FUSÉE**. 
+L'algorithme SMC annule désormais toute analyse et désactive instantanément la Martingale s'il détecte une explosion directionnelle incontrôlable du marché (3 bougies pleines). Protégez votre capital."""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
@@ -620,7 +639,6 @@ def save_devise(call):
         
     palier = niveaux_martingale.get(chat_id, 0)
     
-    # 💎 LOGIQUE V17.9 : LES 10/10 SAUTENT LE FANTÔME + GAGNENT 1 MINUTE
     if palier == 0 and score is not None and score >= 10.0:
         palier = 1 
         niveaux_martingale[chat_id] = 1 
@@ -789,5 +807,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestionnaire_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition V17.9 SMC Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition V17.10 SMC Démarrée.", flush=True)
     bot.infinity_polling()
