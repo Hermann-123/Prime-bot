@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAFFLvv7lJNRqCTWC4btVaj0GJ76Qe-zr-4"
+TELEGRAM_TOKEN = "8658287331:AAHJNnZ_W8MkkpGY3taW-j0STNWhL7WDiUs"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -67,7 +67,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition V17.7 ULTIMATE (Double Tendance + 10/10 Direct)"
+    return "Terminal Prime VIP : Édition V17.9 ULTIMATE (SMC / Price Action)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -239,10 +239,14 @@ def verifier_correlation(symbole_base, action_visee):
     if not candles: return True 
     try:
         df_c = pd.DataFrame([{'close': float(c['close'])} for c in candles])
-        ema200_c = ta.trend.EMAIndicator(close=df_c['close'], window=200).ema_indicator().iloc[-1]
-        prix_c = df_c['close'].iloc[-1]
-        tendance_corr = "HAUSSE" if prix_c > ema200_c else "BAISSE"
+        # On utilise le Price Action pur pour vérifier la corrélation globale
+        c_recent_high = df_c['high'].iloc[-20:-1].max()
+        c_recent_low = df_c['low'].iloc[-20:-1].min()
+        c_prix = df_c['close'].iloc[-1]
+        
+        tendance_corr = "HAUSSE" if (c_prix - c_recent_low) > (c_recent_high - c_prix) else "BAISSE"
         action_simplifiee = "CALL" if "ACHAT" in action_visee else "PUT"
+        
         if type_corr == "INVERSE":
             if action_simplifiee == "CALL" and tendance_corr == "HAUSSE": return False 
             if action_simplifiee == "PUT" and tendance_corr == "BAISSE": return False 
@@ -256,7 +260,7 @@ def vision_marche(message):
     commande = message.text.split()
     if len(commande) < 2: return bot.send_message(message.chat.id, "⚠️ Précise la devise.")
     symbole = commande[1].upper()
-    try: msg = bot.send_message(message.chat.id, f"🔍 *Scan aux rayons X...*", parse_mode="Markdown")
+    try: msg = bot.send_message(message.chat.id, f"🔍 *Scan aux rayons X (SMC)...*", parse_mode="Markdown")
     except: return
     candles = obtenir_donnees_deriv(symbole)
     if not candles: return bot.edit_message_text("⚠️ Impossible de scanner.", message.chat.id, msg.message_id)
@@ -266,21 +270,26 @@ def vision_marche(message):
         vol_moyen = df['volume_proxy'].rolling(window=10).mean().iloc[-1]
         vol_actuel = df['volume_proxy'].iloc[-1]
         etat_vol = "Actif 💥" if vol_actuel > vol_moyen else "Faible 💤"
-        ema_200 = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator().iloc[-1]
-        ema_50 = ta.trend.EMAIndicator(close=df['close'], window=50).ema_indicator().iloc[-1]
+        
+        # Structure de marché (Order Flow SMC)
+        swing_high_1 = df['high'].iloc[-20:-10].max()
+        swing_low_1 = df['low'].iloc[-20:-10].min()
+        swing_high_2 = df['high'].iloc[-10:-1].max()
+        swing_low_2 = df['low'].iloc[-10:-1].min()
+        
+        structure_haussiere = (swing_high_2 > swing_high_1) and (swing_low_2 >= swing_low_1)
+        structure_baissiere = (swing_low_2 < swing_low_1) and (swing_high_2 <= swing_high_1)
+        tendance = "Order Flow Hausse 🟢" if structure_haussiere else "Order Flow Baisse 🔴" if structure_baissiere else "Consolidation (Liquidity Build) ⚠️"
+
         rsi = ta.momentum.RSIIndicator(close=df['close']).rsi().iloc[-1]
-        stoch_k = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close']).stoch().iloc[-1]
         prix_actuel = df['close'].iloc[-1]
         
-        # 🛡️ Mise à jour Vision pour la Double Tendance
-        tendance = "Hausse 🟢" if (prix_actuel > ema_50 and ema_50 > ema_200) else "Baisse 🔴" if (prix_actuel < ema_50 and ema_50 < ema_200) else "Incertaine ⚠️"
-        
-        rapport = f"👁️ **VISION RAYONS X : {symbole}** 👁️\n──────────────────\n💰 **Prix :** `{prix_actuel:.5f}`\n🛡️ **Tendance Globale :** `{tendance}`\n⛽ **Volume/Tick :** `{etat_vol}`\n📊 **RSI :** `{rsi:.2f}`\n📉 **Stochastique :** `{stoch_k:.2f}`\n──────────────────"
+        rapport = f"👁️ **VISION RAYONS X SMC : {symbole}** 👁️\n──────────────────\n💰 **Prix :** `{prix_actuel:.5f}`\n🧱 **Structure (SMC) :** `{tendance}`\n⛽ **Volume/Tick :** `{etat_vol}`\n📊 **RSI :** `{rsi:.2f}`\n──────────────────"
         bot.edit_message_text(rapport, message.chat.id, msg.message_id, parse_mode="Markdown")
     except: bot.edit_message_text("❌ Erreur d'analyse.", message.chat.id, msg.message_id)
 
 # ==========================================
-# MOTEUR DE TIR V17.7 (SIGNAL INSTANTANÉ & FLASH)
+# MOTEUR DE TIR V17.9 (SIGNAL INSTANTANÉ & FLASH)
 # ==========================================
 
 def relever_prix_entree(chat_id, symbole):
@@ -398,7 +407,7 @@ def override_victoire_manuelle(call):
     bot.send_message(chat_id, "🔄 **CORRECTION MANUELLE APPLIQUÉE**", parse_mode="Markdown")
 
 # ==========================================
-# MOTEUR ULTIMATE V17.7 (DOUBLE EMA + 10/10)
+# MOTEUR ULTIMATE V17.9 (SMC PUR / PRICE ACTION)
 # ==========================================
 
 def analyser_binaire_pro(symbole, mode="STANDARD"):
@@ -431,17 +440,11 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
             if avg_corps > 0 and (avg_taille > avg_corps * 3.5):
                 return "⚠️ Filtre Anti-Chaos activé (Marché Hache-Viande).", None, None, None, None, None, None, None
 
-            # 🛡️ FILTRES DE DOUBLE TENDANCE
-            df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
-            df['ema_50'] = ta.trend.EMAIndicator(close=df['close'], window=50).ema_indicator()
-
             df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
             df['stoch_k'] = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close']).stoch()
             
             last, prev, p_prev = df.iloc[-1], df.iloc[-2], df.iloc[-3]
             c = last['close']
-            ema200_val = last['ema_200']
-            ema50_val = last['ema_50']
             rsi_val, stoch_val = round(last['rsi'], 1), round(last['stoch_k'], 1)
             action, confiance, bb_status, score_algo = None, 0, "En Attente", 5
             
@@ -452,36 +455,62 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
             prev_is_green = prev['close'] > prev['open']
             prev_is_red = prev['close'] < prev['open']
             
-            rejet_haussier = last['meche_basse'] > (last['corps_bougie'] * 2.0)
-            rejet_baissier = last['meche_haute'] > (last['corps_bougie'] * 2.0)
+            rejet_haussier = last['meche_basse'] > (last['corps_bougie'] * 1.5)
+            rejet_baissier = last['meche_haute'] > (last['corps_bougie'] * 1.5)
             avalement_haussier = prev_is_red and last_is_green and (last['close'] > prev['open']) and (last['open'] <= prev['close'])
             avalement_baissier = prev_is_green and last_is_red and (last['close'] < prev['open']) and (last['open'] >= prev['close'])
             harami_bull = prev_is_red and last_is_green and (last['open'] > prev['close']) and (last['close'] < prev['open'])
             harami_bear = prev_is_green and last_is_red and (last['open'] < prev['close']) and (last['close'] > prev['open'])
             
+            # 🛡️ FILTRE ANTI-MÈCHE
+            corps_prev = prev['corps_bougie']
+            danger_rejet_baisse = prev['meche_haute'] > (corps_prev * 1.5) if corps_prev > 0 else False
+            danger_rejet_hausse = prev['meche_basse'] > (corps_prev * 1.5) if corps_prev > 0 else False
+            
+            # 🧱 LOGIQUE SMC (SMART MONEY CONCEPTS)
+            # 1. Analyse de la Structure de Marché (Order Flow)
+            swing_high_1 = df['high'].iloc[-20:-10].max()
+            swing_low_1 = df['low'].iloc[-20:-10].min()
+            swing_high_2 = df['high'].iloc[-10:-1].max()
+            swing_low_2 = df['low'].iloc[-10:-1].min()
+
+            structure_haussiere = (swing_high_2 > swing_high_1) and (swing_low_2 >= swing_low_1)
+            structure_baissiere = (swing_low_2 < swing_low_1) and (swing_high_2 <= swing_high_1)
+
+            # 2. Zones de Retracement (Premium & Discount)
+            prix_moyen_recent = df['close'].iloc[-6:-1].mean()
+            dans_zone_discount = c < prix_moyen_recent 
+            dans_zone_premium = c > prix_moyen_recent 
+
             if mode == "STANDARD":
-                indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
+                # ⏱️ PROTOCOLE HIT & RUN (3 MINUTES)
+                if tf == 300:
+                    duree_secondes = 180 
+                    exp_texte = "3 MIN (HIT & RUN ⚡)"
+                else:
+                    duree_secondes = tf
+                    exp_texte = f"{int(tf/60)} MIN"
                 
-                # LA MAGIE DU DOUBLE ALIGNEMENT (Évite les crashs soudains)
-                tendance_haussiere = (c > ema50_val) and (ema50_val > ema200_val)
-                tendance_baissiere = (c < ema50_val) and (ema50_val < ema200_val)
-                
-                duree_secondes = tf
-                exp_texte = f"{int(tf/60)} MIN"
-                
-                if tendance_haussiere and volume_ok and vrai_corps and (stoch_val < 35) and (rsi_val > 45):
-                    action, confiance, score_algo = "🟢 ACHAT (CALL)", 85, 8.0
-                    bb_status = f"🎯 Pullback {exp_texte} + Tendance Alignée"
+                # SMC CALL (Recherche d'un Order Block Haussier / Pullback Discount)
+                if structure_haussiere and dans_zone_discount and volume_ok and vrai_corps and not danger_rejet_baisse:
+                    if (stoch_val < 40) and (rsi_val > 40): 
+                        action, confiance, score_algo = "🟢 ACHAT (CALL)", 85, 8.0
+                        bb_status = f"🎯 SMC : Order Block (Zone Discount)"
                     if avalement_haussier or rejet_haussier or harami_bull:
-                        score_algo, confiance, bb_status = 10.0, 99, f"👑 SETUP ULTIME 10/10 🚀"
+                        action, confiance, score_algo = "🟢 ACHAT (CALL)", 99, 10.0
+                        bb_status = f"👑 SMC ULTIME : Prise de Liquidité 🚀"
                         
-                elif tendance_baissiere and volume_ok and vrai_corps and (stoch_val > 65) and (rsi_val < 55):
-                    action, confiance, score_algo = "🔴 VENTE (PUT)", 85, 8.0
-                    bb_status = f"🎯 Pullback {exp_texte} + Tendance Alignée"
+                # SMC PUT (Recherche d'un Order Block Baissier / Pullback Premium)
+                elif structure_baissiere and dans_zone_premium and volume_ok and vrai_corps and not danger_rejet_hausse:
+                    if (stoch_val > 60) and (rsi_val < 60):
+                        action, confiance, score_algo = "🔴 VENTE (PUT)", 85, 8.0
+                        bb_status = f"🎯 SMC : Order Block (Zone Premium)"
                     if avalement_baissier or rejet_baissier or harami_bear:
-                        score_algo, confiance, bb_status = 10.0, 99, f"👑 SETUP ULTIME 10/10 ☄️"
+                        action, confiance, score_algo = "🔴 VENTE (PUT)", 99, 10.0
+                        bb_status = f"👑 SMC ULTIME : Prise de Liquidité ☄️"
 
             elif mode == "SCALP":
+                # En scalp SMC, on utilise les bandes comme Liquidity Pools (Prises de liquidité externes)
                 indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2.2)
                 bb_haute, bb_basse = indicateur_bb.bollinger_hband().iloc[-1], indicateur_bb.bollinger_lband().iloc[-1]
                 df['bb_width'] = indicateur_bb.bollinger_wband()
@@ -490,10 +519,10 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
                 duree_secondes, exp_texte = 60, "1 MINUTE (SCALP 🛡️)"
                 
                 if not squeeze and volume_ok and vrai_corps:
-                    if (last['low'] <= bb_basse) and (rsi_val < 30) and (c > ema50_val) and rejet_haussier:
-                        action, confiance, score_algo, bb_status = "🟢 ACHAT (CALL)", 95, 9.5, "🛡️ Rejet Bas + Volume"
-                    elif (last['high'] >= bb_haute) and (rsi_val > 70) and (c < ema50_val) and rejet_baissier:
-                        action, confiance, score_algo, bb_status = "🔴 VENTE (PUT)", 95, 9.5, "🛡️ Rejet Haut + Volume"
+                    if (last['low'] <= bb_basse) and rejet_haussier and not danger_rejet_baisse:
+                        action, confiance, score_algo, bb_status = "🟢 ACHAT (CALL)", 95, 9.5, "🛡️ SMC Scalp : Chasse aux Stops Bas"
+                    elif (last['high'] >= bb_haute) and rejet_baissier and not danger_rejet_hausse:
+                        action, confiance, score_algo, bb_status = "🔴 VENTE (PUT)", 95, 9.5, "🛡️ SMC Scalp : Chasse aux Stops Haut"
 
             if action:
                 if not verifier_correlation(symbole, action):
@@ -516,7 +545,7 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
 
 def obtenir_clavier(user_id):
     mode_actuel = mode_trading.get(user_id, "STANDARD")
-    btn_mode = "🛡️ MODE: STANDARD" if mode_actuel == "STANDARD" else "🔥 MODE: SCALP"
+    btn_mode = "🛡️ MODE: SMC STANDARD" if mode_actuel == "STANDARD" else "🔥 MODE: SMC SCALP"
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row(KeyboardButton("📊 CHOISIR UNE DEVISE"), KeyboardButton("🚀 LANCER L'ANALYSE"))
     markup.row(KeyboardButton(btn_mode), KeyboardButton("⏰ HEURES DE TRADING"))
@@ -531,10 +560,10 @@ def toggle_mode(message):
     mode_actuel = mode_trading.get(user_id, "STANDARD")
     if mode_actuel == "STANDARD":
         mode_trading[user_id] = "SCALP"
-        bot.send_message(user_id, "🔥 **MODE SCALPING 1 MINUTE ACTIVÉ**", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
+        bot.send_message(user_id, "🔥 **MODE SMC SCALPING (1 MIN) ACTIVÉ**", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
     else:
         mode_trading[user_id] = "STANDARD"
-        bot.send_message(user_id, "🛡️ **MODE STANDARD MTFA ACTIVÉ**", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
+        bot.send_message(user_id, "🛡️ **MODE SMC STANDARD ACTIVÉ**", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.message_handler(commands=['start'])
 def bienvenue(message):
@@ -543,11 +572,10 @@ def bienvenue(message):
     utilisateurs_actifs.add(user_id)
     niveaux_martingale[user_id] = niveaux_martingale.get(user_id, 0)
     mode_trading[user_id] = mode_trading.get(user_id, "STANDARD")
-    texte = """🏴‍☠️ **TERMINAL PRIME - V17.7 ULTIMATE 🛡️** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - V17.9 ULTIMATE 🧠** 🔥
     
-Mise à jour activée : 🛡️ **BOUCLIER DOUBLE TENDANCE (EMA50 + EMA200)**. 
-L'algorithme annule désormais tout signal d'achat lors d'un crash du marché (couteau qui tombe).
-💎 **10/10 DIRECT & TEMPS ÉTENDU** toujours actif."""
+Mise à jour activée : 🧠 **MOTEUR SMART MONEY CONCEPTS (SMC)**. 
+Les indicateurs de retard (EMA) ont été supprimés. L'IA traque désormais les *Order Blocks*, les prises de liquidité institutionnelles, et conserve son protocole Hit & Run (3 MIN) pour des frappes chirurgicales."""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
@@ -569,7 +597,7 @@ def save_devise(call):
     mode_actuel = mode_trading.get(chat_id, "STANDARD")
     nom_affiche = f"{actif[:3]}/{actif[3:]}"
     
-    try: msg = bot.send_message(chat_id, f"⏳ *Initialisation Scanner...*", parse_mode="Markdown")
+    try: msg = bot.send_message(chat_id, f"⏳ *Initialisation Scanner SMC...*", parse_mode="Markdown")
     except: return
         
     action, confiance, exp_texte, duree_secondes, rsi_val, stoch_val, bb_status, score = analyser_binaire_pro(actif, mode_actuel)
@@ -592,17 +620,17 @@ def save_devise(call):
         
     palier = niveaux_martingale.get(chat_id, 0)
     
-    # 💎 LOGIQUE V17.7 : LES 10/10 SAUTENT LE FANTÔME + GAGNENT 1 MINUTE
+    # 💎 LOGIQUE V17.9 : LES 10/10 SAUTENT LE FANTÔME + GAGNENT 1 MINUTE
     if palier == 0 and score is not None and score >= 10.0:
         palier = 1 
         niveaux_martingale[chat_id] = 1 
-        sec_rest += 60 # Ajout d'une minute pleine pour la préparation
+        sec_rest += 60 
         if statut == "HORS_SESSION": 
-            fantome_texte = "👑 **EXCEPTION 10/10 HORS SESSION !**\n*Setup parfait validé, on attaque en réel direct !*"
+            fantome_texte = "👑 **EXCEPTION 10/10 HORS SESSION !**\n*Prise de liquidité parfaite, on attaque en réel direct !*"
         else: 
-            fantome_texte = "🧠 **FANTÔME DÉSACTIVÉ PAR L'IA (10/10)**\n*Setup parfait validé, on attaque en réel direct !*"
+            fantome_texte = "🧠 **FANTÔME DÉSACTIVÉ PAR L'IA SMC (10/10)**\n*Prise de liquidité parfaite, on attaque en réel direct !*"
     elif palier == 0:
-        fantome_texte = "*Le bot prend ce trade virtuellement (Fantôme). NE RENTREZ PAS.*"
+        fantome_texte = "*Le bot prend ce trade virtuellement (Fantôme SMC). NE RENTREZ PAS.*"
     else:
         fantome_texte = ""
 
@@ -640,7 +668,6 @@ def save_devise(call):
         bot.send_message(chat_id, signal, parse_mode="Markdown")
     except: pass
 
-    # Lancement du flash-timer (le compte à rebours silencieux)
     action_brute = "CALL" if "ACHAT" in action else "PUT"
     Timer(sec_rest, executer_tir_flash, args=[chat_id, actif, action_brute, duree_secondes, palier]).start()
 
@@ -707,12 +734,12 @@ def scanner_marche_auto():
                         if statut == "HORS_SESSION" and (sc is None or sc < 10.0): continue
                             
                         derniere_alerte_auto[cle_memoire] = time.time()
-                        markup = InlineKeyboardMarkup().add(InlineKeyboardButton(f"⚡ Frapper {paire[:3]}/{paire[3:]}" if mode == "SCALP" else f"📊 Verrouiller {paire[:3]}/{paire[3:]}", callback_data=f"set_{paire}"))
+                        markup = InlineKeyboardMarkup().add(InlineKeyboardButton(f"⚡ Frapper {paire[:3]}/{paire[3:]}" if mode == "SCALP" else f"📊 Verrouiller SMC {paire[:3]}/{paire[3:]}", callback_data=f"set_{paire}"))
                         
-                        prefixe = "👑 **EXCEPTION 10/10 HORS SESSION** 👑\n" if statut == "HORS_SESSION" else ""
+                        prefixe = "👑 **EXCEPTION SMC HORS SESSION** 👑\n" if statut == "HORS_SESSION" else ""
                         for uid in utilisateurs_libres:
                             if mode_trading.get(uid, "STANDARD") == mode:
-                                msg = f"{prefixe}🔔 **PIC SCALP (Volume OK) : {paire[:3]}/{paire[3:]}**\n👉 Dégaine !" if mode == "SCALP" else f"{prefixe}🔔 **PULLBACK {exp} : {paire[:3]}/{paire[3:]}**"
+                                msg = f"{prefixe}🔔 **CHASSE AUX STOPS : {paire[:3]}/{paire[3:]}**\n👉 Dégaine !" if mode == "SCALP" else f"{prefixe}🔔 **ORDER BLOCK {exp} : {paire[:3]}/{paire[3:]}**"
                                 try: bot.send_message(uid, msg, reply_markup=markup)
                                 except: pass
         except Exception as e: pass
@@ -735,7 +762,7 @@ def gestionnaire_bilan():
                     total_trades = stats_journee['ITM'] + stats_journee['OTM']
                     winrate = (stats_journee['ITM'] / total_trades * 100) if total_trades > 0 else 0
                     
-                    texte_bilan = f"📊 **BILAN JOURNALIER DU TERMINAL (18h00 GMT)** 📊\n"
+                    texte_bilan = f"📊 **BILAN JOURNALIER SMC (18h00 GMT)** 📊\n"
                     texte_bilan += f"──────────────────\n"
                     texte_bilan += f"✅ **CIBLES ABATTUES (ITM) :** {stats_journee['ITM']}\n"
                     texte_bilan += f"❌ **TIRS RATÉS (OTM) :** {stats_journee['OTM']}\n"
@@ -748,11 +775,9 @@ def gestionnaire_bilan():
                             try: bot.send_message(uid, texte_bilan, parse_mode="Markdown")
                             except: pass
                     
-                    # Remise à zéro des compteurs pour le jour suivant
                     stats_journee = {'ITM': 0, 'OTM': 0, 'details': []}
                     bilan_envoye_aujourdhui = True
             
-            # Réinitialisation de la sécurité à 18h05 pour le lendemain
             elif now.hour == 18 and now.minute > 5:
                 bilan_envoye_aujourdhui = False
                 
@@ -764,5 +789,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestionnaire_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition V17.7 ULTIMATE Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition V17.9 SMC Démarrée.", flush=True)
     bot.infinity_polling()
