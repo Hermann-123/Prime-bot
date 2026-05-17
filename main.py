@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAGXDcXhBxPMuowwOLUm_FdIAwdHjR9cF5c"
+TELEGRAM_TOKEN = "8658287331:AAED_lfm0Z5v1M121mhR4TWbFG7h_gqO4R0"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -412,16 +412,27 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
                     if action_simplifiee == cooldown_actifs[symbole]['action']:
                         return f"⚠️ **BLOCAGE ANTI-FAKEOUT**", None, None, None, None, None, None, None, None, None
                 
-                # 🧮 CALCUL MATHÉMATIQUE DU STOP LOSS ET TAKE PROFIT POUR MT4
+                # 🧮 CALCUL MATHÉMATIQUE SÉCURISÉ DU SL/TP POUR MT4 (V17.11 DYNAMIQUE)
                 sl_calcule, tp_calcule = 0.0, 0.0
-                marge = c * 0.0005 # Marge de sécurité de 5 pips
+                
+                # L'IA utilise la vraie taille des bougies pour créer une marge anti-spread
+                marge = avg_taille * 0.5 
                 
                 if action_simplifiee == "CALL":
                     sl_calcule = swing_low_2 - marge
-                    tp_calcule = c + ((c - sl_calcule) * 2) # Objectif Ratio 1:2
+                    # Sécurité Anti-Crash : Force une distance minimale si le SL est trop collé
+                    if (c - sl_calcule) < (avg_taille * 0.8):
+                        sl_calcule = c - (avg_taille * 1.5)
+                        
+                    tp_calcule = c + ((c - sl_calcule) * 2) # Ratio de Gain 1:2
+                    
                 else:
                     sl_calcule = swing_high_2 + marge
-                    tp_calcule = c - ((sl_calcule - c) * 2)
+                    # Sécurité Anti-Crash : Force une distance minimale si le SL est trop collé
+                    if (sl_calcule - c) < (avg_taille * 0.8):
+                        sl_calcule = c + (avg_taille * 1.5)
+                        
+                    tp_calcule = c - ((sl_calcule - c) * 2) # Ratio de Gain 1:2
 
                 return action, min(confiance, 99), exp_texte, duree_secondes, rsi_val, stoch_val, bb_status, score_algo, sl_calcule, tp_calcule
                 
