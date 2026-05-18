@@ -13,12 +13,14 @@ import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from flask import Flask
 from threading import Thread, Timer
+import asyncio
+from metaapi_cloud_sdk import MetaApi
 
 # ==========================================
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAED_lfm0Z5v1M121mhR4TWbFG7h_gqO4R0"
+TELEGRAM_TOKEN = "8658287331:AAFXht6D-gDlTz8t5ANFcF2ujiE6BUwEfpk"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -30,12 +32,18 @@ COEF_MARTINGALE = 2.5
 MAX_MARTINGALE = 3  
 
 # ==========================================
+# 🧠 CONFIGURATION DU PONT METAAPI CLOUD (MT4)
+# ==========================================
+META_TOKEN = "eyJhbGciOiJSUzUxMiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI1NzkxNjRkZGU4YTgxN2Y4MjYzYzE5OGJhZjA0YjI1MSIsImFjY2Vzc1J1bGVzIjpbeyJpZCI6InRyYWRpbmctYWNjb3VudC1tYW5hZ2VtZW50LWFwaSIsIm1ldGhvZHMiOlsidHJhZGluZy1hY2NvdW50LW1hbmFnZW1lbnQtYXBpOnJlc3Q6cHVibGljOio6KiJdLCJyb2xlcyI6WyJyZWFkZXIiLCJ3cml0ZXIiXSwicmVzb3VyY2VzIjpbIio6JFVTRVJfSUQkOioiXX0seyJpZCI6Im1ldGFhcGktcmVzdC1hcGkiLCJtZXRob2RzIjpbIm1ldGFhcGktYXBpOnJlc3Q6cHVibGljOio6KiJdLCJyb2xlcyI6WyJyZWFkZXIiLCJ3cml0ZXIiXSwicmVzb3VyY2VzIjpbIio6JFVTRVJfSUQkOioiXX0seyJpZCI6Im1ldGFhcGktcnBjLWFwaSIsIm1ldGhvZHMiOlsibWV0YWFwaS1hcGk6d3M6cHVibGljOio6KiJdLCJyb2xlcyI6WyJyZWFkZXIiLCJ3cml0ZXIiXSwicmVzb3VyY2VzIjpbIio6JFVTRVJfSUQkOioiXX0seyJpZCI6Im1ldGFhcGktcmVhbC10aW1lLXN0cmVhbWluZy1hcGkiLCJtZXRob2RzIjpbIm1ldGFhcGktYXBpOndzOnB1YmxpYzoqOioiXSwicm9sZXMiOlsicmVhZGVyIiwid3JpdGVyIl0sInJlc291cmNlcyI6WyIqOiRVU0VSX0lEJDoqIl19LHsiaWQiOiJtZXRhc3RhdHMtYXBpIiwibWV0aG9kcyI6WyJtZXRhc3RhdHMtYXBpOnJlc3Q6cHVibGljOio6KiJdLCJyb2xlcyI6WyJyZWFkZXIiLCJ3cml0ZXIiXSwicmVzb3VyY2VzIjpbIio6JFVTRVJfSUQkOioiXX0seyJpZCI6InJpc2stbWFuYWdlbWVudC1hcGkiLCJtZXRob2RzIjpbInJpc2stbWFuYWdlbWVudC1hcGk6cmVzdDpwdWJsaWM6KjoqIl0sInJvbGVzIjpbInJlYWRlciIsIndyaXRlciJdLCJyZXNvdXJjZXMiOlsiKjokVVNFUl9JRCQ6KiJdfSx7ImlkIjoiY29weWZhY3RvcnktYXBpIiwibWV0aG9kcyI6WyJjb3B5ZmFjdG9yeS1hcGk6cmVzdDpwdWJsaWM6KjoqIl0sInJvbGVzIjpbInJlYWRlciIsIndyaXRlciJdLCJyZXNvdXJjZXMiOlsiKjokVVNFUl9JRCQ6KiJdfSx7ImlkIjoibXQtbWFuYWdlci1hcGkiLCJtZXRob2RzIjpbIm10LW1hbmFnZXItYXBpOnJlc3Q6ZGVhbGluZzoqOioiLCJtdC1tYW5hZ2VyLWFwaTpyZXN0OnB1YmxpYzoqOioiXSwicm9sZXMiOlsicmVhZGVyIiwid3JpdGVyIl0sInJlc291cmNlcyI6WyIqOiRVU0VSX0lEJDoqIl19LHsiaWQiOiJiaWxsaW5nLWFwaSIsIm1ldGhvZHMiOlsiYmlsbGluZy1hcGk6cmVzdDpwdWJsaWM6KjoqIl0sInJvbGVzIjpbInJlYWRlciJdLCJyZXNvdXJjZXMiOlsiKjokVVNFUl9JRCQ6KiJdfV0sImlnbm9yZVJhdGVMaW1pdHMiOmZhbHNlLCJ0b2tlbklkIjoiMjAyMTAyMTMiLCJpbXBlcnNvbmF0ZWQiOmZhbHNlLCJyZWFsVXNlcklkIjoiNTc5MTY0ZGRlOGE4MTdmODI2M2MxOThiYWYwNGIyNTEiLCJpYXQiOjE3NzkxMjY5MTF9.e4pfqff5wy8VJb0WJepMCxBIuXo_UXhj7nY-FXmSMn6MAQrj2yVKrk5DtuE2qcPU7AGWsxEXOUCzArYCrwdzIY-yFMk0k1Oy0_buZ-rHj0JOdLY_0TFqfF0dQs-fSOIfRAfBG1X7qthddKnCNA5MUtnlPkKBNwB4wKESWX87AnRZHUXJvm4ENoiIFzhvjDIQ9e4lyBZxvJUmmAcez6uSJesgEHEzhvpJ3356EIufmxFyy3UOLM7oObdjDO18HWGIHlnaR61KrDdLAQPaPaKHdKXOJsf86N3zqb6omQftNavmVmpOf07-2AionKhyRoZFiaUDITc_GgSmDogJJ8s-bSuIfu6wh240pGHqUfUrJXupmx9VUIXCveIoLyzzFMicHPTHdrCEbAolMVYY-_f5y0fC3vlUIotbQTEFw5jiHfUdwcyYbgMppQd45ZSVtfbuYD8tXbHeB4zdrgb4_RKcaCPW8JpoQsE5lNo7xeFYjyDWVouBuQivSITvymcBMatO-d7H_9EAb58qs257HhI9mo5juQIFngxPg4alMwMH85GI8OwU8gfciQ2U0lGz0SOQoNypj9f0A_O2aR_KIENUw4x6FqvYicNOSVEdx9-8Hr4neXbh7nVmOSxf3FeOJ_FQ3zrYX7KgZ_bvmmEqGFaprInZbhQPX94vq0TkGWBMrPo"
+META_ACCOUNT_ID = "4b6c631b-ce28-4aae-ab2d-fc8de9c64db5"
+
+# ==========================================
 # VARIABLES D'ÉTAT ET ROUTAGE
 # ==========================================
 
 user_prefs = {}
 mode_trading = {} 
-plateforme_trading = {} # 🔀 NOUVEAU: Stocke le choix du broker (POCKET ou MT4)
+plateforme_trading = {} 
 trades_en_cours = {}
 utilisateurs_actifs = set()
 derniere_alerte_auto = {}
@@ -59,7 +67,7 @@ FOREX_PAIRS = [
     "AUDJPY", "EURAUD", "EURUSD", "AUDCAD", "USDCHF", 
     "CADCHF", "EURCHF", "USDJPY"
 ]
-COMMODITY_PAIRS = ["XAUUSD", "XAGUSD"] # 🥇 NOUVEAU: Or et Argent
+COMMODITY_PAIRS = ["XAUUSD", "XAGUSD"] 
 
 # ==========================================
 # SERVEUR WEB (KEEP ALIVE RENDER)
@@ -69,7 +77,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition V17.11 HYBRID (Binaire + MT4)"
+    return "Terminal Prime VIP : Édition V17.11 HYBRID PRO (Binaire + MT4)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -78,6 +86,53 @@ def run():
 def keep_alive():
     t = Thread(target=run)
     t.start()
+
+# ==========================================
+# MOTEUR ASYNCHRONE METAAPI (CERVEAU MT4)
+# ==========================================
+
+async def obtenir_donnees_longue_duree_mt4(symbole_brut):
+    """🧠 MOTEUR MT4 INDÉPENDANT : Aspire les données logiques (H1) via MetaApi Cloud"""
+    symbole = symbole_brut.replace("/", "").replace(" cry", "").replace(" frx", "")
+    if "XAUUSD" in symbole: symbole = "XAUUSD"
+    if "XAGUSD" in symbole: symbole = "XAGUSD"
+
+    api = MetaApi(META_TOKEN)
+    try:
+        compte = await api.metatrader_account_api.get_account(META_ACCOUNT_ID)
+        await compte.wait_deployed()
+        
+        connexion = compte.get_streaming_connection()
+        await connexion.connect()
+        await connexion.wait_synchronized()
+
+        print(f"✅ Liaison MetaApi Cloud active pour MT4 ({symbole}).")
+
+        # TICK EN DIRECT (Pour le Spread anti-arnaque)
+        ticket_info = await connexion.get_symbol(symbole)
+        if not ticket_info:
+            return None, None, None
+
+        live_ask = ticket_info['ask']
+        live_bid = ticket_info['bid']
+        spread_actuel = live_ask - live_bid
+
+        # BOUGIES LOGIQUES (H1)
+        timeframe_mt4 = '1h'
+        start_time = datetime.datetime.utcnow() - datetime.timedelta(hours=150)
+        candles = await connexion.get_candles(symbole, timeframe_mt4, start_time, 150)
+
+        if candles:
+            df = pd.DataFrame(candles)
+            df['time'] = pd.to_datetime(df['time'])
+        else:
+            df = None
+
+        return live_ask, spread_actuel, df
+
+    except Exception as e:
+        print(f"❌ Erreur MetaApi sur Render : {e}")
+        return None, None, None
 
 # ==========================================
 # SYSTÈME DE GESTION DES ACCÈS VIP
@@ -177,7 +232,7 @@ def est_symbole_autorise(symbole):
     return "BLOCAGE_TOTAL", "🛑 Erreur temporelle."
 
 # ==========================================
-# FONCTIONS PRO & ROUTEUR DERIV
+# FONCTIONS PRO & ROUTEUR DERIV (POUR POCKET)
 # ==========================================
 
 def est_heure_de_news_dynamique():
@@ -199,7 +254,7 @@ def est_heure_de_news_dynamique():
 
 def prefixer_symbole(symbole_brut):
     if symbole_brut in CRYPTO_PAIRS: return f"cry{symbole_brut}"
-    if symbole_brut in COMMODITY_PAIRS: return f"frx{symbole_brut}" # Généralement frxXAUUSD chez Deriv
+    if symbole_brut in COMMODITY_PAIRS: return f"frx{symbole_brut}" 
     return f"frx{symbole_brut}"
 
 def obtenir_donnees_deriv(symbole_brut, granularite=300):
@@ -290,12 +345,12 @@ def vision_marche(message):
     except: bot.edit_message_text("❌ Erreur d'analyse.", message.chat.id, msg.message_id)
 
 # ==========================================
-# MOTEUR ULTIMATE V17.11 (SMC + SL/TP MT4)
+# MOTEUR SMC DE BASE (POUR POCKET BROKER / DECLENCHEUR)
 # ==========================================
 
 def analyser_binaire_pro(symbole, mode="STANDARD"):
     if est_heure_de_news_dynamique() and symbole not in CRYPTO_PAIRS:
-        return "⚠️ ALERTE NEWS : Marché manipulé.", None, None, None, None, None, None, None, None, None
+        return "⚠️ ALERTE NEWS : Marché manipulé.", None, None, None, None, None, None, None
 
     timeframes = [600, 300, 120] if mode == "STANDARD" else [60]
     
@@ -320,7 +375,7 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
             avg_taille = df['taille_bougie'].iloc[-4:-1].mean()
             avg_corps = df['corps_bougie'].iloc[-4:-1].mean()
             if avg_corps > 0 and (avg_taille > avg_corps * 3.5):
-                return "⚠️ Filtre Anti-Chaos activé.", None, None, None, None, None, None, None, None, None
+                return "⚠️ Filtre Anti-Chaos activé.", None, None, None, None, None, None, None
 
             df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
             df['stoch_k'] = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close']).stoch()
@@ -347,11 +402,9 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
             danger_rejet_baisse = prev['meche_haute'] > (corps_prev * 1.5) if corps_prev > 0 else False
             danger_rejet_hausse = prev['meche_basse'] > (corps_prev * 1.5) if corps_prev > 0 else False
 
-            # KILLSWITCH ANTI-FUSÉE
             fusee_haussiere = last_is_green and prev_is_green and (p_prev['close'] > p_prev['open']) and vrai_corps
             fusee_baissiere = last_is_red and prev_is_red and (p_prev['close'] < p_prev['open']) and vrai_corps
             
-            # LOGIQUE SMC
             swing_high_1 = df['high'].iloc[-20:-10].max()
             swing_low_1 = df['low'].iloc[-20:-10].min()
             swing_high_2 = df['high'].iloc[-10:-1].max()
@@ -404,41 +457,19 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
 
             if action:
                 if not verifier_correlation(symbole, action):
-                    return f"⚠️ **FAKEOUT DÉTECTÉ**", None, None, None, None, None, None, None, None, None
+                    return f"⚠️ **FAKEOUT DÉTECTÉ**", None, None, None, None, None, None, None
 
                 action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
                 delai_blocage = 600 if mode == "SCALP" else 1800
                 if symbole in cooldown_actifs and (time.time() - cooldown_actifs[symbole]['time'] < delai_blocage):
                     if action_simplifiee == cooldown_actifs[symbole]['action']:
-                        return f"⚠️ **BLOCAGE ANTI-FAKEOUT**", None, None, None, None, None, None, None, None, None
+                        return f"⚠️ **BLOCAGE ANTI-FAKEOUT**", None, None, None, None, None, None, None
                 
-                # 🧮 CALCUL MATHÉMATIQUE SÉCURISÉ DU SL/TP POUR MT4 (V17.11 DYNAMIQUE)
-                sl_calcule, tp_calcule = 0.0, 0.0
-                
-                # L'IA utilise la vraie taille des bougies pour créer une marge anti-spread
-                marge = avg_taille * 0.5 
-                
-                if action_simplifiee == "CALL":
-                    sl_calcule = swing_low_2 - marge
-                    # Sécurité Anti-Crash : Force une distance minimale si le SL est trop collé
-                    if (c - sl_calcule) < (avg_taille * 0.8):
-                        sl_calcule = c - (avg_taille * 1.5)
-                        
-                    tp_calcule = c + ((c - sl_calcule) * 2) # Ratio de Gain 1:2
-                    
-                else:
-                    sl_calcule = swing_high_2 + marge
-                    # Sécurité Anti-Crash : Force une distance minimale si le SL est trop collé
-                    if (sl_calcule - c) < (avg_taille * 0.8):
-                        sl_calcule = c + (avg_taille * 1.5)
-                        
-                    tp_calcule = c - ((sl_calcule - c) * 2) # Ratio de Gain 1:2
-
-                return action, min(confiance, 99), exp_texte, duree_secondes, rsi_val, stoch_val, bb_status, score_algo, sl_calcule, tp_calcule
+                return action, min(confiance, 99), exp_texte, duree_secondes, rsi_val, stoch_val, bb_status, score_algo
                 
         except: continue
 
-    return f"⚠️ En attente d'une opportunité ({mode}).", None, None, None, None, None, None, None, None, None
+    return f"⚠️ En attente d'une opportunité ({mode}).", None, None, None, None, None, None, None
 
 # ==========================================
 # GESTION DES SIGNAUX & DESIGN PREMIUM (MT4 + POCKET)
@@ -493,10 +524,10 @@ def bienvenue(message):
     niveaux_martingale[user_id] = niveaux_martingale.get(user_id, 0)
     mode_trading[user_id] = mode_trading.get(user_id, "STANDARD")
     plateforme_trading[user_id] = plateforme_trading.get(user_id, "POCKET")
-    texte = """🏴‍☠️ **TERMINAL PRIME - V17.11 HYBRID 🔀** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - V17.11 HYBRID PRO 🔀** 🔥
     
 Mise à jour activée : 🔀 **DOUBLE MOTEUR MT4 / POCKET BROKER**. 
-Utilisez le nouveau bouton en bas pour basculer entre le trading Binaire (Expiration/Martingale) et le trading Professionnel (MT4 avec Stop Loss & Take Profit)."""
+Utilisez le nouveau bouton en bas pour basculer entre le trading Binaire (Expiration/Martingale) et le trading Professionnel (MT4 Cloud MetaApi)."""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
@@ -523,7 +554,8 @@ def save_devise(call):
     try: msg = bot.send_message(chat_id, f"⏳ *Initialisation Scanner SMC ({plateforme})...*", parse_mode="Markdown")
     except: return
         
-    action, confiance, exp_texte, duree_secondes, rsi_val, stoch_val, bb_status, score, sl_calcule, tp_calcule = analyser_binaire_pro(actif, mode_actuel)
+    # PREMIER SCAN RAPIDE (Sert de déclencheur pour Pocket ET de signal d'entrée pour MT4)
+    action, confiance, exp_texte, duree_secondes, rsi_val, stoch_val, bb_status, score = analyser_binaire_pro(actif, mode_actuel)
     
     if statut == "HORS_SESSION":
         if score is None or score < 10.0:
@@ -536,39 +568,76 @@ def save_devise(call):
         except: pass
         return
 
+    # ==========================
+    # BRANCHE 1 : META TRADER (MT4 CLOUD METAAPI)
+    # ==========================
+    if plateforme == "MT4":
+        try: bot.edit_message_text(f"⏳ *Liaison MetaApi Cloud : Scan Logique (H1) sur {nom_affiche}...*", chat_id, msg.message_id, parse_mode="Markdown")
+        except: pass
+        
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            current_ask, spread_mt4, df_mt4 = loop.run_until_complete(obtenir_donnees_longue_duree_mt4(actif))
+        finally:
+            loop.close()
+
+        if df_mt4 is not None and not df_mt4.empty:
+            df_mt4['taille'] = df_mt4['high'] - df_mt4['low']
+            avg_taille_h1 = df_mt4['taille'].iloc[-20:-1].mean()
+            
+            # SÉCURITÉ ANTI-ARNAQUE SPREAD (40%)
+            if spread_mt4 > (avg_taille_h1 * 0.4):
+                try: bot.edit_message_text(f"⚠️ **SIGNAL MT4 AVORTÉ (Sécurité)**\nLe spread du courtier est toxique : `{spread_mt4:.5f}`. Risque de perte trop élevé.", chat_id, msg.message_id, parse_mode="Markdown")
+                except: pass
+                return 
+
+            action_mt4 = "Achat" if "CALL" in action else "Vente"
+            marge = spread_mt4 + (avg_taille_h1 * 0.2)
+            
+            if action_mt4 == "Achat":
+                creux_h1 = df_mt4['low'].iloc[-20:-1].min()
+                sl_secu = creux_h1 - marge
+                if (current_ask - sl_secu) < (spread_mt4 * 2): # Anti-crash MT5/MT4
+                    sl_secu = current_ask - (avg_taille_h1 * 1.5)
+                tp_secu = current_ask + ((current_ask - sl_secu) * 2) 
+            else:
+                sommet_h1 = df_mt4['high'].iloc[-20:-1].max()
+                sl_secu = sommet_h1 + marge
+                if (sl_secu - current_ask) < (spread_mt4 * 2): # Anti-crash MT5/MT4
+                    sl_secu = current_ask + (avg_taille_h1 * 1.5)
+                tp_secu = current_ask - ((sl_secu - current_ask) * 2)
+
+            action_affiche = "🟢 BUY MARKET (ACHAT)" if action_mt4 == "Achat" else "🔴 SELL MARKET (VENTE)"
+            signal = f"""📈 **SIGNAL META TRADER CLOUD 💎** 📈
+──────────────────
+🌐 **ACTIF :** {nom_affiche}
+👉 **ORDRE :** {action_affiche}
+🧠 **ANALYSE :** {bb_status} + SMC Logique (H1)
+──────────────────
+💰 **PRIX ACTUEL (Ask) :** `{current_ask:.5f}`
+🛑 **STOP LOSS (SL) :** `{sl_secu:.5f}`
+✅ **TAKE PROFIT (TP) :** `{tp_secu:.5f}`
+──────────────────
+*(Ratio R/R : 1:2. Marge anti-spread appliquée).*"""
+            try:
+                bot.delete_message(chat_id, msg.message_id)
+                bot.send_message(chat_id, signal, parse_mode="Markdown")
+            except: pass
+            return
+        else:
+            try: bot.edit_message_text("❌ Échec MetaApi. Données MT4 inaccessibles. Relancez.", chat_id, msg.message_id)
+            except: pass
+            return
+
+    # ==========================
+    # BRANCHE 2 : POCKET BROKER (BINAIRE)
+    # ==========================
     maintenant = datetime.datetime.now()
     sec_rest = (60 - maintenant.second)
     if mode_actuel == "SCALP" and sec_rest < 45: sec_rest += 60 
     elif mode_actuel == "STANDARD" and sec_rest < 15: sec_rest += 60
 
-    # ==========================
-    # BRANCHE 1 : META TRADER (MT4/MT5)
-    # ==========================
-    if plateforme == "MT4":
-        action_mt4 = "🟢 BUY MARKET (ACHAT)" if "CALL" in action else "🔴 SELL MARKET (VENTE)"
-        
-        signal = f"""📈 **SIGNAL META TRADER (MT4/MT5) 💎** 📈
-──────────────────
-🌐 **ACTIF :** {nom_affiche}
-👉 **ORDRE :** {action_mt4}
-🛡️ **ANALYSE :** {bb_status}
-──────────────────
-🛑 **STOP LOSS (SL) :** `{sl_calcule:.5f}`
-✅ **TAKE PROFIT (TP) :** `{tp_calcule:.5f}`
-──────────────────
-*(Ratio Risque/Récompense de 1:2. Aucun temps d'expiration. Laissez le trade respirer.)*"""
-
-        try:
-            bot.delete_message(chat_id, msg.message_id)
-            bot.send_message(chat_id, signal, parse_mode="Markdown")
-        except: pass
-        
-        # En mode MT4, l'IA ne fait pas de compte à rebours, pas de ghost, pas de martingale. L'utilisateur gère son SL/TP.
-        return 
-
-    # ==========================
-    # BRANCHE 2 : POCKET BROKER (BINAIRE)
-    # ==========================
     palier = niveaux_martingale.get(chat_id, 0)
     
     if palier == 0 and score is not None and score >= 10.0:
@@ -620,7 +689,7 @@ def save_devise(call):
     action_brute = "CALL" if "ACHAT" in action else "PUT"
     Timer(sec_rest, executer_tir_flash, args=[chat_id, actif, action_brute, duree_secondes, palier]).start()
 
-# === LES FONCTIONS DE RÉSULTATS BINAIRES SUIVENT (INCHANGÉES) ===
+# === LES FONCTIONS DE RÉSULTATS BINAIRES SUIVENT ===
 def executer_tir_flash(chat_id, symbole, action_brute, duree, palier):
     action_affichage = "🟢 ACHAT (CALL)" if action_brute == "CALL" else "🔴 VENTE (PUT)"
     nom_paire = f"{symbole[:3]}/{symbole[3:]}" if len(symbole) == 6 else symbole
@@ -776,7 +845,6 @@ def devises(message):
         InlineKeyboardButton("🇺🇸 USD/CHF", callback_data="set_USDCHF"), InlineKeyboardButton("🇨🇦 CAD/CHF", callback_data="set_CADCHF"), InlineKeyboardButton("🇪🇺 EUR/CHF", callback_data="set_EURCHF"),
         InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY")
     )
-    # 🥇 Ajout de la rangée Matières Premières
     markup.add(
         InlineKeyboardButton("🥇 OR (XAU/USD)", callback_data="set_XAUUSD"), 
         InlineKeyboardButton("🥈 ARGENT (XAG/USD)", callback_data="set_XAGUSD")
@@ -812,7 +880,7 @@ def scanner_marche_auto():
                     cle_memoire = f"{paire}_{mode}"
                     if cle_memoire in derniere_alerte_auto and (time.time() - derniere_alerte_auto[cle_memoire] < delai_repos): continue
                         
-                    action, conf, exp, dur, rsi, stoch, bb, sc, sl, tp = analyser_binaire_pro(paire, mode)
+                    action, conf, exp, dur, rsi, stoch, bb, sc = analyser_binaire_pro(paire, mode)
                     
                     if action and "⚠️" not in action:
                         if statut == "HORS_SESSION" and (sc is None or sc < 10.0): continue
@@ -823,7 +891,6 @@ def scanner_marche_auto():
                             if mode_trading.get(uid, "STANDARD") == mode:
                                 pf = plateforme_trading.get(uid, "POCKET")
                                 type_alerte = "📊 Verrouiller SMC" if pf == "POCKET" else "📈 Ordre MT4"
-                                # Affichage optimisé pour l'Or/Argent
                                 nom_paire_affiche = f"{paire[:3]}" if paire in COMMODITY_PAIRS else f"{paire[:3]}/{paire[3:]}"
                                 
                                 markup = InlineKeyboardMarkup().add(InlineKeyboardButton(f"⚡ Frapper {nom_paire_affiche}" if mode == "SCALP" else f"{type_alerte} {nom_paire_affiche}", callback_data=f"set_{paire}"))
@@ -872,5 +939,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestionnaire_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition V17.11 HYBRID Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition V17.11 HYBRID PRO Démarrée.", flush=True)
     bot.infinity_polling()
