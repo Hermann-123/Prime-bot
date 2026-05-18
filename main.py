@@ -20,7 +20,7 @@ from metaapi_cloud_sdk import MetaApi
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAFXht6D-gDlTz8t5ANFcF2ujiE6BUwEfpk"
+TELEGRAM_TOKEN = "8658287331:AAG2vdDTcLJfbjneXKnjqzJ0X9DxVVBsT_c"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
