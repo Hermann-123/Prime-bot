@@ -4,5 +4,3 @@ flask
 pandas
 ta
 websocket-client==1.6.1
-metaapi-cloud-sdk
-asyncio
