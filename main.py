@@ -13,14 +13,13 @@ import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from flask import Flask
 from threading import Thread, Timer
-import asyncio
-from metaapi_cloud_sdk import MetaApi
 
 # ==========================================
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAG2vdDTcLJfbjneXKnjqzJ0X9DxVVBsT_c"
+# ⚠️ TON TOKEN TELEGRAM ACTUEL
+TELEGRAM_TOKEN = "8658287331:AAH1hsJOrAzpR3klNs7oC4QX3e9lblKpJIY"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -32,18 +31,13 @@ COEF_MARTINGALE = 2.5
 MAX_MARTINGALE = 3  
 
 # ==========================================
-# 🧠 CONFIGURATION DU PONT METAAPI CLOUD (MT4)
-# ==========================================
-META_TOKEN = "eyJhbGciOiJSUzUxMiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI1NzkxNjRkZGU4YTgxN2Y4MjYzYzE5OGJhZjA0YjI1MSIsImFjY2Vzc1J1bGVzIjpbeyJpZCI6InRyYWRpbmctYWNjb3VudC1tYW5hZ2VtZW50LWFwaSIsIm1ldGhvZHMiOlsidHJhZGluZy1hY2NvdW50LW1hbmFnZW1lbnQtYXBpOnJlc3Q6cHVibGljOio6KiJdLCJyb2xlcyI6WyJyZWFkZXIiLCJ3cml0ZXIiXSwicmVzb3VyY2VzIjpbIio6JFVTRVJfSUQkOioiXX0seyJpZCI6Im1ldGFhcGktcmVzdC1hcGkiLCJtZXRob2RzIjpbIm1ldGFhcGktYXBpOnJlc3Q6cHVibGljOio6KiJdLCJyb2xlcyI6WyJyZWFkZXIiLCJ3cml0ZXIiXSwicmVzb3VyY2VzIjpbIio6JFVTRVJfSUQkOioiXX0seyJpZCI6Im1ldGFhcGktcnBjLWFwaSIsIm1ldGhvZHMiOlsibWV0YWFwaS1hcGk6d3M6cHVibGljOio6KiJdLCJyb2xlcyI6WyJyZWFkZXIiLCJ3cml0ZXIiXSwicmVzb3VyY2VzIjpbIio6JFVTRVJfSUQkOioiXX0seyJpZCI6Im1ldGFhcGktcmVhbC10aW1lLXN0cmVhbWluZy1hcGkiLCJtZXRob2RzIjpbIm1ldGFhcGktYXBpOndzOnB1YmxpYzoqOioiXSwicm9sZXMiOlsicmVhZGVyIiwid3JpdGVyIl0sInJlc291cmNlcyI6WyIqOiRVU0VSX0lEJDoqIl19LHsiaWQiOiJtZXRhc3RhdHMtYXBpIiwibWV0aG9kcyI6WyJtZXRhc3RhdHMtYXBpOnJlc3Q6cHVibGljOio6KiJdLCJyb2xlcyI6WyJyZWFkZXIiLCJ3cml0ZXIiXSwicmVzb3VyY2VzIjpbIio6JFVTRVJfSUQkOioiXX0seyJpZCI6InJpc2stbWFuYWdlbWVudC1hcGkiLCJtZXRob2RzIjpbInJpc2stbWFuYWdlbWVudC1hcGk6cmVzdDpwdWJsaWM6KjoqIl0sInJvbGVzIjpbInJlYWRlciIsIndyaXRlciJdLCJyZXNvdXJjZXMiOlsiKjokVVNFUl9JRCQ6KiJdfSx7ImlkIjoiY29weWZhY3RvcnktYXBpIiwibWV0aG9kcyI6WyJjb3B5ZmFjdG9yeS1hcGk6cmVzdDpwdWJsaWM6KjoqIl0sInJvbGVzIjpbInJlYWRlciIsIndyaXRlciJdLCJyZXNvdXJjZXMiOlsiKjokVVNFUl9JRCQ6KiJdfSx7ImlkIjoibXQtbWFuYWdlci1hcGkiLCJtZXRob2RzIjpbIm10LW1hbmFnZXItYXBpOnJlc3Q6ZGVhbGluZzoqOioiLCJtdC1tYW5hZ2VyLWFwaTpyZXN0OnB1YmxpYzoqOioiXSwicm9sZXMiOlsicmVhZGVyIiwid3JpdGVyIl0sInJlc291cmNlcyI6WyIqOiRVU0VSX0lEJDoqIl19LHsiaWQiOiJiaWxsaW5nLWFwaSIsIm1ldGhvZHMiOlsiYmlsbGluZy1hcGk6cmVzdDpwdWJsaWM6KjoqIl0sInJvbGVzIjpbInJlYWRlciJdLCJyZXNvdXJjZXMiOlsiKjokVVNFUl9JRCQ6KiJdfV0sImlnbm9yZVJhdGVMaW1pdHMiOmZhbHNlLCJ0b2tlbklkIjoiMjAyMTAyMTMiLCJpbXBlcnNvbmF0ZWQiOmZhbHNlLCJyZWFsVXNlcklkIjoiNTc5MTY0ZGRlOGE4MTdmODI2M2MxOThiYWYwNGIyNTEiLCJpYXQiOjE3NzkxMjY5MTF9.e4pfqff5wy8VJb0WJepMCxBIuXo_UXhj7nY-FXmSMn6MAQrj2yVKrk5DtuE2qcPU7AGWsxEXOUCzArYCrwdzIY-yFMk0k1Oy0_buZ-rHj0JOdLY_0TFqfF0dQs-fSOIfRAfBG1X7qthddKnCNA5MUtnlPkKBNwB4wKESWX87AnRZHUXJvm4ENoiIFzhvjDIQ9e4lyBZxvJUmmAcez6uSJesgEHEzhvpJ3356EIufmxFyy3UOLM7oObdjDO18HWGIHlnaR61KrDdLAQPaPaKHdKXOJsf86N3zqb6omQftNavmVmpOf07-2AionKhyRoZFiaUDITc_GgSmDogJJ8s-bSuIfu6wh240pGHqUfUrJXupmx9VUIXCveIoLyzzFMicHPTHdrCEbAolMVYY-_f5y0fC3vlUIotbQTEFw5jiHfUdwcyYbgMppQd45ZSVtfbuYD8tXbHeB4zdrgb4_RKcaCPW8JpoQsE5lNo7xeFYjyDWVouBuQivSITvymcBMatO-d7H_9EAb58qs257HhI9mo5juQIFngxPg4alMwMH85GI8OwU8gfciQ2U0lGz0SOQoNypj9f0A_O2aR_KIENUw4x6FqvYicNOSVEdx9-8Hr4neXbh7nVmOSxf3FeOJ_FQ3zrYX7KgZ_bvmmEqGFaprInZbhQPX94vq0TkGWBMrPo"
-META_ACCOUNT_ID = "4b6c631b-ce28-4aae-ab2d-fc8de9c64db5"
-
-# ==========================================
 # VARIABLES D'ÉTAT ET ROUTAGE
 # ==========================================
 
 user_prefs = {}
 mode_trading = {} 
 plateforme_trading = {} 
+filtre_special = {} # 💎 NOUVEAU: Stocke le choix du filtre (TOUS ou SPECIAUX)
 trades_en_cours = {}
 utilisateurs_actifs = set()
 derniere_alerte_auto = {}
@@ -77,7 +71,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition V17.11 HYBRID PRO (Binaire + MT4)"
+    return "Terminal Prime VIP : Édition V18.0 GUÉRILLA (Binaire + MT4 H1)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -86,53 +80,6 @@ def run():
 def keep_alive():
     t = Thread(target=run)
     t.start()
-
-# ==========================================
-# MOTEUR ASYNCHRONE METAAPI (CERVEAU MT4)
-# ==========================================
-
-async def obtenir_donnees_longue_duree_mt4(symbole_brut):
-    """🧠 MOTEUR MT4 INDÉPENDANT : Aspire les données logiques (H1) via MetaApi Cloud"""
-    symbole = symbole_brut.replace("/", "").replace(" cry", "").replace(" frx", "")
-    if "XAUUSD" in symbole: symbole = "XAUUSD"
-    if "XAGUSD" in symbole: symbole = "XAGUSD"
-
-    api = MetaApi(META_TOKEN)
-    try:
-        compte = await api.metatrader_account_api.get_account(META_ACCOUNT_ID)
-        await compte.wait_deployed()
-        
-        connexion = compte.get_streaming_connection()
-        await connexion.connect()
-        await connexion.wait_synchronized()
-
-        print(f"✅ Liaison MetaApi Cloud active pour MT4 ({symbole}).")
-
-        # TICK EN DIRECT (Pour le Spread anti-arnaque)
-        ticket_info = await connexion.get_symbol(symbole)
-        if not ticket_info:
-            return None, None, None
-
-        live_ask = ticket_info['ask']
-        live_bid = ticket_info['bid']
-        spread_actuel = live_ask - live_bid
-
-        # BOUGIES LOGIQUES (H1)
-        timeframe_mt4 = '1h'
-        start_time = datetime.datetime.utcnow() - datetime.timedelta(hours=150)
-        candles = await connexion.get_candles(symbole, timeframe_mt4, start_time, 150)
-
-        if candles:
-            df = pd.DataFrame(candles)
-            df['time'] = pd.to_datetime(df['time'])
-        else:
-            df = None
-
-        return live_ask, spread_actuel, df
-
-    except Exception as e:
-        print(f"❌ Erreur MetaApi sur Render : {e}")
-        return None, None, None
 
 # ==========================================
 # SYSTÈME DE GESTION DES ACCÈS VIP
@@ -232,7 +179,7 @@ def est_symbole_autorise(symbole):
     return "BLOCAGE_TOTAL", "🛑 Erreur temporelle."
 
 # ==========================================
-# FONCTIONS PRO & ROUTEUR DERIV (POUR POCKET)
+# FONCTIONS PRO & ROUTEUR DERIV (POUR POCKET ET MT4 H1)
 # ==========================================
 
 def est_heure_de_news_dynamique():
@@ -472,21 +419,36 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
     return f"⚠️ En attente d'une opportunité ({mode}).", None, None, None, None, None, None, None
 
 # ==========================================
-# GESTION DES SIGNAUX & DESIGN PREMIUM (MT4 + POCKET)
+# GESTION DES SIGNAUX & DESIGN PREMIUM
 # ==========================================
 
 def obtenir_clavier(user_id):
     mode_actuel = mode_trading.get(user_id, "STANDARD")
     plateforme = plateforme_trading.get(user_id, "POCKET")
+    filtre = filtre_special.get(user_id, "TOUS")
     
     btn_mode = "🛡️ MODE: SMC STANDARD" if mode_actuel == "STANDARD" else "🔥 MODE: SMC SCALP"
     btn_plateforme = "🏦 BROKER: POCKET" if plateforme == "POCKET" else "📈 BROKER: MT4"
+    btn_filtre = "💎 SIGNAUX: TOUS" if filtre == "TOUS" else "💎 SIGNAUX: SPÉCIAUX"
     
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row(KeyboardButton("📊 CHOISIR UNE DEVISE"), KeyboardButton("🚀 LANCER L'ANALYSE"))
     markup.row(KeyboardButton(btn_mode), KeyboardButton(btn_plateforme))
-    markup.row(KeyboardButton("⏰ HEURES DE TRADING"))
+    markup.row(KeyboardButton("⏰ HEURES DE TRADING"), KeyboardButton(btn_filtre))
     return markup
+
+@bot.message_handler(func=lambda m: m.text.startswith("💎 SIGNAUX:"))
+def toggle_filtre(message):
+    user_id = message.chat.id
+    if not est_autorise(user_id): return
+    
+    actuel = filtre_special.get(user_id, "TOUS")
+    if actuel == "TOUS":
+        filtre_special[user_id] = "SPECIAUX"
+        bot.send_message(user_id, "💎 **MODE SPÉCIAL ACTIVÉ**\nSilence radio. Vous ne recevrez **que** les signaux 10/10 absolus (Prise de Liquidité Ultime).", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
+    else:
+        filtre_special[user_id] = "TOUS"
+        bot.send_message(user_id, "📡 **MODE TOUS SIGNAUX ACTIVÉ**\nLe radar est grand ouvert. Vous recevrez les signaux classiques (8/10) et les spéciaux.", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text.startswith("🛡️ MODE:") or m.text.startswith("🔥 MODE:"))
 def toggle_mode(message):
@@ -511,7 +473,7 @@ def toggle_plateforme(message):
     plateforme_actuelle = plateforme_trading.get(user_id, "POCKET")
     if plateforme_actuelle == "POCKET":
         plateforme_trading[user_id] = "MT4"
-        bot.send_message(user_id, "📈 **MODE META TRADER (MT4) ACTIVÉ**\nLe bot générera des signaux longs avec Stop Loss et Take Profit.", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
+        bot.send_message(user_id, "📈 **MODE META TRADER (MT4) ACTIVÉ**\nLe bot générera des signaux longs basés sur l'analyse H1 avec Stop Loss et Take Profit.", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
     else:
         plateforme_trading[user_id] = "POCKET"
         bot.send_message(user_id, "🏦 **MODE POCKET BROKER ACTIVÉ**\nLe bot générera des signaux binaires à expiration (Martingale activée).", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
@@ -524,10 +486,11 @@ def bienvenue(message):
     niveaux_martingale[user_id] = niveaux_martingale.get(user_id, 0)
     mode_trading[user_id] = mode_trading.get(user_id, "STANDARD")
     plateforme_trading[user_id] = plateforme_trading.get(user_id, "POCKET")
-    texte = """🏴‍☠️ **TERMINAL PRIME - V17.11 HYBRID PRO 🔀** 🔥
+    filtre_special[user_id] = filtre_special.get(user_id, "TOUS")
+    texte = """🏴‍☠️ **TERMINAL PRIME - V18.0 GUÉRILLA 🔀** 🔥
     
-Mise à jour activée : 🔀 **DOUBLE MOTEUR MT4 / POCKET BROKER**. 
-Utilisez le nouveau bouton en bas pour basculer entre le trading Binaire (Expiration/Martingale) et le trading Professionnel (MT4 Cloud MetaApi)."""
+Mise à jour activée : 🔀 **DOUBLE MOTEUR MT4 / POCKET BROKER (100% GRATUIT)**. 
+Utilisez le nouveau bouton 💎 pour filtrer uniquement les signaux de niveau Institutionnel (10/10)."""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
@@ -554,9 +517,15 @@ def save_devise(call):
     try: msg = bot.send_message(chat_id, f"⏳ *Initialisation Scanner SMC ({plateforme})...*", parse_mode="Markdown")
     except: return
         
-    # PREMIER SCAN RAPIDE (Sert de déclencheur pour Pocket ET de signal d'entrée pour MT4)
+    # PREMIER SCAN RAPIDE
     action, confiance, exp_texte, duree_secondes, rsi_val, stoch_val, bb_status, score = analyser_binaire_pro(actif, mode_actuel)
     
+    # GESTION DU FILTRE SPÉCIAL VIP
+    if filtre_special.get(chat_id) == "SPECIAUX" and (score is None or score < 10.0):
+        try: bot.edit_message_text(f"⏳ **MODE SPÉCIAL ACTIF**\nLe setup sur {nom_affiche} n'est pas un 10/10 parfait. L'IA ignore ce tir pour protéger votre capital.", chat_id, msg.message_id, parse_mode="Markdown")
+        except: pass
+        return
+
     if statut == "HORS_SESSION":
         if score is None or score < 10.0:
             try: bot.edit_message_text(f"{msg_erreur}\n\n*(Le setup n'est pas un 10/10 parfait pour forcer l'entrée)*", chat_id, msg.message_id, parse_mode="Markdown")
@@ -569,64 +538,58 @@ def save_devise(call):
         return
 
     # ==========================
-    # BRANCHE 1 : META TRADER (MT4 CLOUD METAAPI)
+    # BRANCHE 1 : META TRADER (MODE GUÉRILLA H1)
     # ==========================
     if plateforme == "MT4":
-        try: bot.edit_message_text(f"⏳ *Liaison MetaApi Cloud : Scan Logique (H1) sur {nom_affiche}...*", chat_id, msg.message_id, parse_mode="Markdown")
+        try: bot.edit_message_text(f"⏳ *Radar Profond : Extraction des bougies H1 sur {nom_affiche}...*", chat_id, msg.message_id, parse_mode="Markdown")
         except: pass
         
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            current_ask, spread_mt4, df_mt4 = loop.run_until_complete(obtenir_donnees_longue_duree_mt4(actif))
-        finally:
-            loop.close()
+        # Le bot demande les bougies d'UNE HEURE (3600 secondes) à Deriv pour la logique MT4
+        candles_h1 = obtenir_donnees_deriv(actif, 3600)
+        current_ask = obtenir_prix_actuel_deriv(actif)
 
-        if df_mt4 is not None and not df_mt4.empty:
+        if candles_h1 and current_ask:
+            df_mt4 = pd.DataFrame([{'open': float(c['open']), 'close': float(c['close']), 'high': float(c['high']), 'low': float(c['low'])} for c in candles_h1])
             df_mt4['taille'] = df_mt4['high'] - df_mt4['low']
             avg_taille_h1 = df_mt4['taille'].iloc[-20:-1].mean()
             
-            # SÉCURITÉ ANTI-ARNAQUE SPREAD (40%)
-            if spread_mt4 > (avg_taille_h1 * 0.4):
-                try: bot.edit_message_text(f"⚠️ **SIGNAL MT4 AVORTÉ (Sécurité)**\nLe spread du courtier est toxique : `{spread_mt4:.5f}`. Risque de perte trop élevé.", chat_id, msg.message_id, parse_mode="Markdown")
-                except: pass
-                return 
-
             action_mt4 = "Achat" if "CALL" in action else "Vente"
-            marge = spread_mt4 + (avg_taille_h1 * 0.2)
+            
+            # Création d'une marge mathématique puisqu'on n'a pas le vrai spread du broker
+            marge = avg_taille_h1 * 0.15 
             
             if action_mt4 == "Achat":
                 creux_h1 = df_mt4['low'].iloc[-20:-1].min()
                 sl_secu = creux_h1 - marge
-                if (current_ask - sl_secu) < (spread_mt4 * 2): # Anti-crash MT5/MT4
-                    sl_secu = current_ask - (avg_taille_h1 * 1.5)
+                if (current_ask - sl_secu) < (avg_taille_h1 * 0.5): # Anti-crash SL trop proche
+                    sl_secu = current_ask - (avg_taille_h1 * 0.8)
                 tp_secu = current_ask + ((current_ask - sl_secu) * 2) 
             else:
                 sommet_h1 = df_mt4['high'].iloc[-20:-1].max()
                 sl_secu = sommet_h1 + marge
-                if (sl_secu - current_ask) < (spread_mt4 * 2): # Anti-crash MT5/MT4
-                    sl_secu = current_ask + (avg_taille_h1 * 1.5)
+                if (sl_secu - current_ask) < (avg_taille_h1 * 0.5): # Anti-crash SL trop proche
+                    sl_secu = current_ask + (avg_taille_h1 * 0.8)
                 tp_secu = current_ask - ((sl_secu - current_ask) * 2)
 
             action_affiche = "🟢 BUY MARKET (ACHAT)" if action_mt4 == "Achat" else "🔴 SELL MARKET (VENTE)"
-            signal = f"""📈 **SIGNAL META TRADER CLOUD 💎** 📈
+            signal = f"""📈 **SIGNAL LONG FORMAT (MT4) 💎** 📈
 ──────────────────
 🌐 **ACTIF :** {nom_affiche}
 👉 **ORDRE :** {action_affiche}
-🧠 **ANALYSE :** {bb_status} + SMC Logique (H1)
+🧠 **ANALYSE :** {bb_status} + Logique H1
 ──────────────────
-💰 **PRIX ACTUEL (Ask) :** `{current_ask:.5f}`
+💰 **PRIX D'ENTRÉE :** `{current_ask:.5f}`
 🛑 **STOP LOSS (SL) :** `{sl_secu:.5f}`
 ✅ **TAKE PROFIT (TP) :** `{tp_secu:.5f}`
 ──────────────────
-*(Ratio R/R : 1:2. Marge anti-spread appliquée).*"""
+*(Ratio R/R : 1:2. Analyse flux autonome).*"""
             try:
                 bot.delete_message(chat_id, msg.message_id)
                 bot.send_message(chat_id, signal, parse_mode="Markdown")
             except: pass
             return
         else:
-            try: bot.edit_message_text("❌ Échec MetaApi. Données MT4 inaccessibles. Relancez.", chat_id, msg.message_id)
+            try: bot.edit_message_text("❌ Échec de la récupération des données H1. Relancez l'analyse.", chat_id, msg.message_id)
             except: pass
             return
 
@@ -889,6 +852,10 @@ def scanner_marche_auto():
                         
                         for uid in utilisateurs_libres:
                             if mode_trading.get(uid, "STANDARD") == mode:
+                                # GESTION DU FILTRE SPÉCIAL POUR LE SCANNER AUTO
+                                if filtre_special.get(uid) == "SPECIAUX" and (sc is None or sc < 10.0):
+                                    continue # On saute cet utilisateur s'il veut que les signaux spéciaux
+
                                 pf = plateforme_trading.get(uid, "POCKET")
                                 type_alerte = "📊 Verrouiller SMC" if pf == "POCKET" else "📈 Ordre MT4"
                                 nom_paire_affiche = f"{paire[:3]}" if paire in COMMODITY_PAIRS else f"{paire[:3]}/{paire[3:]}"
@@ -939,5 +906,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestionnaire_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition V17.11 HYBRID PRO Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition V18.0 GUÉRILLA Démarrée.", flush=True)
     bot.infinity_polling()
