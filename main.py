@@ -19,7 +19,7 @@ from threading import Thread, Timer
 # ==========================================
 
 # ⚠️ TON TOKEN TELEGRAM ACTUEL
-TELEGRAM_TOKEN = "8658287331:AAH1hsJOrAzpR3klNs7oC4QX3e9lblKpJIY"
+TELEGRAM_TOKEN = "8658287331:AAEalfbgejBrZAcJSp0KmBf_Un7xXO-OmXY"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -71,7 +71,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition V18.0 GUÉRILLA (Binaire + MT4 H1)"
+    return "Terminal Prime VIP : Édition V19.0 INSTITUTIONNEL (MTF + SMC)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -473,7 +473,7 @@ def toggle_plateforme(message):
     plateforme_actuelle = plateforme_trading.get(user_id, "POCKET")
     if plateforme_actuelle == "POCKET":
         plateforme_trading[user_id] = "MT4"
-        bot.send_message(user_id, "📈 **MODE META TRADER (MT4) ACTIVÉ**\nLe bot générera des signaux longs basés sur l'analyse H1 avec Stop Loss et Take Profit.", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
+        bot.send_message(user_id, "📈 **MODE META TRADER (MT4 PRO) ACTIVÉ**\nLe bot analyse maintenant la structure H4, H1 et calcule l'ATR pour des Stop Loss professionnels.", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
     else:
         plateforme_trading[user_id] = "POCKET"
         bot.send_message(user_id, "🏦 **MODE POCKET BROKER ACTIVÉ**\nLe bot générera des signaux binaires à expiration (Martingale activée).", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
@@ -487,10 +487,10 @@ def bienvenue(message):
     mode_trading[user_id] = mode_trading.get(user_id, "STANDARD")
     plateforme_trading[user_id] = plateforme_trading.get(user_id, "POCKET")
     filtre_special[user_id] = filtre_special.get(user_id, "TOUS")
-    texte = """🏴‍☠️ **TERMINAL PRIME - V18.0 GUÉRILLA 🔀** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - V19.0 INSTITUTIONNEL 🔀** 🔥
     
-Mise à jour activée : 🔀 **DOUBLE MOTEUR MT4 / POCKET BROKER (100% GRATUIT)**. 
-Utilisez le nouveau bouton 💎 pour filtrer uniquement les signaux de niveau Institutionnel (10/10)."""
+Mise à jour activée : 🔀 **CERVEAU MT4 PRO (Multi-Timeframe + ATR)**. 
+Utilisez le nouveau bouton 💎 pour filtrer uniquement les signaux parfaits (10/10)."""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
@@ -538,58 +538,68 @@ def save_devise(call):
         return
 
     # ==========================
-    # BRANCHE 1 : META TRADER (MODE GUÉRILLA H1)
+    # BRANCHE 1 : META TRADER (LOGIQUE INSTITUTIONNELLE MTF)
     # ==========================
     if plateforme == "MT4":
-        try: bot.edit_message_text(f"⏳ *Radar Profond : Extraction des bougies H1 sur {nom_affiche}...*", chat_id, msg.message_id, parse_mode="Markdown")
+        try: bot.edit_message_text(f"⏳ *Radar Pro : Analyse Top-Down (H4 + H1) et calcul ATR sur {nom_affiche}...*", chat_id, msg.message_id, parse_mode="Markdown")
         except: pass
         
-        # Le bot demande les bougies d'UNE HEURE (3600 secondes) à Deriv pour la logique MT4
-        candles_h1 = obtenir_donnees_deriv(actif, 3600)
+        # Le bot demande les bougies H4 (14400 sec) et H1 (3600 sec) à Deriv
+        candles_h4 = obtenir_donnees_deriv(actif, 14400) # H4
+        if not candles_h4: candles_h4 = obtenir_donnees_deriv(actif, 7200) # Fallback sur H2 si API Deriv bloque le H4 pur
+        candles_h1 = obtenir_donnees_deriv(actif, 3600)  # H1
         current_ask = obtenir_prix_actuel_deriv(actif)
 
-        if candles_h1 and current_ask:
-            df_mt4 = pd.DataFrame([{'open': float(c['open']), 'close': float(c['close']), 'high': float(c['high']), 'low': float(c['low'])} for c in candles_h1])
-            df_mt4['taille'] = df_mt4['high'] - df_mt4['low']
-            avg_taille_h1 = df_mt4['taille'].iloc[-20:-1].mean()
+        if candles_h4 and candles_h1 and current_ask:
+            df_h4 = pd.DataFrame([{'close': float(c['close'])} for c in candles_h4])
+            df_h1 = pd.DataFrame([{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close'])} for c in candles_h1])
             
+            # TENDANCE LOURDE (Filtre institutionnel H4)
+            df_h4['ema_50'] = ta.trend.EMAIndicator(close=df_h4['close'], window=50).ema_indicator()
+            tendance_h4 = "HAUSSIERE" if df_h4['close'].iloc[-1] > df_h4['ema_50'].iloc[-1] else "BAISSIERE"
+
             action_mt4 = "Achat" if "CALL" in action else "Vente"
+
+            # VÉRIFICATION DE LA TENDANCE (Anti-Fakeout)
+            if (action_mt4 == "Achat" and tendance_h4 == "BAISSIERE") or (action_mt4 == "Vente" and tendance_h4 == "HAUSSIERE"):
+                try: bot.edit_message_text(f"🛑 **TRADE REJETÉ PAR L'IA (Filtre Pro)**\nLe signal est à {action_mt4.lower()}, mais la tendance lourde (H4) est {tendance_h4.lower()}. Risque de Fakeout.", chat_id, msg.message_id, parse_mode="Markdown")
+                except: pass
+                return
+
+            # CALCUL DE L'ATR (Volatilité réelle pour la marge du SL)
+            df_h1['atr'] = ta.volatility.AverageTrueRange(high=df_h1['high'], low=df_h1['low'], close=df_h1['close'], window=14).average_true_range()
+            atr_val = df_h1['atr'].iloc[-1]
             
-            # Création d'une marge mathématique puisqu'on n'a pas le vrai spread du broker
-            marge = avg_taille_h1 * 0.15 
-            
+            # SL CHIRURGICAL BÂTI SUR LA STRUCTURE H1
             if action_mt4 == "Achat":
-                creux_h1 = df_mt4['low'].iloc[-20:-1].min()
-                sl_secu = creux_h1 - marge
-                if (current_ask - sl_secu) < (avg_taille_h1 * 0.5): # Anti-crash SL trop proche
-                    sl_secu = current_ask - (avg_taille_h1 * 0.8)
+                creux_majeur_h1 = df_h1['low'].iloc[-15:-1].min() # Le vrai dernier creux H1
+                sl_secu = creux_majeur_h1 - (atr_val * 0.2) # Marge de protection sous le creux (ATR)
                 tp_secu = current_ask + ((current_ask - sl_secu) * 2) 
             else:
-                sommet_h1 = df_mt4['high'].iloc[-20:-1].max()
-                sl_secu = sommet_h1 + marge
-                if (sl_secu - current_ask) < (avg_taille_h1 * 0.5): # Anti-crash SL trop proche
-                    sl_secu = current_ask + (avg_taille_h1 * 0.8)
+                sommet_majeur_h1 = df_h1['high'].iloc[-15:-1].max() # Le vrai dernier sommet H1
+                sl_secu = sommet_majeur_h1 + (atr_val * 0.2) # Marge de protection au-dessus du sommet (ATR)
                 tp_secu = current_ask - ((sl_secu - current_ask) * 2)
 
             action_affiche = "🟢 BUY MARKET (ACHAT)" if action_mt4 == "Achat" else "🔴 SELL MARKET (VENTE)"
-            signal = f"""📈 **SIGNAL LONG FORMAT (MT4) 💎** 📈
+            signal = f"""📈 **SIGNAL INSTITUTIONNEL (MT4) 💎** 📈
 ──────────────────
 🌐 **ACTIF :** {nom_affiche}
 👉 **ORDRE :** {action_affiche}
-🧠 **ANALYSE :** {bb_status} + Logique H1
+🧠 **CONTEXTE :** Tendance Lourde (H4) Validée
+🛡️ **STRUCTURE :** Stop Loss placé via ATR + Swing H1
 ──────────────────
 💰 **PRIX D'ENTRÉE :** `{current_ask:.5f}`
 🛑 **STOP LOSS (SL) :** `{sl_secu:.5f}`
 ✅ **TAKE PROFIT (TP) :** `{tp_secu:.5f}`
 ──────────────────
-*(Ratio R/R : 1:2. Analyse flux autonome).*"""
+*(Ratio R/R : 1:2. Protection Anti-Fakeout active).*"""
             try:
                 bot.delete_message(chat_id, msg.message_id)
                 bot.send_message(chat_id, signal, parse_mode="Markdown")
             except: pass
             return
         else:
-            try: bot.edit_message_text("❌ Échec de la récupération des données H1. Relancez l'analyse.", chat_id, msg.message_id)
+            try: bot.edit_message_text("❌ Échec de la récupération des données H4/H1. Relancez l'analyse.", chat_id, msg.message_id)
             except: pass
             return
 
@@ -906,5 +916,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestionnaire_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition V18.0 GUÉRILLA Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition V19.0 INSTITUTIONNEL Démarrée.", flush=True)
     bot.infinity_polling()
