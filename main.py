@@ -19,7 +19,7 @@ from threading import Thread, Timer
 # ==========================================
 
 # ⚠️ TON TOKEN TELEGRAM ACTUEL
-TELEGRAM_TOKEN = "8658287331:AAEalfbgejBrZAcJSp0KmBf_Un7xXO-OmXY"
+TELEGRAM_TOKEN = "8658287331:AAFYN-L9J5kCXFGMOp2xaB_U5aig3-qalUE"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -55,6 +55,9 @@ stats_journee = {
     'details': []
 }
 
+# 🚀 NOUVEAU : LISTE DES INDICES SYNTHÉTIQUES (24/7)
+SYNTHETIC_PAIRS = ["V10", "V25", "V50", "V75", "V100"]
+
 CRYPTO_PAIRS = ["BTCUSD", "ETHUSD", "LTCUSD"]
 FOREX_PAIRS = [
     "AUDUSD", "CADJPY", "CHFJPY", "EURJPY", "USDCAD", 
@@ -71,7 +74,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition V19.0 INSTITUTIONNEL (MTF + SMC)"
+    return "Terminal Prime VIP : Édition V20.0 ULTIME (MT5 + Synthétiques 24/7)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -142,6 +145,10 @@ def activer_vip(message):
 # ==========================================
 
 def est_symbole_autorise(symbole):
+    # 🚀 DÉBLOCAGE 24/7 POUR LES INDICES SYNTHÉTIQUES
+    if symbole in SYNTHETIC_PAIRS:
+        return "AUTORISE", ""
+
     now = datetime.datetime.utcnow()
     jour = now.weekday()
     heure = now.hour
@@ -179,7 +186,7 @@ def est_symbole_autorise(symbole):
     return "BLOCAGE_TOTAL", "🛑 Erreur temporelle."
 
 # ==========================================
-# FONCTIONS PRO & ROUTEUR DERIV (POUR POCKET ET MT4 H1)
+# FONCTIONS PRO & ROUTEUR DERIV (MT5)
 # ==========================================
 
 def est_heure_de_news_dynamique():
@@ -200,6 +207,8 @@ def est_heure_de_news_dynamique():
     return False
 
 def prefixer_symbole(symbole_brut):
+    if symbole_brut in SYNTHETIC_PAIRS:
+        return f"R_{symbole_brut.replace('V', '')}" # Traduit V75 en R_75 pour l'API
     if symbole_brut in CRYPTO_PAIRS: return f"cry{symbole_brut}"
     if symbole_brut in COMMODITY_PAIRS: return f"frx{symbole_brut}" 
     return f"frx{symbole_brut}"
@@ -237,6 +246,7 @@ def obtenir_prix_actuel_deriv(symbole_brut):
     return None
 
 def verifier_correlation(symbole_base, action_visee):
+    if symbole_base in SYNTHETIC_PAIRS: return True # Pas de corrélation pour les indices
     correlations = {"EURUSD": ("USDCHF", "INVERSE"), "GBPUSD": ("USDCHF", "INVERSE"), "AUDUSD": ("USDCAD", "INVERSE"), "USDCHF": ("EURUSD", "INVERSE"), "USDCAD": ("AUDUSD", "INVERSE")}
     if symbole_base not in correlations: return True 
     symbole_corr, type_corr = correlations[symbole_base]
@@ -262,7 +272,7 @@ def vision_marche(message):
     if not est_autorise(message.chat.id): return
     if message.chat.id in trades_en_cours: return bot.send_message(message.chat.id, "⚠️ **SILENCE RADIO** : Combat en cours !")
     commande = message.text.split()
-    if len(commande) < 2: return bot.send_message(message.chat.id, "⚠️ Précise la devise.")
+    if len(commande) < 2: return bot.send_message(message.chat.id, "⚠️ Précise la devise ou l'indice.")
     symbole = commande[1].upper()
     try: msg = bot.send_message(message.chat.id, f"🔍 *Scan aux rayons X (SMC + Killswitch)...*", parse_mode="Markdown")
     except: return
@@ -296,7 +306,7 @@ def vision_marche(message):
 # ==========================================
 
 def analyser_binaire_pro(symbole, mode="STANDARD"):
-    if est_heure_de_news_dynamique() and symbole not in CRYPTO_PAIRS:
+    if est_heure_de_news_dynamique() and symbole not in CRYPTO_PAIRS and symbole not in SYNTHETIC_PAIRS:
         return "⚠️ ALERTE NEWS : Marché manipulé.", None, None, None, None, None, None, None
 
     timeframes = [600, 300, 120] if mode == "STANDARD" else [60]
@@ -424,11 +434,11 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
 
 def obtenir_clavier(user_id):
     mode_actuel = mode_trading.get(user_id, "STANDARD")
-    plateforme = plateforme_trading.get(user_id, "POCKET")
+    plateforme = plateforme_trading.get(user_id, "MT5") # MT5 par défaut
     filtre = filtre_special.get(user_id, "TOUS")
     
     btn_mode = "🛡️ MODE: SMC STANDARD" if mode_actuel == "STANDARD" else "🔥 MODE: SMC SCALP"
-    btn_plateforme = "🏦 BROKER: POCKET" if plateforme == "POCKET" else "📈 BROKER: MT4"
+    btn_plateforme = "🏦 BROKER: POCKET" if plateforme == "POCKET" else "📈 BROKER: MT5" # MAJ MT5
     btn_filtre = "💎 SIGNAUX: TOUS" if filtre == "TOUS" else "💎 SIGNAUX: SPÉCIAUX"
     
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -470,13 +480,13 @@ def toggle_plateforme(message):
     if not est_autorise(user_id): return
     if user_id in trades_en_cours: return bot.send_message(user_id, "⚠️ Terminez votre trade en cours avant de changer de plateforme.")
         
-    plateforme_actuelle = plateforme_trading.get(user_id, "POCKET")
+    plateforme_actuelle = plateforme_trading.get(user_id, "MT5")
     if plateforme_actuelle == "POCKET":
-        plateforme_trading[user_id] = "MT4"
-        bot.send_message(user_id, "📈 **MODE META TRADER (MT4 PRO) ACTIVÉ**\nLe bot analyse maintenant la structure H4, H1 et calcule l'ATR pour des Stop Loss professionnels.", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
+        plateforme_trading[user_id] = "MT5"
+        bot.send_message(user_id, "📈 **MODE META TRADER (MT5 PRO) ACTIVÉ**\nLe bot analyse maintenant la structure H4, H1 et calcule l'ATR pour des Stop Loss professionnels.", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
     else:
         plateforme_trading[user_id] = "POCKET"
-        bot.send_message(user_id, "🏦 **MODE POCKET BROKER ACTIVÉ**\nLe bot générera des signaux binaires à expiration (Martingale activée).", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
+        bot.send_message(user_id, "🏦 **MODE POCKET BROKER ACTIVÉ**\nLe bot générera des signaux binaires à expiration.", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.message_handler(commands=['start'])
 def bienvenue(message):
@@ -485,11 +495,11 @@ def bienvenue(message):
     utilisateurs_actifs.add(user_id)
     niveaux_martingale[user_id] = niveaux_martingale.get(user_id, 0)
     mode_trading[user_id] = mode_trading.get(user_id, "STANDARD")
-    plateforme_trading[user_id] = plateforme_trading.get(user_id, "POCKET")
+    plateforme_trading[user_id] = plateforme_trading.get(user_id, "MT5")
     filtre_special[user_id] = filtre_special.get(user_id, "TOUS")
-    texte = """🏴‍☠️ **TERMINAL PRIME - V19.0 INSTITUTIONNEL 🔀** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - V20.0 ULTIME 🔀** 🔥
     
-Mise à jour activée : 🔀 **CERVEAU MT4 PRO (Multi-Timeframe + ATR)**. 
+Mise à jour activée : 🔀 **CERVEAU MT5 + INDICES SYNTHÉTIQUES (24/7)**. 
 Utilisez le nouveau bouton 💎 pour filtrer uniquement les signaux parfaits (10/10)."""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
@@ -502,7 +512,7 @@ def save_devise(call):
         return
     
     actif = call.data.replace("set_", "")
-    plateforme = plateforme_trading.get(chat_id, "POCKET")
+    plateforme = plateforme_trading.get(chat_id, "MT5")
     statut, msg_erreur = est_symbole_autorise(actif)
     
     if statut == "BLOCAGE_TOTAL":
@@ -511,8 +521,10 @@ def save_devise(call):
         
     user_prefs[call.from_user.id] = actif
     mode_actuel = mode_trading.get(chat_id, "STANDARD")
-    nom_affiche = f"{actif[:3]}/{actif[3:]}"
-    if actif in COMMODITY_PAIRS: nom_affiche = f"{actif[:3]} (Gold)" if actif == "XAUUSD" else f"{actif[:3]} (Silver)"
+    
+    if actif in SYNTHETIC_PAIRS: nom_affiche = f"💥 Volatility {actif.replace('V', '')}"
+    elif actif in COMMODITY_PAIRS: nom_affiche = f"{actif[:3]} (Gold)" if actif == "XAUUSD" else f"{actif[:3]} (Silver)"
+    else: nom_affiche = f"{actif[:3]}/{actif[3:]}"
     
     try: msg = bot.send_message(chat_id, f"⏳ *Initialisation Scanner SMC ({plateforme})...*", parse_mode="Markdown")
     except: return
@@ -538,9 +550,9 @@ def save_devise(call):
         return
 
     # ==========================
-    # BRANCHE 1 : META TRADER (LOGIQUE INSTITUTIONNELLE MTF)
+    # BRANCHE 1 : META TRADER 5 (LOGIQUE INSTITUTIONNELLE MTF)
     # ==========================
-    if plateforme == "MT4":
+    if plateforme == "MT5":
         try: bot.edit_message_text(f"⏳ *Radar Pro : Analyse Top-Down (H4 + H1) et calcul ATR sur {nom_affiche}...*", chat_id, msg.message_id, parse_mode="Markdown")
         except: pass
         
@@ -580,8 +592,10 @@ def save_devise(call):
                 sl_secu = sommet_majeur_h1 + (atr_val * 0.2) # Marge de protection au-dessus du sommet (ATR)
                 tp_secu = current_ask - ((sl_secu - current_ask) * 2)
 
+            avertissement_lot = "\n⚠️ **ATTENTION V75/V100 : LOT MAXIMUM DE 0.001 !**" if actif in SYNTHETIC_PAIRS else ""
+
             action_affiche = "🟢 BUY MARKET (ACHAT)" if action_mt4 == "Achat" else "🔴 SELL MARKET (VENTE)"
-            signal = f"""📈 **SIGNAL INSTITUTIONNEL (MT4) 💎** 📈
+            signal = f"""📈 **SIGNAL INSTITUTIONNEL (MT5) 💎** 📈
 ──────────────────
 🌐 **ACTIF :** {nom_affiche}
 👉 **ORDRE :** {action_affiche}
@@ -592,7 +606,7 @@ def save_devise(call):
 🛑 **STOP LOSS (SL) :** `{sl_secu:.5f}`
 ✅ **TAKE PROFIT (TP) :** `{tp_secu:.5f}`
 ──────────────────
-*(Ratio R/R : 1:2. Protection Anti-Fakeout active).*"""
+*(Ratio R/R : 1:2. Protection Anti-Fakeout active).* {avertissement_lot}"""
             try:
                 bot.delete_message(chat_id, msg.message_id)
                 bot.send_message(chat_id, signal, parse_mode="Markdown")
@@ -665,7 +679,7 @@ def save_devise(call):
 # === LES FONCTIONS DE RÉSULTATS BINAIRES SUIVENT ===
 def executer_tir_flash(chat_id, symbole, action_brute, duree, palier):
     action_affichage = "🟢 ACHAT (CALL)" if action_brute == "CALL" else "🔴 VENTE (PUT)"
-    nom_paire = f"{symbole[:3]}/{symbole[3:]}" if len(symbole) == 6 else symbole
+    nom_paire = f"{symbole[:3]}/{symbole[3:]}" if len(symbole) == 6 and symbole not in SYNTHETIC_PAIRS else symbole
     
     if palier == 0:
         texte = f"👻 **LE FANTÔME EST LANCÉ ({nom_paire})** 👻\nL'IA observe le marché virtuellement..."
@@ -687,7 +701,7 @@ def relever_prix_entree(chat_id, symbole):
         trades_en_cours[chat_id]['prix_entree'] = prix
 
 def preparer_nouveau_palier(chat_id, symbole, action_brute, duree, palier):
-    nom_paire = f"{symbole[:3]}/{symbole[3:]}" if len(symbole) == 6 else symbole
+    nom_paire = f"{symbole[:3]}/{symbole[3:]}" if len(symbole) == 6 and symbole not in SYNTHETIC_PAIRS else symbole
     mise = int((CAPITAL_ACTUEL * 0.02) * (COEF_MARTINGALE ** palier))
     exp_texte = f"{int(duree/60)} MIN" if duree >= 60 else f"{duree} SEC"
     action_affichage = "🟢 ACHAT (CALL)" if action_brute == "CALL" else "🔴 VENTE (PUT)"
@@ -728,8 +742,8 @@ def verifier_resultat(chat_id):
     action = trade['action']
     palier_actuel = niveaux_martingale.get(chat_id, 0)
     gagne = (action == "CALL" and prix_sortie > prix_entree) or (action == "PUT" and prix_sortie < prix_entree)
-    nom_paire = f"{symbole[:3]}/{symbole[3:]}" if len(symbole) == 6 else symbole
-    type_emoji = "🪙" if symbole in CRYPTO_PAIRS else "💱"
+    nom_paire = f"{symbole[:3]}/{symbole[3:]}" if len(symbole) == 6 and symbole not in SYNTHETIC_PAIRS else symbole
+    type_emoji = "🪙" if symbole in CRYPTO_PAIRS else "💥" if symbole in SYNTHETIC_PAIRS else "💱"
 
     if gagne:
         niveaux_martingale[chat_id] = 0 
@@ -803,13 +817,25 @@ def horaires_trading(message):
 🇪🇺 **Session Europe (07h00 - 12h00) :** EUR, USD, CHF, GOLD
 🔥 **Zone de Guerre (12h00 - 17h30) :** EUR/USD, AUD/USD, USD/CAD, GOLD
 🛑 **Repli Tactique (17h30 - 00h00) :** Le Forex est bloqué.
-🪙 **Week-end (Ven 21h - Dim 21h) :** EXCLUSIVEMENT pour les Cryptos."""
+💥 **INDICES SYNTHÉTIQUES (V10, V75...) :** Ouverts 24h/24 & 7j/7."""
     bot.send_message(message.chat.id, texte, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "📊 CHOISIR UNE DEVISE")
 def devises(message):
     if not est_autorise(message.chat.id): return
     markup = InlineKeyboardMarkup(row_width=3)
+    
+    # 💥 AJOUT DES INDICES SYNTHÉTIQUES ICI
+    markup.add(
+        InlineKeyboardButton("🔥 V10", callback_data="set_V10"),
+        InlineKeyboardButton("🔥 V25", callback_data="set_V25"),
+        InlineKeyboardButton("🔥 V50", callback_data="set_V50")
+    )
+    markup.add(
+        InlineKeyboardButton("⚡ V75", callback_data="set_V75"),
+        InlineKeyboardButton("💥 V100", callback_data="set_V100")
+    )
+    
     markup.add(
         InlineKeyboardButton("🪙 BTC/USD", callback_data="set_BTCUSD"), InlineKeyboardButton("🔷 ETH/USD", callback_data="set_ETHUSD"), InlineKeyboardButton("⚡ LTC/USD", callback_data="set_LTCUSD"),
         InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD"), InlineKeyboardButton("🇨🇦 CAD/JPY", callback_data="set_CADJPY"), InlineKeyboardButton("🇨🇭 CHF/JPY", callback_data="set_CHFJPY"),
@@ -822,7 +848,7 @@ def devises(message):
         InlineKeyboardButton("🥇 OR (XAU/USD)", callback_data="set_XAUUSD"), 
         InlineKeyboardButton("🥈 ARGENT (XAG/USD)", callback_data="set_XAGUSD")
     )
-    bot.send_message(message.chat.id, "Sélectionne ta cible (L'IA bloquera les devises fermées) :", reply_markup=markup)
+    bot.send_message(message.chat.id, "Sélectionne ta cible (Les Indices Synthétiques fonctionnent 24h/24) :", reply_markup=markup)
 
 @bot.message_handler(func=lambda m: m.text == "🚀 LANCER L'ANALYSE")
 def lancer(message):
@@ -844,7 +870,7 @@ def scanner_marche_auto():
             utilisateurs_libres = [uid for uid in utilisateurs_actifs if est_autorise(uid) and uid not in trades_en_cours]
             if not utilisateurs_libres: continue
                 
-            for paire in CRYPTO_PAIRS + FOREX_PAIRS + COMMODITY_PAIRS:
+            for paire in SYNTHETIC_PAIRS + CRYPTO_PAIRS + FOREX_PAIRS + COMMODITY_PAIRS:
                 statut, _ = est_symbole_autorise(paire)
                 if statut == "BLOCAGE_TOTAL": continue
                     
@@ -864,11 +890,14 @@ def scanner_marche_auto():
                             if mode_trading.get(uid, "STANDARD") == mode:
                                 # GESTION DU FILTRE SPÉCIAL POUR LE SCANNER AUTO
                                 if filtre_special.get(uid) == "SPECIAUX" and (sc is None or sc < 10.0):
-                                    continue # On saute cet utilisateur s'il veut que les signaux spéciaux
+                                    continue 
 
-                                pf = plateforme_trading.get(uid, "POCKET")
-                                type_alerte = "📊 Verrouiller SMC" if pf == "POCKET" else "📈 Ordre MT4"
-                                nom_paire_affiche = f"{paire[:3]}" if paire in COMMODITY_PAIRS else f"{paire[:3]}/{paire[3:]}"
+                                pf = plateforme_trading.get(uid, "MT5")
+                                type_alerte = "📊 Verrouiller SMC" if pf == "POCKET" else "📈 Ordre MT5"
+                                
+                                if paire in SYNTHETIC_PAIRS: nom_paire_affiche = f"V{paire.replace('V', '')}"
+                                elif paire in COMMODITY_PAIRS: nom_paire_affiche = f"{paire[:3]}"
+                                else: nom_paire_affiche = f"{paire[:3]}/{paire[3:]}"
                                 
                                 markup = InlineKeyboardMarkup().add(InlineKeyboardButton(f"⚡ Frapper {nom_paire_affiche}" if mode == "SCALP" else f"{type_alerte} {nom_paire_affiche}", callback_data=f"set_{paire}"))
                                 
@@ -894,9 +923,9 @@ def gestionnaire_bilan():
                     texte_bilan += f"──────────────────\n"
                     texte_bilan += f"✅ **CIBLES ABATTUES (ITM) :** {stats_journee['ITM']}\n"
                     texte_bilan += f"❌ **TIRS RATÉS (OTM) :** {stats_journee['OTM']}\n"
-                    texte_bilan += f"🎯 **TAUX DE RÉUSSITE POCKET :** {winrate:.1f}%\n"
+                    texte_bilan += f"🎯 **TAUX DE RÉUSSITE :** {winrate:.1f}%\n"
                     texte_bilan += f"──────────────────\n"
-                    texte_bilan += f"*Nettoyage des serveurs. Prêt pour la Session Asiatique.*"
+                    texte_bilan += f"*Nettoyage des serveurs. L'analyse des Synthétiques continue 24/7.*"
                     
                     for uid in utilisateurs_actifs:
                         if est_autorise(uid):
@@ -916,5 +945,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestionnaire_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition V19.0 INSTITUTIONNEL Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition V20.0 ULTIME Démarrée.", flush=True)
     bot.infinity_polling()
