@@ -19,7 +19,7 @@ from threading import Thread, Timer
 # ==========================================
 
 # ⚠️ TON TOKEN TELEGRAM ACTUEL
-TELEGRAM_TOKEN = "8658287331:AAFYN-L9J5kCXFGMOp2xaB_U5aig3-qalUE"
+TELEGRAM_TOKEN = "8658287331:AAED1MZTmU4JBOq9k6CoQRViSL_OAbNZO4E"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -74,7 +74,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition V20.0 ULTIME (MT5 + Synthétiques 24/7)"
+    return "Terminal Prime VIP : Édition V21.0 SCALP VIP (MT5 + Synthétiques 24/7)"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -483,7 +483,7 @@ def toggle_plateforme(message):
     plateforme_actuelle = plateforme_trading.get(user_id, "MT5")
     if plateforme_actuelle == "POCKET":
         plateforme_trading[user_id] = "MT5"
-        bot.send_message(user_id, "📈 **MODE META TRADER (MT5 PRO) ACTIVÉ**\nLe bot analyse maintenant la structure H4, H1 et calcule l'ATR pour des Stop Loss professionnels.", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
+        bot.send_message(user_id, "📈 **MODE META TRADER (MT5 SCALP) ACTIVÉ**\nLe bot cible les trades de 30-45 minutes. Les signaux VIP sont compatibles.", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
     else:
         plateforme_trading[user_id] = "POCKET"
         bot.send_message(user_id, "🏦 **MODE POCKET BROKER ACTIVÉ**\nLe bot générera des signaux binaires à expiration.", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
@@ -497,10 +497,10 @@ def bienvenue(message):
     mode_trading[user_id] = mode_trading.get(user_id, "STANDARD")
     plateforme_trading[user_id] = plateforme_trading.get(user_id, "MT5")
     filtre_special[user_id] = filtre_special.get(user_id, "TOUS")
-    texte = """🏴‍☠️ **TERMINAL PRIME - V20.0 ULTIME 🔀** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - V21.0 SCALP VIP 🔀** 🔥
     
-Mise à jour activée : 🔀 **CERVEAU MT5 + INDICES SYNTHÉTIQUES (24/7)**. 
-Utilisez le nouveau bouton 💎 pour filtrer uniquement les signaux parfaits (10/10)."""
+Mise à jour activée : 🔀 **CERVEAU MT5 SCALP + VIP 10/10**. 
+Le bot n'est plus bloqué par la tendance lourde. Utilisez le filtre 💎 pour vos meilleurs trades !"""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
@@ -550,70 +550,68 @@ def save_devise(call):
         return
 
     # ==========================
-    # BRANCHE 1 : META TRADER 5 (LOGIQUE INSTITUTIONNELLE MTF)
+    # BRANCHE 1 : META TRADER 5 (LOGIQUE SCALP INTRADAY)
     # ==========================
     if plateforme == "MT5":
-        try: bot.edit_message_text(f"⏳ *Radar Pro : Analyse Top-Down (H4 + H1) et calcul ATR sur {nom_affiche}...*", chat_id, msg.message_id, parse_mode="Markdown")
+        try: bot.edit_message_text(f"⏳ *Radar Rapide VIP : Analyse M15 + M5 et calcul ATR sur {nom_affiche}...*", chat_id, msg.message_id, parse_mode="Markdown")
         except: pass
         
-        # Le bot demande les bougies H4 (14400 sec) et H1 (3600 sec) à Deriv
-        candles_h4 = obtenir_donnees_deriv(actif, 14400) # H4
-        if not candles_h4: candles_h4 = obtenir_donnees_deriv(actif, 7200) # Fallback sur H2 si API Deriv bloque le H4 pur
-        candles_h1 = obtenir_donnees_deriv(actif, 3600)  # H1
+        # Données rapides pour trades de 30-45 minutes
+        candles_h4 = obtenir_donnees_deriv(actif, 900) # M15 pour la tendance
+        if not candles_h4: candles_h4 = obtenir_donnees_deriv(actif, 1800) # M30 Fallback
+        candles_h1 = obtenir_donnees_deriv(actif, 300)  # M5 pour le déclenchement
         current_ask = obtenir_prix_actuel_deriv(actif)
 
         if candles_h4 and candles_h1 and current_ask:
             df_h4 = pd.DataFrame([{'close': float(c['close'])} for c in candles_h4])
             df_h1 = pd.DataFrame([{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close'])} for c in candles_h1])
             
-            # TENDANCE LOURDE (Filtre institutionnel H4)
+            # TENDANCE RAPIDE (M15)
             df_h4['ema_50'] = ta.trend.EMAIndicator(close=df_h4['close'], window=50).ema_indicator()
             tendance_h4 = "HAUSSIERE" if df_h4['close'].iloc[-1] > df_h4['ema_50'].iloc[-1] else "BAISSIERE"
-
             action_mt4 = "Achat" if "CALL" in action else "Vente"
 
-            # VÉRIFICATION DE LA TENDANCE (Anti-Fakeout)
+            # 🔓 VÉRIFICATION DE LA TENDANCE (AVERTISSEMENT AU LIEU DE BLOCAGE)
+            avertissement_tendance = ""
             if (action_mt4 == "Achat" and tendance_h4 == "BAISSIERE") or (action_mt4 == "Vente" and tendance_h4 == "HAUSSIERE"):
-                try: bot.edit_message_text(f"🛑 **TRADE REJETÉ PAR L'IA (Filtre Pro)**\nLe signal est à {action_mt4.lower()}, mais la tendance lourde (H4) est {tendance_h4.lower()}. Risque de Fakeout.", chat_id, msg.message_id, parse_mode="Markdown")
-                except: pass
-                return
+                avertissement_tendance = "\n⚠️ *Note IA : Tir VIP à contre-tendance (Pullback).*"
 
-            # CALCUL DE L'ATR (Volatilité réelle pour la marge du SL)
+            # CALCUL DE L'ATR (Volatilité M5 pour un SL serré)
             df_h1['atr'] = ta.volatility.AverageTrueRange(high=df_h1['high'], low=df_h1['low'], close=df_h1['close'], window=14).average_true_range()
             atr_val = df_h1['atr'].iloc[-1]
             
-            # SL CHIRURGICAL BÂTI SUR LA STRUCTURE H1
+            # SL CHIRURGICAL BÂTI SUR LA STRUCTURE M5
             if action_mt4 == "Achat":
-                creux_majeur_h1 = df_h1['low'].iloc[-15:-1].min() # Le vrai dernier creux H1
-                sl_secu = creux_majeur_h1 - (atr_val * 0.2) # Marge de protection sous le creux (ATR)
-                tp_secu = current_ask + ((current_ask - sl_secu) * 2) 
+                creux_majeur_h1 = df_h1['low'].iloc[-15:-1].min()
+                sl_secu = creux_majeur_h1 - (atr_val * 0.5) 
+                tp_secu = current_ask + ((current_ask - sl_secu) * 2.5) # Ratio 1:2.5
             else:
-                sommet_majeur_h1 = df_h1['high'].iloc[-15:-1].max() # Le vrai dernier sommet H1
-                sl_secu = sommet_majeur_h1 + (atr_val * 0.2) # Marge de protection au-dessus du sommet (ATR)
-                tp_secu = current_ask - ((sl_secu - current_ask) * 2)
+                sommet_majeur_h1 = df_h1['high'].iloc[-15:-1].max() 
+                sl_secu = sommet_majeur_h1 + (atr_val * 0.5) 
+                tp_secu = current_ask - ((sl_secu - current_ask) * 2.5)
 
             avertissement_lot = "\n⚠️ **ATTENTION V75/V100 : LOT MAXIMUM DE 0.001 !**" if actif in SYNTHETIC_PAIRS else ""
 
             action_affiche = "🟢 BUY MARKET (ACHAT)" if action_mt4 == "Achat" else "🔴 SELL MARKET (VENTE)"
-            signal = f"""📈 **SIGNAL INSTITUTIONNEL (MT5) 💎** 📈
+            signal = f"""⚡ **SIGNAL VIP INTRADAY (MT5) 💎** ⚡
 ──────────────────
 🌐 **ACTIF :** {nom_affiche}
 👉 **ORDRE :** {action_affiche}
-🧠 **CONTEXTE :** Tendance Lourde (H4) Validée
-🛡️ **STRUCTURE :** Stop Loss placé via ATR + Swing H1
+🧠 **CONTEXTE :** Tendance M15 = {tendance_h4} {avertissement_tendance}
+🛡️ **STRUCTURE :** SL placé via ATR M5
 ──────────────────
 💰 **PRIX D'ENTRÉE :** `{current_ask:.5f}`
 🛑 **STOP LOSS (SL) :** `{sl_secu:.5f}`
 ✅ **TAKE PROFIT (TP) :** `{tp_secu:.5f}`
 ──────────────────
-*(Ratio R/R : 1:2. Protection Anti-Fakeout active).* {avertissement_lot}"""
+*(Objectif : ~30 à 45 minutes. Ratio 1:2.5).* {avertissement_lot}"""
             try:
                 bot.delete_message(chat_id, msg.message_id)
                 bot.send_message(chat_id, signal, parse_mode="Markdown")
             except: pass
             return
         else:
-            try: bot.edit_message_text("❌ Échec de la récupération des données H4/H1. Relancez l'analyse.", chat_id, msg.message_id)
+            try: bot.edit_message_text("❌ Échec de la récupération des données M15/M5. Relancez l'analyse.", chat_id, msg.message_id)
             except: pass
             return
 
@@ -945,5 +943,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestionnaire_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition V20.0 ULTIME Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition V21.0 SCALP VIP Démarrée.", flush=True)
     bot.infinity_polling()
