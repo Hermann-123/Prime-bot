@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAFZTrJuJCpBpUNZOGeQ4uMfdcQ7T2zaOOA"
+TELEGRAM_TOKEN = "8658287331:AAFH4Iq9U48cNCkKLTne-R1QJ9mt-Iai7OY"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -66,7 +66,7 @@ ALL_PAIRS_POCKET = SYNTHETIC_PAIRS + COMMODITY_PAIRS + FOREX_PAIRS + CRYPTO_PAIR
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Terminal Prime VIP : Édition V23.0 SNIPER MT5 (Structural SL/TP)"
+def home(): return "Terminal Prime VIP : Édition V23.1 FOCUSED (Pocket Forex Pur & MT5 Sniper)"
 
 def run(): app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 def keep_alive(): Thread(target=run, daemon=True).start()
@@ -472,7 +472,7 @@ def toggle_plateforme(message):
         bot.send_message(user_id, "📈 **MODE MT5 EXCLUSIF ACTIVÉ**\nTrades ciblés sur ~30-45 minutes. L'IA se concentre uniquement sur l'Élite (Matières premières et Synthétiques).", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
     else:
         plateforme_trading[user_id] = "POCKET"
-        bot.send_message(user_id, "🏦 **MODE POCKET BROKER ACTIVÉ**\nL'IA réactive l'analyse intégrale (Forex + Crypto) pour cibler les meilleurs pourcentages de paiement en Binaire.", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
+        bot.send_message(user_id, "🏦 **MODE POCKET BROKER ACTIVÉ**\nL'IA passe en mode Binaire : Le radar et le menu se concentrent à 100% sur le Forex classique.", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.message_handler(commands=['start'])
 def bienvenue(message):
@@ -484,13 +484,13 @@ def bienvenue(message):
     plateforme_trading[user_id] = plateforme_trading.get(user_id, "MT5")
     filtre_special[user_id] = filtre_special.get(user_id, "TOUS")
     
-    texte = """🏴‍☠️ **TERMINAL PRIME - V23.0 SNIPER MT5** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - V23.1 FOCUSED EDITION** 🔥
 ──────────────────
-🚨 **SYSTÈME À DOUBLE CERVEAU & VRAI SMC** 🚨
-L'IA adapte son univers d'analyse selon ton Broker :
+🚨 **SYSTÈME À DOUBLE CERVEAU PURIFIÉ** 🚨
+L'IA adapte son interface et son radar selon ton Broker :
 
-📈 **Sur MT5 :** Snipe chirurgical uniquement sur l'Élite (Or, Argent, Pétrole, Volatility) avec des TP/SL 100% basés sur la liquidité (Structure SMC).
-🏦 **Sur Pocket Broker :** Réactivation automatique du 💱 FOREX et des 🪙 CRYPTOS pour maximiser les rendements binaires."""
+📈 **Sur MT5 :** Snipe chirurgical uniquement sur l'Élite (Or, Argent, Pétrole, Volatility) avec des TP/SL structurels sécurisés.
+🏦 **Sur Pocket Broker :** Isolation totale du 💱 FOREX. Menu épuré. Le radar filtre la tendance M15 avant de parler pour bloquer les Fakeouts."""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
@@ -504,9 +504,12 @@ def save_devise(call):
     actif = call.data.replace("set_", "")
     plateforme = plateforme_trading.get(chat_id, "MT5")
     
-    # Sécurité anti-forex sur MT5
+    # Sécurité des plateformes
     if plateforme == "MT5" and actif not in ELITE_PAIRS_MT5:
-        bot.send_message(chat_id, "❌ Le Forex et les Cryptos sont bloqués en mode MT5. Passe en mode Pocket Broker pour les trader.", parse_mode="Markdown")
+        bot.send_message(chat_id, "❌ Le Forex est bloqué en mode MT5. Passe en mode Pocket Broker pour les trader.", parse_mode="Markdown")
+        return
+    if plateforme == "POCKET" and actif not in FOREX_PAIRS:
+        bot.send_message(chat_id, "❌ Mode Pocket Broker actif : Analyse restreinte au Forex pur.", parse_mode="Markdown")
         return
 
     statut, msg_erreur = est_symbole_autorise(actif)
@@ -558,7 +561,7 @@ def save_devise(call):
         current_ask = obtenir_prix_actuel_deriv(actif)
 
         if candles_m15 and candles_m5 and current_ask:
-            # Intégration de tous les points de données (Open/High/Low/Close) pour la structure
+            # Intégration de tous les points de données
             df_m15 = pd.DataFrame([{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close'])} for c in candles_m15])
             df_m5 = pd.DataFrame([{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close'])} for c in candles_m5])
             
@@ -566,43 +569,35 @@ def save_devise(call):
             tendance_m15 = "HAUSSIERE" if df_m15['close'].iloc[-1] > df_m15['ema_50'].iloc[-1] else "BAISSIERE"
             action_mt4 = "Achat" if "CALL" in action else "Vente"
 
-            # 🛑 1. VERROUILLAGE ANTI-SUICIDE (HARD TREND LOCK)
+            # 🛑 VERROUILLAGE ANTI-SUICIDE
             if (action_mt4 == "Achat" and tendance_m15 == "BAISSIERE") or (action_mt4 == "Vente" and tendance_m15 == "HAUSSIERE"):
                 try: bot.edit_message_text(f"🛑 **TIR ANNULÉ (Anti-Suicide)**\nLe setup sur {nom_affiche} est à contre-tendance M15. L'IA a bloqué le tir pour éviter un fakeout.", chat_id, msg.message_id, parse_mode="Markdown")
                 except: pass
                 return
 
-            # Calcul de l'ATR M5 pour la marge de sécurité des mèches
             df_m5['atr'] = ta.volatility.AverageTrueRange(high=df_m5['high'], low=df_m5['low'], close=df_m5['close'], window=14).average_true_range()
             atr_val = df_m5['atr'].iloc[-1]
 
-            # 🎯 2. STOP LOSS STRUCTUREL & TAKE PROFIT DE LIQUIDITÉ
+            # 🎯 STOP LOSS STRUCTUREL & TAKE PROFIT DE LIQUIDITÉ
             if action_mt4 == "Achat":
-                # On cherche le vrai creux et le vrai sommet sur les 30-40 dernières bougies M15
                 creux_structurel = df_m15['low'].iloc[-30:-1].min()
                 sommet_structurel = df_m15['high'].iloc[-40:-1].max()
                 
-                # SL placé sous la structure avec un large buffer (1.5x ATR)
                 sl_secu = creux_structurel - (atr_val * 1.5)
-                # TP placé exactement sur la liquidité (ancien sommet)
                 tp_secu = sommet_structurel
                 
-                # Sécurité si le prix a déjà dépassé le TP structurel
                 if tp_secu <= current_ask: tp_secu = current_ask + (abs(current_ask - sl_secu) * 2.0)
 
             else:
                 sommet_structurel = df_m15['high'].iloc[-30:-1].max()
                 creux_structurel = df_m15['low'].iloc[-40:-1].min()
                 
-                # SL placé au-dessus de la structure avec buffer (1.5x ATR)
                 sl_secu = sommet_structurel + (atr_val * 1.5)
-                # TP placé sur la liquidité vendeuse (ancien creux)
                 tp_secu = creux_structurel
                 
-                # Sécurité si le prix a déjà dépassé le TP structurel
                 if tp_secu >= current_ask: tp_secu = current_ask - (abs(sl_secu - current_ask) * 2.0)
 
-            # ⚖️ 3. FILTRE RATIO GAIN/RISQUE (R:R > 1.5)
+            # ⚖️ FILTRE RATIO GAIN/RISQUE
             risque = abs(current_ask - sl_secu)
             recompense = abs(tp_secu - current_ask)
             ratio_rr = recompense / risque if risque > 0 else 0
@@ -794,11 +789,11 @@ def override_victoire_manuelle(call):
 @bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
 def horaires_trading(message):
     if not est_autorise(message.chat.id): return
-    texte = """🕒 **HORAIRES DE TIR RESTREINTS (V23.0)** 🕒
+    texte = """🕒 **HORAIRES DE TIR RESTREINTS (V23.1)** 🕒
     
 🥇 **Matières Premières & Forex :** Lundi au Vendredi, actif dès l'ouverture des bourses de Londres et New York. Verrouillage total le week-end.
 
-💥 **Indices Volatility & Cryptos :**
+💥 **Indices Volatility :**
 Ouverts 24h/24, 7j/7 sans aucune interruption temporelle."""
     bot.send_message(message.chat.id, texte, parse_mode="Markdown")
 
@@ -808,37 +803,42 @@ def devises(message):
     plateforme = plateforme_trading.get(message.chat.id, "MT5")
     markup = InlineKeyboardMarkup(row_width=3)
     
-    # Boutons d'actifs d'élite (Toujours visibles)
-    markup.add(
-        InlineKeyboardButton("🔥 V10", callback_data="set_V10"),
-        InlineKeyboardButton("🔥 V25", callback_data="set_V25"),
-        InlineKeyboardButton("🔥 V50", callback_data="set_V50")
-    )
-    markup.add(
-        InlineKeyboardButton("⚡ V75", callback_data="set_V75"),
-        InlineKeyboardButton("💥 V100", callback_data="set_V100")
-    )
-    markup.add(
-        InlineKeyboardButton("🥇 GOLD", callback_data="set_XAUUSD"), 
-        InlineKeyboardButton("🥈 ARGENT", callback_data="set_XAGUSD"),
-        InlineKeyboardButton("🛢 PÉTROLE", callback_data="set_USOUSD")
-    )
-
-    # Ajout conditionnel du Forex et Crypto si Pocket Broker
-    if plateforme == "POCKET":
+    if plateforme == "MT5":
+        # Menu exclusif MT5 (Élite uniquement)
         markup.add(
-            InlineKeyboardButton("🪙 BTC/USD", callback_data="set_BTCUSD"), InlineKeyboardButton("🔷 ETH/USD", callback_data="set_ETHUSD"), InlineKeyboardButton("⚡ LTC/USD", callback_data="set_LTCUSD")
+            InlineKeyboardButton("🔥 V10", callback_data="set_V10"),
+            InlineKeyboardButton("🔥 V25", callback_data="set_V25"),
+            InlineKeyboardButton("🔥 V50", callback_data="set_V50")
         )
         markup.add(
-            InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD"), InlineKeyboardButton("🇨🇦 CAD/JPY", callback_data="set_CADJPY"), InlineKeyboardButton("🇨🇭 CHF/JPY", callback_data="set_CHFJPY"),
-            InlineKeyboardButton("🇪🇺 EUR/JPY", callback_data="set_EURJPY"), InlineKeyboardButton("🇺🇸 USD/CAD", callback_data="set_USDCAD"), InlineKeyboardButton("🇦🇺 AUD/JPY", callback_data="set_AUDJPY"),
-            InlineKeyboardButton("🇪🇺 EUR/AUD", callback_data="set_EURAUD"), InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="set_EURUSD"), InlineKeyboardButton("🇦🇺 AUD/CAD", callback_data="set_AUDCAD"),
-            InlineKeyboardButton("🇺🇸 USD/CHF", callback_data="set_USDCHF"), InlineKeyboardButton("🇨🇦 CAD/CHF", callback_data="set_CADCHF"), InlineKeyboardButton("🇪🇺 EUR/CHF", callback_data="set_EURCHF"),
+            InlineKeyboardButton("⚡ V75", callback_data="set_V75"),
+            InlineKeyboardButton("💥 V100", callback_data="set_V100")
+        )
+        markup.add(
+            InlineKeyboardButton("🥇 GOLD", callback_data="set_XAUUSD"), 
+            InlineKeyboardButton("🥈 ARGENT", callback_data="set_XAGUSD"),
+            InlineKeyboardButton("🛢 PÉTROLE", callback_data="set_USOUSD")
+        )
+        texte_menu = "Sélectionne ta cible (L'Élite réservée à MT5) :"
+    
+    else:
+        # Menu exclusif Pocket Broker (Forex uniquement)
+        markup.add(
+            InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD"), InlineKeyboardButton("🇨🇦 CAD/JPY", callback_data="set_CADJPY"), InlineKeyboardButton("🇨🇭 CHF/JPY", callback_data="set_CHFJPY")
+        )
+        markup.add(
+            InlineKeyboardButton("🇪🇺 EUR/JPY", callback_data="set_EURJPY"), InlineKeyboardButton("🇺🇸 USD/CAD", callback_data="set_USDCAD"), InlineKeyboardButton("🇦🇺 AUD/JPY", callback_data="set_AUDJPY")
+        )
+        markup.add(
+            InlineKeyboardButton("🇪🇺 EUR/AUD", callback_data="set_EURAUD"), InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="set_EURUSD"), InlineKeyboardButton("🇦🇺 AUD/CAD", callback_data="set_AUDCAD")
+        )
+        markup.add(
+            InlineKeyboardButton("🇺🇸 USD/CHF", callback_data="set_USDCHF"), InlineKeyboardButton("🇨🇦 CAD/CHF", callback_data="set_CADCHF"), InlineKeyboardButton("🇪🇺 EUR/CHF", callback_data="set_EURCHF")
+        )
+        markup.add(
             InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY")
         )
-        texte_menu = "Sélectionne ta cible (Forex et Cryptos réactivés pour Pocket Broker) :"
-    else:
-        texte_menu = "Sélectionne ta cible (Le Forex est bloqué en mode MT5) :"
+        texte_menu = "Sélectionne ta cible (Mode Binaire : 100% Forex) :"
 
     bot.send_message(message.chat.id, texte_menu, reply_markup=markup)
 
@@ -853,7 +853,7 @@ def lancer(message):
     save_devise(type('obj', (object,), {'data': f"set_{actif}", 'message': message, 'from_user': message.from_user})())
 
 # ==========================================
-# SCANNER AUTOMATIQUE DYNAMIQUE
+# SCANNER AUTOMATIQUE DYNAMIQUE ET INTELLIGENT
 # ==========================================
 
 def scanner_marche_auto():
@@ -876,13 +876,34 @@ def scanner_marche_auto():
                     
                     if action and "⚠️" not in action:
                         if statut == "HORS_SESSION" and (sc is None or sc < 10.0): continue
+
+                        # ==========================================
+                        # NOUVEAU: VERIFICATION TENDANCE M15 (ANTI-SPAM FAKEOUT)
+                        # ==========================================
+                        action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
+                        alerte_valide = True
+
+                        candles_m15 = obtenir_donnees_deriv(paire, 900)
+                        if candles_m15:
+                            df_m15 = pd.DataFrame([{'close': float(c['close'])} for c in candles_m15])
+                            df_m15['ema_50'] = ta.trend.EMAIndicator(close=df_m15['close'], window=50).ema_indicator()
+                            tendance_m15 = "HAUSSIERE" if df_m15['close'].iloc[-1] > df_m15['ema_50'].iloc[-1] else "BAISSIERE"
+
+                            if (action_simplifiee == "CALL" and tendance_m15 == "BAISSIERE") or (action_simplifiee == "PUT" and tendance_m15 == "HAUSSIERE"):
+                                alerte_valide = False
+
+                        if not alerte_valide:
+                            continue # Le signal est un piège, le bot garde le silence et ne pollue pas le Telegram
+
                         derniere_alerte_auto[cle_memoire] = time.time()
                         
                         for uid in utilisateurs_libres:
                             pf = plateforme_trading.get(uid, "MT5")
                             
-                            # Filtre intelligent : Si MT5, on saute les signaux Forex/Crypto
+                            # Filtre intelligent selon la plateforme active
                             if pf == "MT5" and paire not in ELITE_PAIRS_MT5:
+                                continue
+                            if pf == "POCKET" and paire not in FOREX_PAIRS:
                                 continue
 
                             if mode_trading.get(uid, "STANDARD") == mode:
@@ -930,5 +951,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestionnaire_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition V23.0 SNIPER MT5 Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition V23.1 FOCUSED Démarrée.", flush=True)
     bot.infinity_polling()
