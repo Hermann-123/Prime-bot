@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAGDhgMK1Tj7ZnzgEDZiSs5RoyHENVmFOuE"
+TELEGRAM_TOKEN = "8658287331:AAFZTrJuJCpBpUNZOGeQ4uMfdcQ7T2zaOOA"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -66,7 +66,7 @@ ALL_PAIRS_POCKET = SYNTHETIC_PAIRS + COMMODITY_PAIRS + FOREX_PAIRS + CRYPTO_PAIR
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Terminal Prime VIP : Édition V22.1 DUAL BRAIN (MT5 Elite + Pocket Forex)"
+def home(): return "Terminal Prime VIP : Édition V23.0 SNIPER MT5 (Structural SL/TP)"
 
 def run(): app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 def keep_alive(): Thread(target=run, daemon=True).start()
@@ -484,12 +484,12 @@ def bienvenue(message):
     plateforme_trading[user_id] = plateforme_trading.get(user_id, "MT5")
     filtre_special[user_id] = filtre_special.get(user_id, "TOUS")
     
-    texte = """🏴‍☠️ **TERMINAL PRIME - V22.1 DUAL BRAIN** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - V23.0 SNIPER MT5** 🔥
 ──────────────────
-🚨 **SYSTÈME À DOUBLE CERVEAU ACTIVÉ** 🚨
+🚨 **SYSTÈME À DOUBLE CERVEAU & VRAI SMC** 🚨
 L'IA adapte son univers d'analyse selon ton Broker :
 
-📈 **Sur MT5 :** Snipe chirurgical uniquement sur 🥇 GOLD, 🥈 ARGENT, 🛢 PÉTROLE et 💥 VOLATILITY.
+📈 **Sur MT5 :** Snipe chirurgical uniquement sur l'Élite (Or, Argent, Pétrole, Volatility) avec des TP/SL 100% basés sur la liquidité (Structure SMC).
 🏦 **Sur Pocket Broker :** Réactivation automatique du 💱 FOREX et des 🪙 CRYPTOS pour maximiser les rendements binaires."""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
@@ -547,10 +547,10 @@ def save_devise(call):
         return
 
     # ==========================================
-    # BRANCHE MT5 EXCLUSIVE (LOGIQUE SCALP/INTRADAY)
+    # BRANCHE MT5 EXCLUSIVE (LOGIQUE V23.0 SNIPER SMC)
     # ==========================================
     if plateforme == "MT5":
-        try: bot.edit_message_text(f"⏳ *Calcul des structures ATR M15/M5 pour {nom_affiche}...*", chat_id, msg.message_id, parse_mode="Markdown")
+        try: bot.edit_message_text(f"⏳ *Calcul des zones de Liquidité (TP/SL) pour {nom_affiche}...*", chat_id, msg.message_id, parse_mode="Markdown")
         except: pass
         
         candles_m15 = obtenir_donnees_deriv(actif, 900)
@@ -558,46 +558,76 @@ def save_devise(call):
         current_ask = obtenir_prix_actuel_deriv(actif)
 
         if candles_m15 and candles_m5 and current_ask:
-            df_m15 = pd.DataFrame([{'close': float(c['close'])} for c in candles_m15])
+            # Intégration de tous les points de données (Open/High/Low/Close) pour la structure
+            df_m15 = pd.DataFrame([{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close'])} for c in candles_m15])
             df_m5 = pd.DataFrame([{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close'])} for c in candles_m5])
             
             df_m15['ema_50'] = ta.trend.EMAIndicator(close=df_m15['close'], window=50).ema_indicator()
             tendance_m15 = "HAUSSIERE" if df_m15['close'].iloc[-1] > df_m15['ema_50'].iloc[-1] else "BAISSIERE"
             action_mt4 = "Achat" if "CALL" in action else "Vente"
 
-            avertissement_tendance = ""
+            # 🛑 1. VERROUILLAGE ANTI-SUICIDE (HARD TREND LOCK)
             if (action_mt4 == "Achat" and tendance_m15 == "BAISSIERE") or (action_mt4 == "Vente" and tendance_m15 == "HAUSSIERE"):
-                avertissement_tendance = "\n⚠️ *Note IA : Tir à contre-tendance M15 (Pullback).* "
+                try: bot.edit_message_text(f"🛑 **TIR ANNULÉ (Anti-Suicide)**\nLe setup sur {nom_affiche} est à contre-tendance M15. L'IA a bloqué le tir pour éviter un fakeout.", chat_id, msg.message_id, parse_mode="Markdown")
+                except: pass
+                return
 
+            # Calcul de l'ATR M5 pour la marge de sécurité des mèches
             df_m5['atr'] = ta.volatility.AverageTrueRange(high=df_m5['high'], low=df_m5['low'], close=df_m5['close'], window=14).average_true_range()
             atr_val = df_m5['atr'].iloc[-1]
-            
-            mult_sl = 0.3 if actif == "XAGUSD" else 0.6 if actif in ["XAUUSD", "USOUSD"] else 0.5
 
+            # 🎯 2. STOP LOSS STRUCTUREL & TAKE PROFIT DE LIQUIDITÉ
             if action_mt4 == "Achat":
-                creux_structurel = df_m5['low'].iloc[-15:-1].min()
-                sl_secu = creux_structurel - (atr_val * mult_sl)
-                tp_secu = current_ask + ((current_ask - sl_secu) * 2.5)
+                # On cherche le vrai creux et le vrai sommet sur les 30-40 dernières bougies M15
+                creux_structurel = df_m15['low'].iloc[-30:-1].min()
+                sommet_structurel = df_m15['high'].iloc[-40:-1].max()
+                
+                # SL placé sous la structure avec un large buffer (1.5x ATR)
+                sl_secu = creux_structurel - (atr_val * 1.5)
+                # TP placé exactement sur la liquidité (ancien sommet)
+                tp_secu = sommet_structurel
+                
+                # Sécurité si le prix a déjà dépassé le TP structurel
+                if tp_secu <= current_ask: tp_secu = current_ask + (abs(current_ask - sl_secu) * 2.0)
+
             else:
-                sommet_structurel = df_m5['high'].iloc[-15:-1].max()
-                sl_secu = sommet_structurel + (atr_val * mult_sl)
-                tp_secu = current_ask - ((sl_secu - current_ask) * 2.5)
+                sommet_structurel = df_m15['high'].iloc[-30:-1].max()
+                creux_structurel = df_m15['low'].iloc[-40:-1].min()
+                
+                # SL placé au-dessus de la structure avec buffer (1.5x ATR)
+                sl_secu = sommet_structurel + (atr_val * 1.5)
+                # TP placé sur la liquidité vendeuse (ancien creux)
+                tp_secu = creux_structurel
+                
+                # Sécurité si le prix a déjà dépassé le TP structurel
+                if tp_secu >= current_ask: tp_secu = current_ask - (abs(sl_secu - current_ask) * 2.0)
+
+            # ⚖️ 3. FILTRE RATIO GAIN/RISQUE (R:R > 1.5)
+            risque = abs(current_ask - sl_secu)
+            recompense = abs(tp_secu - current_ask)
+            ratio_rr = recompense / risque if risque > 0 else 0
+            
+            if ratio_rr < 1.5:
+                try: bot.edit_message_text(f"⚠️ **TIR ANNULÉ (Ratio Insuffisant)**\nLe ratio Gain/Risque de la structure est de {ratio_rr:.2f} (Minimum requis: 1.5). La cible est trop proche du prix.", chat_id, msg.message_id, parse_mode="Markdown")
+                except: pass
+                return
 
             avertissement_lot = "\n⚠️ **ATTENTION SYNTHÉTIQUES : LOT STRICT DE 0.001 !**" if actif in SYNTHETIC_PAIRS else ""
 
             action_affiche = "🟢 BUY MARKET (ACHAT)" if action_mt4 == "Achat" else "🔴 SELL MARKET (VENTE)"
-            signal = f"""⚡ **SIGNAL MT5 SCALP ELITE 💎** ⚡
+            signal = f"""⚡ **SIGNAL MT5 SNIPER V23 💎** ⚡
 ──────────────────
 🌐 **ACTIF :** {nom_affiche}
 👉 **ORDRE :** {action_affiche}
-🧠 **CONTEXTE :** Tendance M15 = {tendance_m15} {avertissement_tendance}
-🛡️ **STRUCTURE :** Zone d'intervention validée (SMC)
+🧠 **CONTEXTE :** Tendance M15 Validée (Filtre OK)
+🛡️ **STRUCTURE :** SL Structurel + Marge ATR (1.5)
+🎯 **LIQUIDITÉ :** Cible sur Swing Majeur (R:R {ratio_rr:.2f})
 ──────────────────
 💰 **PRIX D'ENTRÉE :** `{current_ask:.5f}`
 🛑 **STOP LOSS (SL) :** `{sl_secu:.5f}`
 ✅ **TAKE PROFIT (TP) :** `{tp_secu:.5f}`
 ──────────────────
-*(Temps de clôture estimé : ~30 à 45 minutes. Ratio 1:2.5).* {avertissement_lot}"""
+*(Objectif MT5 verrouillé).* {avertissement_lot}"""
             try:
                 bot.delete_message(chat_id, msg.message_id)
                 bot.send_message(chat_id, signal, parse_mode="Markdown")
@@ -764,10 +794,9 @@ def override_victoire_manuelle(call):
 @bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
 def horaires_trading(message):
     if not est_autorise(message.chat.id): return
-    texte = """🕒 **HORAIRES DE TIR RESTREINTS (V22.1 DUAL BRAIN)** 🕒
+    texte = """🕒 **HORAIRES DE TIR RESTREINTS (V23.0)** 🕒
     
-🥇 **Matières Premières & Forex :** 
-Lundi au Vendredi, actif dès l'ouverture des bourses de Londres et New York. Verrouillage total le week-end.
+🥇 **Matières Premières & Forex :** Lundi au Vendredi, actif dès l'ouverture des bourses de Londres et New York. Verrouillage total le week-end.
 
 💥 **Indices Volatility & Cryptos :**
 Ouverts 24h/24, 7j/7 sans aucune interruption temporelle."""
@@ -795,7 +824,7 @@ def devises(message):
         InlineKeyboardButton("🛢 PÉTROLE", callback_data="set_USOUSD")
     )
 
-    # NOUVEAU : Ajout conditionnel du Forex et Crypto si Pocket Broker
+    # Ajout conditionnel du Forex et Crypto si Pocket Broker
     if plateforme == "POCKET":
         markup.add(
             InlineKeyboardButton("🪙 BTC/USD", callback_data="set_BTCUSD"), InlineKeyboardButton("🔷 ETH/USD", callback_data="set_ETHUSD"), InlineKeyboardButton("⚡ LTC/USD", callback_data="set_LTCUSD")
@@ -901,5 +930,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestionnaire_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition V22.1 DUAL BRAIN Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition V23.0 SNIPER MT5 Démarrée.", flush=True)
     bot.infinity_polling()
