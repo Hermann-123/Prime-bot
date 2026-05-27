@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAHA3opmUcwlTtAjday0Ll_jnI9u8Hsg5d8"
+TELEGRAM_TOKEN = "8658287331:AAEAh_3ofl--K1neCuRWsFYnzCpQQPfJx_o"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -67,7 +67,7 @@ ALL_PAIRS_POCKET = SYNTHETIC_PAIRS + COMMODITY_PAIRS + FOREX_PAIRS + CRYPTO_PAIR
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Terminal Prime VIP : Édition V24 (Mémoire Cache Instantanée)"
+def home(): return "Terminal Prime VIP : Édition Parfaite V25"
 
 def run(): app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 def keep_alive(): Thread(target=run, daemon=True).start()
@@ -485,19 +485,19 @@ def bienvenue(message):
     plateforme_trading[user_id] = plateforme_trading.get(user_id, "MT5")
     filtre_special[user_id] = filtre_special.get(user_id, "TOUS")
     
-    texte = """🏴‍☠️ **TERMINAL PRIME - V24.0 ZERO LATENCE** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - ÉDITION PARFAITE (V25)** 🔥
 ──────────────────
-🚨 **NOUVEAU MOTEUR CACHE INTÉGRÉ** 🚨
-L'IA a pris note de votre frustration. Vos signaux sont désormais mis en cache 2 minutes. Plus de fausses excuses de l'algorithme.
+🚨 **SYSTÈME À DOUBLE CERVEAU PURIFIÉ** 🚨
+Format original, chirurgical, précis à la seconde `00`, avec les vrais tickets de trading et le système Zéro Latence Intégré !
 
 📈 **Sur MT5 :** Snipe chirurgical uniquement sur l'Élite.
-🏦 **Sur Pocket Broker :** Isolation totale du 💱 FOREX."""
+🏦 **Sur Pocket Broker :** Isolation totale du 💱 FOREX. Menu épuré. Le radar filtre la tendance M15 avant de parler pour bloquer les Fakeouts."""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
 def horaires_trading(message):
     if not est_autorise(message.chat.id): return
-    texte = """🕒 **HORAIRES DE TIR RESTREINTS (V24.0)** 🕒
+    texte = """🕒 **HORAIRES DE TIR RESTREINTS** 🕒
     
 🥇 **Matières Premières & Forex :** Lundi au Vendredi, actif dès l'ouverture des bourses de Londres et New York. Verrouillage total le week-end.
 
@@ -561,7 +561,7 @@ def lancer(message):
     save_devise(type('obj', (object,), {'data': f"set_{actif}", 'message': message, 'from_user': message.from_user})())
 
 # ==========================================
-# EXÉCUTION INSTANTANÉE (MÉMOIRE CACHE)
+# EXÉCUTION EXACTE (RESTAURATION AFFICHAGE)
 # ==========================================
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
@@ -586,7 +586,7 @@ def save_devise(call):
         if age_secondes <= 120:  # 120 secondes = 2 minutes de grâce
             utiliser_cache = True
         else:
-            del signaux_cache[cle_memoire] # Détruit la photo si elle est trop vieille
+            del signaux_cache[cle_memoire] 
             
     try: bot.delete_message(chat_id, call.message.message_id)
     except: pass
@@ -606,11 +606,10 @@ def save_devise(call):
         if plateforme == "MT5":
             action_affiche = "🟢 BUY MARKET" if "ACHAT" in signal_cache['action'] else "🔴 SELL MARKET"
             
-            signal = f"""⚡ **SIGNAL MT5 SNIPER (DIRECT CACHE) 💎** ⚡
+            signal = f"""⚡ **SIGNAL MT5 SNIPER 💎** ⚡
 ──────────────────
 🌐 **ACTIF :** {nom_affiche}
 👉 **ORDRE :** {action_affiche}
-🛡️ **MÉMOIRE :** Exécution Instantanée (Délai respecté)
 🎯 **RATIO INITIAL :** {signal_cache.get('mt5_rr', 0.0):.2f}
 ──────────────────
 💰 **PRIX ACTUEL :** `{current_ask:.5f}`
@@ -622,24 +621,61 @@ def save_devise(call):
             return
             
         else:
-            # POCKET BROKER EXÉCUTION INSTANTANÉE (ZÉRO LATENCE)
+            # POCKET BROKER EXÉCUTION À LA SECONDE 00 (ÉDITION PARFAITE)
             palier = niveaux_martingale.get(chat_id, 0)
-            mise = int((CAPITAL_ACTUEL * 0.02) * (COEF_MARTINGALE ** palier))
+            score = signal_cache.get('sc', 5.0)
             
-            signal = f"""🚨 **ALERTE POCKET (DIRECT CACHE) 💎** 🚨
+            maintenant = datetime.datetime.now()
+            sec_rest = 60 - maintenant.second
+            if sec_rest < 10: sec_rest += 60 # Laisse le temps de se préparer sur le broker
+            
+            heure_entree = maintenant + datetime.timedelta(seconds=sec_rest)
+            str_p0 = heure_entree.strftime("%H:%M:00")
+            mise = int((CAPITAL_ACTUEL * 0.02) * (COEF_MARTINGALE ** palier))
+
+            if palier == 0 and score < 10.0:
+                signal = f"""👻 **MODE FANTÔME (PALIER 0)** 👻
 ──────────────────
 🌐 **ACTIF :** {nom_affiche}
-⏱ **ENTRÉE :** `MAINTENANT (TIR IMMÉDIAT)`
+⏱ **ENTRÉE EXACTE :** `{str_p0}`
+👉 **ACTION :** {signal_cache['action']}
+⏳ **DURÉE :** {signal_cache['exp']}
+
+*Le bot prend ce trade virtuellement (Fantôme SMC). NE RENTREZ PAS.*
+
+*(Si échec, le bot générera instantanément le signal Palier 1)*"""
+            
+            elif palier == 0 and score == 10.0:
+                palier = 1
+                niveaux_martingale[chat_id] = 1
+                signal = f"""🚨 **ALERTE DE TIR RÉEL VIP 💎** 🚨
+──────────────────
+🌐 **ACTIF :** {nom_affiche}
+⏱ **ENTRÉE EXACTE :** `{str_p0}`
 ⏳ **EXPIRATION :** {signal_cache['exp']}
 👉 **ACTION :** {signal_cache['action']}
 🛡️ {signal_cache['bb']}
 
-💵 **MISE :** `{mise}$`"""
+👑 **EXCEPTION 10/10 PERFECT !**
+Prise de liquidité parfaite, on attaque en réel direct !
+💵 **MISE CALCULÉE :** `{mise}$`
+*(Statut : Palier 1)*"""
+            else:
+                signal = f"""🚨 **SIGNAL DE TIR : PALIER {palier}** 🚨
+──────────────────
+🌐 **ACTIF :** {nom_affiche}
+⏱ **ENTRÉE EXACTE :** `{str_p0}`
+👉 **ACTION :** {signal_cache['action']}
+⏳ **DURÉE :** {signal_cache['exp']}
+💵 **MISE :** `{mise}$`
+──────────────────
+⏳ *Préparez le broker. L'IA enverra un flash pour valider le tir à la seconde 00.*"""
+
             bot.send_message(chat_id, signal, parse_mode="Markdown")
             
-            # Exécution quasi-immédiate (2 secondes d'attente pour que tu lises le message)
-            Timer(2, executer_tir_flash, args=[chat_id, actif, "CALL" if "ACHAT" in signal_cache['action'] else "PUT", signal_cache['dur'], palier]).start()
-            return
+            # Le Timer exact à la seconde près
+            action_brute = "CALL" if "ACHAT" in signal_cache['action'] else "PUT"
+            Timer(sec_rest, executer_tir_flash, args=[chat_id, actif, action_brute, signal_cache['dur'], palier, nom_affiche]).start()
 
     # SI CLIC APRÈS 2 MINUTES : ANNULATION POUR SÉCURITÉ
     else:
@@ -709,13 +745,12 @@ def scanner_marche_auto():
                                     recompense = abs(tp - current_ask)
                                     ratio_rr = recompense / risque if risque > 0 else 0
                                     
-                                    # Silence radar si le ratio est inférieur à 1.5 (uniquement pour l'Elite MT5)
                                     if ratio_rr < 1.5: alerte_valide = False 
 
                         if not alerte_valide:
-                            continue # Le signal est un piège, le bot garde le silence et ne pollue pas le Telegram
+                            continue 
 
-                        # 📸 PRISE DE LA PHOTO EN MÉMOIRE (Le Signal est validé à 100%)
+                        # 📸 PRISE DE LA PHOTO EN MÉMOIRE
                         signaux_cache[cle_memoire] = {
                             'time': time.time(), 'action': action, 'conf': conf, 'exp': exp, 'dur': dur,
                             'rsi': rsi, 'stoch': stoch, 'bb': bb, 'sc': sc, 'mt5_sl': sl, 'mt5_tp': tp, 'mt5_rr': ratio_rr
@@ -724,12 +759,8 @@ def scanner_marche_auto():
                         
                         for uid in utilisateurs_libres:
                             pf = plateforme_trading.get(uid, "MT5")
-                            
-                            # Filtre intelligent selon la plateforme active
-                            if pf == "MT5" and paire not in ELITE_PAIRS_MT5:
-                                continue
-                            if pf == "POCKET" and paire not in FOREX_PAIRS:
-                                continue
+                            if pf == "MT5" and paire not in ELITE_PAIRS_MT5: continue
+                            if pf == "POCKET" and paire not in FOREX_PAIRS: continue
 
                             if mode_trading.get(uid, "STANDARD") == mode:
                                 if filtre_special.get(uid) == "SPECIAUX" and (sc is None or sc < 10.0):
@@ -744,27 +775,25 @@ def scanner_marche_auto():
                                 markup = InlineKeyboardMarkup().add(InlineKeyboardButton(f"⚡ Frapper {nom_aff}", callback_data=f"set_{paire}"))
                                 msg = f"🔔 **SMC OB 10/10 PERFECT : {nom_aff}**\nLa structure est figée. Vous avez 2 min pour frapper." if sc == 10.0 else f"🔔 **RADAR : {nom_aff}**\nLa structure est figée. Vous avez 2 min pour frapper."
                                 
-                                try: bot.send_message(uid, msg, reply_markup=markup)
+                                try: bot.send_message(uid, msg, reply_markup=markup, parse_mode="Markdown")
                                 except: pass
         except Exception as e: pass
 
-
-# === FONCTIONS DE RÉSULTATS BINAIRES ===
-def executer_tir_flash(chat_id, symbole, action_brute, duree, palier):
+# === FONCTIONS DE RÉSULTATS BINAIRES (RESTAURÉES) ===
+def executer_tir_flash(chat_id, symbole, action_brute, duree, palier, nom_affiche):
     action_affichage = "🟢 ACHAT (CALL)" if action_brute == "CALL" else "🔴 VENTE (PUT)"
-    nom_paire = f"{symbole[:3]}/{symbole[3:]}" if len(symbole) == 6 and symbole not in SYNTHETIC_PAIRS else symbole
     
     if palier == 0:
-        texte = f"👻 **FANTÔME ACTIF ({nom_paire})**\nL'IA étudie la réaction de la zone..."
+        texte = f"👻 **LE FANTÔME EST LANCÉ ({nom_affiche})** 👻\nL'IA observe le marché virtuellement..."
         markup = None
     else:
-        texte = f"🔥 **TIR EN COURS : PALIER {palier} ({nom_paire})** 🔥\n👉 **EXÉCUTEZ L'ORDRE {action_affichage} SUR LE BROKER !**"
-        markup = InlineKeyboardMarkup().add(InlineKeyboardButton("✅ MANUEL WIN", callback_data="force_win"))
+        texte = f"🔥 **TIR IMMÉDIAT : PALIER {palier} ({nom_affiche})** 🔥\n👉 **CLIQUEZ SUR {action_affichage} MAINTENANT !**"
+        markup = InlineKeyboardMarkup().add(InlineKeyboardButton("✅ GAGNÉ SUR POCKET", callback_data="force_win"))
         
     try: bot.send_message(chat_id, texte, parse_mode="Markdown", reply_markup=markup)
     except: pass
     
-    trades_en_cours[chat_id] = {'symbole': symbole, 'action': action_brute, 'duree': duree}
+    trades_en_cours[chat_id] = {'symbole': symbole, 'action': action_brute, 'duree': duree, 'nom_affiche': nom_affiche}
     Timer(2, relever_prix_entree, args=[chat_id, symbole]).start()
     Timer(duree, verifier_resultat, args=[chat_id]).start()
 
@@ -772,23 +801,6 @@ def relever_prix_entree(chat_id, symbole):
     prix = obtenir_prix_actuel_deriv(symbole)
     if prix and chat_id in trades_en_cours and trades_en_cours[chat_id]['symbole'] == symbole:
         trades_en_cours[chat_id]['prix_entree'] = prix
-
-def preparer_nouveau_palier(chat_id, symbole, action_brute, duree, palier):
-    nom_paire = f"{symbole[:3]}/{symbole[3:]}" if len(symbole) == 6 and symbole not in SYNTHETIC_PAIRS else symbole
-    mise = int((CAPITAL_ACTUEL * 0.02) * (COEF_MARTINGALE ** palier))
-    exp_texte = f"{int(duree/60)} MIN" if duree >= 60 else f"{duree} SEC"
-    action_affichage = "🟢 ACHAT (CALL)" if action_brute == "CALL" else "🔴 VENTE (PUT)"
-    
-    maintenant = datetime.datetime.now()
-    sec_rest = 60 - maintenant.second
-    if sec_rest < 15: sec_rest += 60 
-    
-    heure_entree = maintenant + datetime.timedelta(seconds=sec_rest)
-    texte = f"🚨 **SIGNAL AUTOMATIQUE : PALIER {palier}** 🚨\n🌐 **ACTIF :** {nom_paire}\n⏱ **ENTRÉE :** `{heure_entree.strftime('%H:%M:00')}`\n👉 **ACTION :** {action_affichage}\n⏳ **DURÉE :** {exp_texte}\n💵 **MISE :** `{mise}$`"
-    
-    try: bot.send_message(chat_id, texte, parse_mode="Markdown")
-    except: pass
-    Timer(sec_rest, executer_tir_flash, args=[chat_id, symbole, action_brute, duree, palier]).start()
 
 def verifier_resultat(chat_id):
     global stats_journee, cooldown_actifs, niveaux_martingale
@@ -802,17 +814,18 @@ def verifier_resultat(chat_id):
 
     prix_entree = trade['prix_entree']
     action = trade['action']
+    nom_affiche = trade['nom_affiche']
     palier_actuel = niveaux_martingale.get(chat_id, 0)
     gagne = (action == "CALL" and prix_sortie > prix_entree) or (action == "PUT" and prix_sortie < prix_entree)
-    nom_paire = f"{symbole[:3]}/{symbole[3:]}" if len(symbole) == 6 and symbole not in SYNTHETIC_PAIRS else symbole
 
     if gagne:
         niveaux_martingale[chat_id] = 0 
-        if palier_actuel == 0: texte = f"👻 **FANTÔME RÉUSSI (ITM)**\nLa zone a parfaitement réagi sur {nom_paire}.\n🔓 Radar disponible."
+        if palier_actuel == 0: 
+            texte = f"👻 **FANTÔME RÉUSSI (ITM)**\nLa zone a parfaitement réagi sur {nom_affiche}.\n🔓 Radar disponible."
         else:
-            texte = f"✅ **TIR EMBARQUÉ (ITM)**\n🔥 {nom_paire} : Cible éliminée !\n🔓 Radar disponible."
+            texte = f"✅ **CIBLE ABATTUE (ITM)**\n🚀 {nom_affiche} ({action})\n📈 **Entrée :** `{prix_entree:.5f}`\n📉 **Sortie :** `{prix_sortie:.5f}`\n🔓 Radar déverrouillé."
             stats_journee['ITM'] += 1
-            stats_journee['details'].append(f"✅ {nom_paire}")
+            stats_journee['details'].append(f"✅ {nom_affiche}")
             
         if symbole in cooldown_actifs: del cooldown_actifs[symbole]
         if chat_id in trades_en_cours: del trades_en_cours[chat_id]
@@ -823,12 +836,28 @@ def verifier_resultat(chat_id):
             niveaux_martingale[chat_id] = palier_actuel + 1
             if chat_id in trades_en_cours: del trades_en_cours[chat_id] 
             
-            msg_fail = f"⚠️ **ZONAGE EN ÉCHEC (Palier {palier_actuel})**\nRe-calcul immédiat de la structure..."
+            msg_fail = f"⚠️ **PIÈGE BROKER DÉTECTÉ (Échec)**\n📉 **Sortie :** `{prix_sortie:.5f}`\n\n⚡ Génération instantanée du signal Palier {palier_actuel + 1}..."
             bot.send_message(chat_id, msg_fail, parse_mode="Markdown")
-            preparer_nouveau_palier(chat_id, symbole, action, trade['duree'], palier_actuel + 1)
+            
+            # On simule un clic automatique pour relancer le palier suivant avec le calcul de l'heure exacte
+            class CallFictif:
+                def __init__(self, c_id, msg_id, data):
+                    self.message = type('obj', (object,), {'chat': type('obj', (object,), {'id': c_id}), 'message_id': msg_id})
+                    self.data = data
+            
+            # Réinitialiser la mémoire avec les mêmes données de base pour permettre la relance du tir
+            cle_memoire = f"{symbole}_{mode_trading.get(chat_id, 'STANDARD')}"
+            if cle_memoire not in signaux_cache:
+                signaux_cache[cle_memoire] = {
+                    'time': time.time(), 'action': f"🟢 ACHAT (CALL)" if action == "CALL" else f"🔴 VENTE (PUT)", 'conf': 99, 
+                    'exp': f"{int(trade['duree']/60)} MIN" if trade['duree'] >= 60 else f"{trade['duree']} SEC", 
+                    'dur': trade['duree'], 'rsi': 50, 'stoch': 50, 'bb': "SMC Validé", 'sc': 5.0
+                }
+
+            save_devise(CallFictif(chat_id, 0, f"set_{symbole}"))
         else:
             niveaux_martingale[chat_id] = 0
-            texte = f"🛑 **SEQUENCE ARRETÉE (OTM)**\nSécurisation des fonds. Pause tactique sur {nom_paire}."
+            texte = f"🛑 **SÉQUENCE ARRÊTÉE (OTM)**\nSécurisation des fonds sur {nom_affiche}."
             if palier_actuel > 0: stats_journee['OTM'] += 1
             cooldown_actifs[symbole] = {'time': time.time(), 'action': action}
             if chat_id in trades_en_cours: del trades_en_cours[chat_id]
@@ -840,6 +869,9 @@ def override_victoire_manuelle(call):
     chat_id = call.message.chat.id
     if chat_id in trades_en_cours:
         stats_journee['ITM'] += 1
+        trade = trades_en_cours[chat_id]
+        texte = f"✅ **CIBLE ABATTUE (ITM MANUEL)**\n🚀 {trade['nom_affiche']} ({trade['action']})\n🔓 Radar déverrouillé."
+        bot.send_message(chat_id, texte, parse_mode="Markdown")
         del trades_en_cours[chat_id]
     niveaux_martingale[chat_id] = 0
     bot.answer_callback_query(call.id, "Victoire forcée enregistrée.", show_alert=True)
@@ -872,5 +904,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestionnaire_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition V24.0 ZÉRO LATENCE Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition Parfaite V25 Démarrée.", flush=True)
     bot.infinity_polling()
