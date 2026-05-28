@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAFVNGKNsqNvkeZXvh_DMoWb-MxQpB6tMfk"
+TELEGRAM_TOKEN = "8658287331:AAE5vc-CKwJZf-OsI622FCgBQgh8hEqsnA0"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -67,7 +67,7 @@ ALL_PAIRS_POCKET = SYNTHETIC_PAIRS + COMMODITY_PAIRS + FOREX_PAIRS + CRYPTO_PAIR
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Terminal Prime VIP : Édition Parfaite V25"
+def home(): return "Terminal Prime VIP : Édition Parfaite V25.1"
 
 def run(): app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 def keep_alive(): Thread(target=run, daemon=True).start()
@@ -485,13 +485,13 @@ def bienvenue(message):
     plateforme_trading[user_id] = plateforme_trading.get(user_id, "MT5")
     filtre_special[user_id] = filtre_special.get(user_id, "TOUS")
     
-    texte = """🏴‍☠️ **TERMINAL PRIME - ÉDITION PARFAITE (V25)** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - ÉDITION PARFAITE (V25.1)** 🔥
 ──────────────────
 🚨 **SYSTÈME À DOUBLE CERVEAU PURIFIÉ** 🚨
 Format original, chirurgical, précis à la seconde `00`, avec les vrais tickets de trading et le système Zéro Latence Intégré !
 
 📈 **Sur MT5 :** Snipe chirurgical uniquement sur l'Élite.
-🏦 **Sur Pocket Broker :** Isolation totale du 💱 FOREX. Menu épuré. Le radar filtre la tendance M15 avant de parler pour bloquer les Fakeouts."""
+🏦 **Sur Pocket Broker :** Isolation totale du 💱 FOREX. Menu épuré."""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
@@ -512,40 +512,16 @@ def devises(message):
     markup = InlineKeyboardMarkup(row_width=3)
     
     if plateforme == "MT5":
-        # Menu exclusif MT5 (Élite uniquement)
-        markup.add(
-            InlineKeyboardButton("🔥 V10", callback_data="set_V10"),
-            InlineKeyboardButton("🔥 V25", callback_data="set_V25"),
-            InlineKeyboardButton("🔥 V50", callback_data="set_V50")
-        )
-        markup.add(
-            InlineKeyboardButton("⚡ V75", callback_data="set_V75"),
-            InlineKeyboardButton("💥 V100", callback_data="set_V100")
-        )
-        markup.add(
-            InlineKeyboardButton("🥇 GOLD", callback_data="set_XAUUSD"), 
-            InlineKeyboardButton("🥈 ARGENT", callback_data="set_XAGUSD"),
-            InlineKeyboardButton("🛢 PÉTROLE", callback_data="set_USOUSD")
-        )
+        markup.add(InlineKeyboardButton("🔥 V10", callback_data="set_V10"), InlineKeyboardButton("🔥 V25", callback_data="set_V25"), InlineKeyboardButton("🔥 V50", callback_data="set_V50"))
+        markup.add(InlineKeyboardButton("⚡ V75", callback_data="set_V75"), InlineKeyboardButton("💥 V100", callback_data="set_V100"))
+        markup.add(InlineKeyboardButton("🥇 GOLD", callback_data="set_XAUUSD"), InlineKeyboardButton("🥈 ARGENT", callback_data="set_XAGUSD"), InlineKeyboardButton("🛢 PÉTROLE", callback_data="set_USOUSD"))
         texte_menu = "Sélectionne ta cible (L'Élite réservée à MT5) :"
-    
     else:
-        # Menu exclusif Pocket Broker (Forex uniquement)
-        markup.add(
-            InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD"), InlineKeyboardButton("🇨🇦 CAD/JPY", callback_data="set_CADJPY"), InlineKeyboardButton("🇨🇭 CHF/JPY", callback_data="set_CHFJPY")
-        )
-        markup.add(
-            InlineKeyboardButton("🇪🇺 EUR/JPY", callback_data="set_EURJPY"), InlineKeyboardButton("🇺🇸 USD/CAD", callback_data="set_USDCAD"), InlineKeyboardButton("🇦🇺 AUD/JPY", callback_data="set_AUDJPY")
-        )
-        markup.add(
-            InlineKeyboardButton("🇪🇺 EUR/AUD", callback_data="set_EURAUD"), InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="set_EURUSD"), InlineKeyboardButton("🇦🇺 AUD/CAD", callback_data="set_AUDCAD")
-        )
-        markup.add(
-            InlineKeyboardButton("🇺🇸 USD/CHF", callback_data="set_USDCHF"), InlineKeyboardButton("🇨🇦 CAD/CHF", callback_data="set_CADCHF"), InlineKeyboardButton("🇪🇺 EUR/CHF", callback_data="set_EURCHF")
-        )
-        markup.add(
-            InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY")
-        )
+        markup.add(InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD"), InlineKeyboardButton("🇨🇦 CAD/JPY", callback_data="set_CADJPY"), InlineKeyboardButton("🇨🇭 CHF/JPY", callback_data="set_CHFJPY"))
+        markup.add(InlineKeyboardButton("🇪🇺 EUR/JPY", callback_data="set_EURJPY"), InlineKeyboardButton("🇺🇸 USD/CAD", callback_data="set_USDCAD"), InlineKeyboardButton("🇦🇺 AUD/JPY", callback_data="set_AUDJPY"))
+        markup.add(InlineKeyboardButton("🇪🇺 EUR/AUD", callback_data="set_EURAUD"), InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="set_EURUSD"), InlineKeyboardButton("🇦🇺 AUD/CAD", callback_data="set_AUDCAD"))
+        markup.add(InlineKeyboardButton("🇺🇸 USD/CHF", callback_data="set_USDCHF"), InlineKeyboardButton("🇨🇦 CAD/CHF", callback_data="set_CADCHF"), InlineKeyboardButton("🇪🇺 EUR/CHF", callback_data="set_EURCHF"))
+        markup.add(InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY"))
         texte_menu = "Sélectionne ta cible (Mode Binaire : 100% Forex) :"
 
     bot.send_message(message.chat.id, texte_menu, reply_markup=markup)
@@ -577,7 +553,6 @@ def save_devise(call):
     mode_actuel = mode_trading.get(chat_id, "STANDARD")
     cle_memoire = f"{actif}_{mode_actuel}"
     
-    # 🧠 LECTURE DE LA MÉMOIRE PHOTO (La règle des 2 Minutes)
     signal_cache = signaux_cache.get(cle_memoire)
     utiliser_cache = False
     
@@ -627,7 +602,9 @@ def save_devise(call):
             
             maintenant = datetime.datetime.now()
             sec_rest = 60 - maintenant.second
-            if sec_rest < 10: sec_rest += 60 # Laisse le temps de se préparer sur le broker
+            
+            # CORRECTIF 1 : Ajout strict de 2 minutes (120 secondes) de préparation
+            sec_rest += 120 
             
             heure_entree = maintenant + datetime.timedelta(seconds=sec_rest)
             str_p0 = heure_entree.strftime("%H:%M:00")
@@ -721,7 +698,6 @@ def scanner_marche_auto():
                             if (action_simplifiee == "CALL" and tendance_m15 == "BAISSIERE") or (action_simplifiee == "PUT" and tendance_m15 == "HAUSSIERE"):
                                 alerte_valide = False
                             
-                            # LE SCANNER CALCULE LE RATIO AVANT DE PARLER POUR MT5
                             if alerte_valide and paire in ELITE_PAIRS_MT5:
                                 candles_m5 = obtenir_donnees_deriv(paire, 300)
                                 current_ask = obtenir_prix_actuel_deriv(paire)
@@ -779,7 +755,7 @@ def scanner_marche_auto():
                                 except: pass
         except Exception as e: pass
 
-# === FONCTIONS DE RÉSULTATS BINAIRES (RESTAURÉES) ===
+# === FONCTIONS DE RÉSULTATS BINAIRES ===
 def executer_tir_flash(chat_id, symbole, action_brute, duree, palier, nom_affiche):
     action_affichage = "🟢 ACHAT (CALL)" if action_brute == "CALL" else "🔴 VENTE (PUT)"
     
@@ -839,20 +815,24 @@ def verifier_resultat(chat_id):
             msg_fail = f"⚠️ **PIÈGE BROKER DÉTECTÉ (Échec)**\n📉 **Sortie :** `{prix_sortie:.5f}`\n\n⚡ Génération instantanée du signal Palier {palier_actuel + 1}..."
             bot.send_message(chat_id, msg_fail, parse_mode="Markdown")
             
-            # On simule un clic automatique pour relancer le palier suivant avec le calcul de l'heure exacte
+            # CORRECTIF 2 : FORCER la mise à jour du cache avec l'heure actuelle pour relancer direct le Palier
+            cle_memoire = f"{symbole}_{mode_trading.get(chat_id, 'STANDARD')}"
+            signaux_cache[cle_memoire] = {
+                'time': time.time(), 
+                'action': f"🟢 ACHAT (CALL)" if action == "CALL" else f"🔴 VENTE (PUT)", 
+                'conf': 99, 
+                'exp': f"{int(trade['duree']/60)} MIN" if trade['duree'] >= 60 else f"{trade['duree']} SEC", 
+                'dur': trade['duree'], 
+                'rsi': 50, 
+                'stoch': 50, 
+                'bb': "SMC Validé (Palier Suivant)", 
+                'sc': 5.0
+            }
+
             class CallFictif:
                 def __init__(self, c_id, msg_id, data):
                     self.message = type('obj', (object,), {'chat': type('obj', (object,), {'id': c_id}), 'message_id': msg_id})
                     self.data = data
-            
-            # Réinitialiser la mémoire avec les mêmes données de base pour permettre la relance du tir
-            cle_memoire = f"{symbole}_{mode_trading.get(chat_id, 'STANDARD')}"
-            if cle_memoire not in signaux_cache:
-                signaux_cache[cle_memoire] = {
-                    'time': time.time(), 'action': f"🟢 ACHAT (CALL)" if action == "CALL" else f"🔴 VENTE (PUT)", 'conf': 99, 
-                    'exp': f"{int(trade['duree']/60)} MIN" if trade['duree'] >= 60 else f"{trade['duree']} SEC", 
-                    'dur': trade['duree'], 'rsi': 50, 'stoch': 50, 'bb': "SMC Validé", 'sc': 5.0
-                }
 
             save_devise(CallFictif(chat_id, 0, f"set_{symbole}"))
         else:
@@ -904,5 +884,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestionnaire_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition Parfaite V25 Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition Parfaite V25.1 Démarrée.", flush=True)
     bot.infinity_polling()
