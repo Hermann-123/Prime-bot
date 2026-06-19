@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAE5vc-CKwJZf-OsI622FCgBQgh8hEqsnA0"
+TELEGRAM_TOKEN = "8658287331:AAFkbI8zyntKWoWEiDC_jkT8pTbEhXhrgYo"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -62,12 +62,42 @@ ELITE_PAIRS_MT5 = SYNTHETIC_PAIRS + COMMODITY_PAIRS
 ALL_PAIRS_POCKET = SYNTHETIC_PAIRS + COMMODITY_PAIRS + FOREX_PAIRS + CRYPTO_PAIRS
 
 # ==========================================
-# SERVEUR WEB (KEEP ALIVE RENDER)
+# CERVEAU MULTI-PAIRES (NOUVEAU - V26)
+# ==========================================
+def obtenir_profil_actif(symbole):
+    """Adapte instantanément les réglages du bot selon le type de marché"""
+    if symbole in SYNTHETIC_PAIRS:
+        return {
+            "stoch_achat": 45, "rsi_achat": 40,
+            "stoch_vente": 55, "rsi_vente": 60,
+            "vol_multiplier": 3.0, 
+            "rr_min": 1.5,
+            "nom": "SMC Synthétiques"
+        }
+    elif symbole in COMMODITY_PAIRS:
+        return {
+            "stoch_achat": 40, "rsi_achat": 45,
+            "stoch_vente": 60, "rsi_vente": 55,
+            "vol_multiplier": 2.5,
+            "rr_min": 1.5,
+            "nom": "SMC Métaux/Énergie"
+        }
+    else: # FOREX & CRYPTOS
+        return {
+            "stoch_achat": 35, "rsi_achat": 45,  # Plus exigeant sur l'épuisement Forex
+            "stoch_vente": 65, "rsi_vente": 55,
+            "vol_multiplier": 2.0,               # Plus strict sur les anomalies de volume
+            "rr_min": 1.2,                       # TP légèrement plus réaliste en Forex
+            "nom": "SMC Forex"
+        }
+
+# ==========================================
+# SERVEUR WEB (KEEP ALIVE)
 # ==========================================
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Terminal Prime VIP : Édition Parfaite V25.1"
+def home(): return "Terminal Prime VIP : Édition Parfaite V26 (PRIME)"
 
 def run(): app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 def keep_alive(): Thread(target=run, daemon=True).start()
@@ -298,6 +328,9 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
 
     timeframes = [600, 300, 120] if mode == "STANDARD" else [60]
     
+    # 🧠 Chargement du profil dynamique V26
+    profil = obtenir_profil_actif(symbole)
+    
     for tf in timeframes:
         candles = obtenir_donnees_deriv(symbole, tf)
         if not candles: continue
@@ -314,7 +347,9 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
             
             vol_actuel = df['volume_proxy'].iloc[-1]
             vol_moyen = df['volume_moyen'].iloc[-1]
-            volume_ok = (vol_actuel > vol_moyen) and (vol_actuel < (vol_moyen * 2.5))
+            
+            # Utilisation du multiplicateur de volume dynamique
+            volume_ok = (vol_actuel > vol_moyen) and (vol_actuel < (vol_moyen * profil["vol_multiplier"]))
 
             avg_taille = df['taille_bougie'].iloc[-4:-1].mean()
             avg_corps = df['corps_bougie'].iloc[-4:-1].mean()
@@ -370,20 +405,22 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
                     exp_texte = f"{int(tf/60)} MIN"
                 
                 if structure_haussiere and dans_zone_discount and volume_ok and vrai_corps and not danger_rejet_baisse and not fusee_baissiere:
-                    if (stoch_val < 40) and (rsi_val > 40): 
+                    # Utilisation des seuils de profil
+                    if (stoch_val < profil["stoch_achat"]) and (rsi_val > profil["rsi_achat"]): 
                         action, confiance, score_algo = "🟢 ACHAT (CALL)", 85, 8.0
-                        bb_status = f"🎯 SMC : Order Block (Zone Discount)"
+                        bb_status = f"🎯 {profil['nom']} : Order Block (Zone Discount)"
                     if avalement_haussier or rejet_haussier or harami_bull:
                         action, confiance, score_algo = "🟢 ACHAT (CALL)", 99, 10.0
-                        bb_status = f"👑 SMC ULTIME : Prise de Liquidité Perfect 🚀"
+                        bb_status = f"👑 ULTIME {profil['nom']} : Prise de Liquidité Perfect 🚀"
                         
                 elif structure_baissiere and dans_zone_premium and volume_ok and vrai_corps and not danger_rejet_hausse and not fusee_haussiere:
-                    if (stoch_val > 60) and (rsi_val < 60):
+                    # Utilisation des seuils de profil
+                    if (stoch_val > profil["stoch_vente"]) and (rsi_val < profil["rsi_vente"]):
                         action, confiance, score_algo = "🔴 VENTE (PUT)", 85, 8.0
-                        bb_status = f"🎯 SMC : Order Block (Zone Premium)"
+                        bb_status = f"🎯 {profil['nom']} : Order Block (Zone Premium)"
                     if avalement_baissier or rejet_baissier or harami_bear:
                         action, confiance, score_algo = "🔴 VENTE (PUT)", 99, 10.0
-                        bb_status = f"👑 SMC ULTIME : Prise de Liquidité Perfect ☄️"
+                        bb_status = f"👑 ULTIME {profil['nom']} : Prise de Liquidité Perfect ☄️"
 
             elif mode == "SCALP":
                 indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2.2)
@@ -395,9 +432,9 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
                 
                 if not squeeze and volume_ok and vrai_corps:
                     if (last['low'] <= bb_basse) and rejet_haussier and not danger_rejet_baisse and not fusee_baissiere:
-                        action, confiance, score_algo, bb_status = "🟢 ACHAT (CALL)", 95, 9.5, "🛡️ SMC Scalp : Liquidité Basse"
+                        action, confiance, score_algo, bb_status = "🟢 ACHAT (CALL)", 95, 9.5, f"🛡️ Scalp {profil['nom']} : Liquidité Basse"
                     elif (last['high'] >= bb_haute) and rejet_baissier and not danger_rejet_hausse and not fusee_haussiere:
-                        action, confiance, score_algo, bb_status = "🔴 VENTE (PUT)", 95, 9.5, "🛡️ SMC Scalp : Liquidité Haute"
+                        action, confiance, score_algo, bb_status = "🔴 VENTE (PUT)", 95, 9.5, f"🛡️ Scalp {profil['nom']} : Liquidité Haute"
 
             if action:
                 if not verifier_correlation(symbole, action):
@@ -485,10 +522,10 @@ def bienvenue(message):
     plateforme_trading[user_id] = plateforme_trading.get(user_id, "MT5")
     filtre_special[user_id] = filtre_special.get(user_id, "TOUS")
     
-    texte = """🏴‍☠️ **TERMINAL PRIME - ÉDITION PARFAITE (V25.1)** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - ÉDITION PARFAITE (V26 PRIME)** 🔥
 ──────────────────
-🚨 **SYSTÈME À DOUBLE CERVEAU PURIFIÉ** 🚨
-Format original, chirurgical, précis à la seconde `00`, avec les vrais tickets de trading et le système Zéro Latence Intégré !
+🚨 **SYSTÈME À CERVEAU MULTI-PAIRES** 🚨
+Le bot s'adapte désormais dynamiquement à chaque actif scanné. Finis les faux signaux liés à un marché instable !
 
 📈 **Sur MT5 :** Snipe chirurgical uniquement sur l'Élite.
 🏦 **Sur Pocket Broker :** Isolation totale du 💱 FOREX. Menu épuré."""
@@ -687,6 +724,7 @@ def scanner_marche_auto():
                         action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
                         alerte_valide = True
                         sl, tp, ratio_rr = 0, 0, 0
+                        profil = obtenir_profil_actif(paire)
 
                         # LE SCANNER VÉRIFIE LA TENDANCE LOURDE
                         candles_m15 = obtenir_donnees_deriv(paire, 900)
@@ -721,7 +759,8 @@ def scanner_marche_auto():
                                     recompense = abs(tp - current_ask)
                                     ratio_rr = recompense / risque if risque > 0 else 0
                                     
-                                    if ratio_rr < 1.5: alerte_valide = False 
+                                    # Ratio dynamique basé sur le profil
+                                    if ratio_rr < profil["rr_min"]: alerte_valide = False 
 
                         if not alerte_valide:
                             continue 
@@ -749,7 +788,7 @@ def scanner_marche_auto():
                                 else: nom_aff = f"{paire[:3]}/{paire[3:]}"
                                 
                                 markup = InlineKeyboardMarkup().add(InlineKeyboardButton(f"⚡ Frapper {nom_aff}", callback_data=f"set_{paire}"))
-                                msg = f"🔔 **SMC OB 10/10 PERFECT : {nom_aff}**\nLa structure est figée. Vous avez 2 min pour frapper." if sc == 10.0 else f"🔔 **RADAR : {nom_aff}**\nLa structure est figée. Vous avez 2 min pour frapper."
+                                msg = f"🔔 **{profil['nom']} 10/10 PERFECT : {nom_aff}**\nLa structure est figée. Vous avez 2 min pour frapper." if sc == 10.0 else f"🔔 **RADAR {profil['nom']} : {nom_aff}**\nLa structure est figée. Vous avez 2 min pour frapper."
                                 
                                 try: bot.send_message(uid, msg, reply_markup=markup, parse_mode="Markdown")
                                 except: pass
@@ -884,5 +923,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestionnaire_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition Parfaite V25.1 Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition Parfaite V26 Démarrée.", flush=True)
     bot.infinity_polling()
