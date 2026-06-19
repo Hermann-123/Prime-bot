@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAFkbI8zyntKWoWEiDC_jkT8pTbEhXhrgYo"
+TELEGRAM_TOKEN = "8658287331:AAGundQlUdUOxPcWluWYwh5sIAqN2xB6Fmk"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -62,7 +62,7 @@ ELITE_PAIRS_MT5 = SYNTHETIC_PAIRS + COMMODITY_PAIRS
 ALL_PAIRS_POCKET = SYNTHETIC_PAIRS + COMMODITY_PAIRS + FOREX_PAIRS + CRYPTO_PAIRS
 
 # ==========================================
-# CERVEAU MULTI-PAIRES (NOUVEAU - V26)
+# CERVEAU MULTI-PAIRES (V26)
 # ==========================================
 def obtenir_profil_actif(symbole):
     """Adapte instantanément les réglages du bot selon le type de marché"""
@@ -92,12 +92,12 @@ def obtenir_profil_actif(symbole):
         }
 
 # ==========================================
-# SERVEUR WEB (KEEP ALIVE)
+# SERVEUR WEB (KEEP ALIVE RENDER)
 # ==========================================
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Terminal Prime VIP : Édition Parfaite V26 (PRIME)"
+def home(): return "Terminal Prime VIP : Édition V26.1 (ADAPTATIVE)"
 
 def run(): app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 def keep_alive(): Thread(target=run, daemon=True).start()
@@ -405,7 +405,6 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
                     exp_texte = f"{int(tf/60)} MIN"
                 
                 if structure_haussiere and dans_zone_discount and volume_ok and vrai_corps and not danger_rejet_baisse and not fusee_baissiere:
-                    # Utilisation des seuils de profil
                     if (stoch_val < profil["stoch_achat"]) and (rsi_val > profil["rsi_achat"]): 
                         action, confiance, score_algo = "🟢 ACHAT (CALL)", 85, 8.0
                         bb_status = f"🎯 {profil['nom']} : Order Block (Zone Discount)"
@@ -414,7 +413,6 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
                         bb_status = f"👑 ULTIME {profil['nom']} : Prise de Liquidité Perfect 🚀"
                         
                 elif structure_baissiere and dans_zone_premium and volume_ok and vrai_corps and not danger_rejet_hausse and not fusee_haussiere:
-                    # Utilisation des seuils de profil
                     if (stoch_val > profil["stoch_vente"]) and (rsi_val < profil["rsi_vente"]):
                         action, confiance, score_algo = "🔴 VENTE (PUT)", 85, 8.0
                         bb_status = f"🎯 {profil['nom']} : Order Block (Zone Premium)"
@@ -522,10 +520,10 @@ def bienvenue(message):
     plateforme_trading[user_id] = plateforme_trading.get(user_id, "MT5")
     filtre_special[user_id] = filtre_special.get(user_id, "TOUS")
     
-    texte = """🏴‍☠️ **TERMINAL PRIME - ÉDITION PARFAITE (V26 PRIME)** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - ÉDITION V26.1 (ADAPTATIVE)** 🔥
 ──────────────────
-🚨 **SYSTÈME À CERVEAU MULTI-PAIRES** 🚨
-Le bot s'adapte désormais dynamiquement à chaque actif scanné. Finis les faux signaux liés à un marché instable !
+🚨 **SYSTÈME À CERVEAU MULTI-PAIRES & MARTINGALE ADAPTATIVE** 🚨
+Le bot s'adapte dynamiquement à chaque actif scanné. En cas d'échec d'un signal, il analyse la dernière bougie et pivote automatiquement pour éviter les pièges du broker !
 
 📈 **Sur MT5 :** Snipe chirurgical uniquement sur l'Élite.
 🏦 **Sur Pocket Broker :** Isolation totale du 💱 FOREX. Menu épuré."""
@@ -633,14 +631,13 @@ def save_devise(call):
             return
             
         else:
-            # POCKET BROKER EXÉCUTION À LA SECONDE 00 (ÉDITION PARFAITE)
             palier = niveaux_martingale.get(chat_id, 0)
             score = signal_cache.get('sc', 5.0)
             
             maintenant = datetime.datetime.now()
             sec_rest = 60 - maintenant.second
             
-            # CORRECTIF 1 : Ajout strict de 2 minutes (120 secondes) de préparation
+            # Ajout strict de 2 minutes (120 secondes) de préparation
             sec_rest += 120 
             
             heure_entree = maintenant + datetime.timedelta(seconds=sec_rest)
@@ -847,24 +844,60 @@ def verifier_resultat(chat_id):
         try: bot.send_message(chat_id, texte, parse_mode="Markdown")
         except: pass
     else:
+        # 🚨 LE TRADE EST PERDU : L'IA SCRUTE LA BOUGIE DE PERTE
         if palier_actuel < MAX_MARTINGALE:
             niveaux_martingale[chat_id] = palier_actuel + 1
             if chat_id in trades_en_cours: del trades_en_cours[chat_id] 
             
-            msg_fail = f"⚠️ **PIÈGE BROKER DÉTECTÉ (Échec)**\n📉 **Sortie :** `{prix_sortie:.5f}`\n\n⚡ Génération instantanée du signal Palier {palier_actuel + 1}..."
+            # --- DÉBUT MARTINGALE ADAPTATIVE ---
+            action_martingale = action 
+            commentaire_ia = "🔍 La structure reste valide. On persiste sur notre lancée !"
+            
+            candles_analyse = obtenir_donnees_deriv(symbole, 60) # Scan M1 rapide
+            if candles_analyse:
+                try:
+                    df_a = pd.DataFrame([{'open': float(c['open']), 'close': float(c['close']), 'high': float(c['high']), 'low': float(c['low'])} for c in candles_analyse])
+                    derniere_bougie = df_a.iloc[-1]
+                    corps = abs(derniere_bougie['close'] - derniere_bougie['open'])
+                    taille_totale = derniere_bougie['high'] - derniere_bougie['low']
+                    
+                    # Sécurité division par zéro
+                    if taille_totale > 0:
+                        # Si le premier signal était un CALL (Achat)
+                        if action == "CALL":
+                            # Si la bougie de perte est baissière
+                            if derniere_bougie['close'] < derniere_bougie['open']:
+                                if corps > (taille_totale * 0.7): # Plus de 70% de corps rouge = force vendeuse brute
+                                    action_martingale = "PUT"
+                                    commentaire_ia = "🔄 **RETOURNEMENT SCELLÉ (Breaker Block)** : Le marché a cassé le support. On pivote à la VENTE (PUT) pour le Palier !"
+                        
+                        # Si le premier signal était un PUT (Vente)
+                        elif action == "PUT":
+                            # Si la bougie de perte est haussière
+                            if derniere_bougie['close'] > derniere_bougie['open']:
+                                if corps > (taille_totale * 0.7):
+                                    action_martingale = "CALL"
+                                    commentaire_ia = "🔄 **RETOURNEMENT SCELLÉ (Breaker Block)** : La résistance a volé en éclats. On pivote à l'ACHAT (CALL) pour le Palier !"
+                except Exception as e: 
+                    pass
+            # --- FIN MARTINGALE ADAPTATIVE ---
+
+            msg_fail = f"⚠️ **PIÈGE BROKER DÉTECTÉ (Palier {palier_actuel} OTM)**\n📉 **Sortie :** `{prix_sortie:.5f}`\n\n🧠 **ANALYSE DE RECOUVREMENT :**\n{commentaire_ia}\n\n⚡ Génération du signal Palier {palier_actuel + 1}..."
             bot.send_message(chat_id, msg_fail, parse_mode="Markdown")
             
-            # CORRECTIF 2 : FORCER la mise à jour du cache avec l'heure actuelle pour relancer direct le Palier
+            # Mise à jour du cache avec l'action décidée par l'IA
             cle_memoire = f"{symbole}_{mode_trading.get(chat_id, 'STANDARD')}"
+            action_texte_final = "🟢 ACHAT (CALL)" if action_martingale == "CALL" else "🔴 VENTE (PUT)"
+            
             signaux_cache[cle_memoire] = {
                 'time': time.time(), 
-                'action': f"🟢 ACHAT (CALL)" if action == "CALL" else f"🔴 VENTE (PUT)", 
+                'action': action_texte_final, 
                 'conf': 99, 
                 'exp': f"{int(trade['duree']/60)} MIN" if trade['duree'] >= 60 else f"{trade['duree']} SEC", 
                 'dur': trade['duree'], 
                 'rsi': 50, 
                 'stoch': 50, 
-                'bb': "SMC Validé (Palier Suivant)", 
+                'bb': "Martingale Dynamique Algorithmique", 
                 'sc': 5.0
             }
 
@@ -923,5 +956,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestionnaire_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition Parfaite V26 Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition Parfaite V26.1 (ADAPTATIVE) Démarrée.", flush=True)
     bot.infinity_polling()
