@@ -18,7 +18,7 @@ from threading import Thread, Timer, Lock
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAEqVwR0R1npzm5BWo6cAhF7T1ey1W0uppA"
+TELEGRAM_TOKEN = "8658287331:8658287331:AAGKQo89v0zIWFjHcPg97IK3bkKoY_LvzcA"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964
@@ -48,7 +48,7 @@ cooldown_actifs = {}
 niveaux_martingale = {}
 historique_signaux = {}  
 
-# 🆕 VARIABLES D'ÉTAT V28 POUR L'OR (AHMAD FX)
+# VARIABLES D'ÉTAT V28 POUR L'OR (AHMAD FX)
 gold_trades_actifs = {}
 niveaux_re_entry_gold = {}
 
@@ -238,7 +238,6 @@ def prefixer_symbole(symbole_brut):
     return f"frx{symbole_brut}"
 
 def executer_requete_deriv(req):
-    """Gère un canal WebSocket persistant pour éliminer le spam de connexions/déconnexions."""
     global _ws_deriv
     with ws_lock:
         for _ in range(3):
@@ -411,10 +410,15 @@ def vision_marche(message):
         return bot.send_message(message.chat.id, "⚠️ Précise l'actif (ex: EURUSD, XAUUSD, V75).")
     symbole = commande[1].upper()
     plateforme = plateforme_trading.get(message.chat.id, "MT5")
+    
+    # Sécurisation des accès par plateforme
     if plateforme == "MT5" and symbole not in ELITE_PAIRS_MT5:
         return bot.send_message(message.chat.id, "❌ En mode MT5, analyse restreinte aux Élite.")
+    if plateforme == "POCKET" and symbole not in FOREX_PAIRS:
+        return bot.send_message(message.chat.id, "❌ En mode POCKET, analyse restreinte au Forex.")
     if symbole not in ALL_PAIRS_POCKET:
         return bot.send_message(message.chat.id, "❌ Symbole non reconnu.")
+        
     try:
         msg = bot.send_message(message.chat.id, f"🔍 *Analyse Rayons X SMC V28...*", parse_mode="Markdown")
     except: return
@@ -566,7 +570,6 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
 
                 if structure_haussiere and dans_zone_discount and volume_ok and vrai_corps \
                         and not danger_rejet_baisse and not fusee_baissiere and macd_diff_val > 0:
-                    # 📌 Correction V28 : Ajustement des seuils pour plus d'opportunités
                     if (stoch_val < (profil["stoch_achat"] + 10)) and (rsi_val < 50):
                         action, confiance, score_algo = "🟢 ACHAT (CALL)", 80, 7.0
                         bb_status = f"🎯 {profil['nom']} : Zone d'intérêt"
@@ -576,7 +579,6 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
 
                 elif structure_baissiere and dans_zone_premium and volume_ok and vrai_corps \
                         and not danger_rejet_hausse and not fusee_haussiere and macd_diff_val < 0:
-                    # 📌 Correction V28 : Ajustement des seuils pour plus d'opportunités
                     if (stoch_val > (profil["stoch_vente"] - 10)) and (rsi_val > 50):
                         action, confiance, score_algo = "🔴 VENTE (PUT)", 80, 7.0
                         bb_status = f"🎯 {profil['nom']} : Zone d'intérêt"
@@ -691,15 +693,14 @@ def bienvenue(message):
     mode_trading[user_id] = mode_trading.get(user_id, "STANDARD")
     plateforme_trading[user_id] = plateforme_trading.get(user_id, "MT5")
     filtre_special[user_id] = filtre_special.get(user_id, "TOUS")
-    texte = """🏴‍☠️ **TERMINAL PRIME - ÉDITION V28 (AHMAD FX & GOLD SNIPER)** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - ÉDITION V28.1 (SMC FOREX + GOLD SNIPER)** 🔥
 ──────────────────
 🚨 **MOTEUR HYBRIDE INTÉGRÉ : SMC V27 + SNIPER GOLD V28** 🚨
 
-✅ Module Exclusif GOLD Sniper (Méthode Ahmad FX)
-✅ Thread de surveillance autonome GOLD (Scan toutes les 15s)
-✅ Sécurisation automatique au Breakeven (BE à 50% du TP1)
-✅ Gestion automatique des Re-entries de R1 à R4 (+50% mise)
-✅ SMC V27 intact pour les autres paires (V75, Forex, etc.)
+✅ Gestion stricte MT5 (Or/Élite) vs POCKET (Forex).
+✅ Module Exclusif GOLD Sniper (Méthode Ahmad FX).
+✅ SMC V27 libéré pour le Forex sans blocage excessif.
+✅ Gestion automatique des Re-entries de R1 à R4 (+50% mise).
 
 👉 Performance d'élite activée."""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
@@ -1061,7 +1062,7 @@ def save_devise(call):
         ]).start()
 
 # ==========================================
-# SCANNER AUTOMATIQUE INTÉGRAL V28
+# SCANNER AUTOMATIQUE INTÉGRAL V28.1
 # ==========================================
 
 def scanner_marche_auto():
@@ -1116,6 +1117,10 @@ def scanner_marche_auto():
                         derniere_alerte_auto[cle_memoire] = time.time()
 
                         for uid in utilisateurs_libres:
+                            # 🛑 CORRECTION ICI : L'or n'est envoyé qu'aux utilisateurs en mode MT5
+                            pf = plateforme_trading.get(uid, "MT5")
+                            if pf != "MT5": continue 
+                            
                             markup = InlineKeyboardMarkup().add(InlineKeyboardButton("⚡ Frapper GOLD", callback_data="set_XAUUSD"))
                             msg = f"🔔 **GOLD SNIPER V28 : XAUUSD**\n🏆 Stratégie Ahmad FX détectée !\n🎯 TP1: {tp1:.2f} | TP2: {tp2:.2f} | SL: {sl:.2f}\nAction requise dans les 90s."
                             try: bot.send_message(uid, msg, reply_markup=markup, parse_mode="Markdown")
@@ -1123,7 +1128,7 @@ def scanner_marche_auto():
                     except: pass
                     continue
 
-                # 🌐 ALGORITHME SMC V27 INITIAL POUR TOUS LES AUTRES ACTIFS
+                # 🌐 ALGORITHME SMC V27 INITIAL POUR TOUS LES AUTRES ACTIFS (DONT FOREX)
                 for mode in ["STANDARD", "SCALP"]:
                     delai_repos = 300 if mode == "STANDARD" else 120
                     cle_memoire = f"{paire}_{mode}"
@@ -1133,8 +1138,8 @@ def scanner_marche_auto():
                     action, conf, exp, dur, rsi, stoch, bb, sc = analyser_binaire_pro(paire, mode)
 
                     if action and "⚠️" not in action:
-                        # 📌 Correction V28 : Abaissement du filtre à 8.5 en HORS_SESSION pour débloquer le flux de tir
-                        if statut == "HORS_SESSION" and (sc is None or sc < 8.5): continue
+                        # 📌 CORRECTION V28.1 : Baisse du score de 8.5 à 7.0 pour débloquer le flux de tir du Forex
+                        if statut == "HORS_SESSION" and (sc is None or sc < 7.0): continue
 
                         action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
                         alerte_valide = True
@@ -1190,6 +1195,7 @@ def scanner_marche_auto():
                         derniere_alerte_auto[cle_memoire] = time.time()
 
                         for uid in utilisateurs_libres:
+                            # 🛑 CORRECTION ICI : Assurer le routage correct selon la plateforme sélectionnée
                             pf = plateforme_trading.get(uid, "MT5")
                             if pf == "MT5" and paire not in ELITE_PAIRS_MT5: continue
                             if pf == "POCKET" and paire not in FOREX_PAIRS: continue
@@ -1381,5 +1387,5 @@ if __name__ == "__main__":
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestionnaire_bilan, daemon=True).start()
     Thread(target=surveiller_trades_gold, daemon=True).start()  
-    print("⬛ TERMINAL PRIME V28 (AHMAD FX & GOLD SNIPER) : Démarré.", flush=True)
+    print("⬛ TERMINAL PRIME V28.1 (SMC FOREX + GOLD SNIPER) : Démarré.", flush=True)
     bot.infinity_polling()
