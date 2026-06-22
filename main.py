@@ -4,6 +4,7 @@ import random
 import time
 import string
 import json
+import math
 import websocket
 import pandas as pd
 import ta
@@ -17,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAEcw9sKJ9yqurzvi5VzCB76sEKw2xjaqxM"
+TELEGRAM_TOKEN = "8658287331:AAGWGSnc4ExpiiK1Vvdt2Xcb0O-0013GuCg"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 ADMIN_ID = 5968288964
 CAPITAL_ACTUEL = 40650
@@ -151,9 +152,7 @@ def est_symbole_autorise(symbole):
     return "BLOCAGE_TOTAL", "Erreur heure"
 
 # ==========================================
-# WEBSOCKET — UNE CONNEXION PAR APPEL (FIABLE)
-# ✅ FIX BUG 7&8 : Suppression du Lock et WS global
-# Chaque appel ouvre sa propre connexion WS → pas de deadlock
+# WEBSOCKET
 # ==========================================
 
 def prefixer_symbole(s):
@@ -274,12 +273,6 @@ def verifier_correlation(symbole, action):
 
 # ==========================================
 # MOTEUR D'ANALYSE PRINCIPAL V29
-# ✅ TOUS LES BUGS CORRIGÉS :
-#    - Profil Forex réaliste
-#    - MTF non-bloquant sur Forex
-#    - Anti-Chaos = continue (pas return)
-#    - Cooldown dynamique par profil
-#    - Timeframes Forex = M5+M2
 # ==========================================
 
 def analyser_binaire_pro(symbole, mode="STANDARD"):
@@ -301,7 +294,6 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
             rsi9  = ta.momentum.RSIIndicator(close=df['close'], window=9).rsi()
             macd  = ta.trend.MACD(close=df['close']).macd_diff()
 
-            # Mèche longue M5 sur Gold
             last = df.iloc[-1]
             corps = abs(last['close']-last['open'])
             taille = last['high']-last['low']
@@ -313,7 +305,6 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
             bull = (ema8.iloc[-1]>ema21.iloc[-1]) and (rsi9.iloc[-1]>50) and (macd.iloc[-1]>0)
             bear = (ema8.iloc[-1]<ema21.iloc[-1]) and (rsi9.iloc[-1]<50) and (macd.iloc[-1]<0)
 
-            # Bonus mèche
             if rejet_bas:  bull = True
             if rejet_haut: bear = True
 
@@ -331,7 +322,6 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
     # ── SMC V29 FOREX & SYNTHÉTIQUES ─────────────────────────────────────
     profil = obtenir_profil_actif(symbole)
 
-    # ✅ FIX BUG3 : Timeframes adaptés selon le type de marché
     if symbole in FOREX_PAIRS or symbole in CRYPTO_PAIRS:
         timeframes = [300, 120] if mode == "STANDARD" else [60]
     else:
@@ -350,31 +340,28 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
             df['vol']      = df['taille']
             df['vol_moy']  = df['vol'].rolling(14).mean()
 
-            # ATR filter
             atr    = ta.volatility.AverageTrueRange(high=df['high'],low=df['low'],close=df['close'],window=14).average_true_range()
             atr_v  = atr.iloc[-1]
             atr_m  = atr.iloc[-20:].mean()
             if atr_v < atr_m*0.5: continue
-            if atr_v > atr_m*3.0: continue  # ✅ FIX BUG6 : continue au lieu de return
+            if atr_v > atr_m*3.0: continue
 
             vol_ok = df['vol'].iloc[-1] > df['vol_moy'].iloc[-1] and \
                      df['vol'].iloc[-1] < df['vol_moy'].iloc[-1]*profil["vol_multiplier"]
 
-            # ✅ FIX BUG6 : continue au lieu de return
             avg_t = df['taille'].iloc[-4:-1].mean()
             avg_c = df['corps'].iloc[-4:-1].mean()
             if avg_c>0 and avg_t>avg_c*3.5: continue
 
-            # Indicateurs
             df['rsi']    = ta.momentum.RSIIndicator(close=df['close'],window=14).rsi()
             df['stoch']  = ta.momentum.StochasticOscillator(high=df['high'],low=df['low'],close=df['close']).stoch()
-            df['macd_d'] = ta.trend.MACD(close=df['close']).macd_diff()
+            df['macd_d']  = ta.trend.MACD(close=df['close']).macd_diff()
 
             last,prev,p2 = df.iloc[-1],df.iloc[-2],df.iloc[-3]
             px    = last['close']
             rsi_v = round(last['rsi'],1)
             st_v  = round(last['stoch'],1)
-            macd_v= last['macd_d']
+            macd_v= last['macdd']
 
             action,conf,bb,score = None,0,"En attente",5.0
 
@@ -408,12 +395,17 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
             discount = px < px_moy
             premium  = px > px_moy
 
-            if mode=="STANDARD":
-                duree = 180 if tf==300 else tf
-                exp   = "3 MIN ⚡" if tf==300 else f"{int(tf/60)} MIN"
+            # ✅ GESTION COMPLÈTE DES DÉLAIS ET EXPIRATIONS (Évite les variables manquantes)
+            duree = 180 if tf == 300 else tf
+            if tf == 300:
+                exp = "3 MIN ⚡"
+            elif tf in [60, 120, 600]:
+                exp = f"{int(tf/60)} MIN"
+            else:
+                exp = f"{int(duree/60)} MIN"
 
+            if mode=="STANDARD":
                 # ── Signal ACHAT ──
-                # ✅ FIX BUG1 : utilise profil["rsi_achat"] et profil["stoch_achat"]
                 if struct_h and discount and vol_ok and vrai_corps \
                         and not danger_h and not fusee_b and macd_v>0:
                     if st_v < profil["stoch_achat"] and rsi_v < profil["rsi_achat"]:
@@ -449,13 +441,11 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
                         bb = f"🛡️ Scalp {profil['nom']} : BB Haut"
 
             if action:
-                # Divergence RSI bonus
                 div_ok,div_msg = detecter_divergence(df,action)
                 if div_ok:
                     score = min(score+1.5,10.0)
                     bb += f"\n{div_msg}"
 
-                # ✅ FIX BUG3 : MTF seulement sur Synthétiques/Commodités, PAS Forex
                 if symbole in SYNTHETIC_PAIRS:
                     candles_m5 = obtenir_donnees_deriv(symbole,300)
                     if candles_m5:
@@ -467,16 +457,13 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
                             if act_s=="PUT"  and macd5>0: return "⚠️ MTF Synth divergent.",None,None,None,None,None,None,None
                         except: pass
 
-                # Qualité historique
                 act_s = "CALL" if "ACHAT" in action else "PUT"
                 ok,msg = obtenir_qualite_paire(symbole,act_s)
                 if not ok: return f"⚠️ {msg}",None,None,None,None,None,None,None
 
-                # Corrélation
                 if not verifier_correlation(symbole,action):
                     return "⚠️ Corrélation adverse.",None,None,None,None,None,None,None
 
-                # ✅ FIX BUG5 : Cooldown dynamique par profil
                 cd = profil.get("cooldown_otm",600)
                 if symbole in cooldown_actifs and time.time()-cooldown_actifs[symbole]['time']<cd:
                     if act_s==cooldown_actifs[symbole]['action']:
@@ -654,7 +641,6 @@ def save_devise(call):
     delai,heure = calculer_entree_precise(cache.get('dur',60))
     px = obtenir_prix_actuel_deriv(actif) or 0.0
 
-    # ── GOLD : Affichage avec SL/TP1/TP2 ─────────────────────────────────
     if actif=="XAUUSD":
         dir_aff = "🟢 BUY" if "ACHAT" in cache['action'] else "🔴 SELL"
         sl  = cache.get('mt5_sl',0.0)
@@ -680,7 +666,6 @@ def save_devise(call):
         trades_en_cours[uid] = {'symbole':'XAUUSD','action':cache['action'],'duree':300,'nom_affiche':nom}
         return
 
-    # ── MT5 autres actifs ────────────────────────────────────────────────
     if pf=="MT5":
         dir_aff = "🟢 BUY" if "ACHAT" in cache['action'] else "🔴 SELL"
         bot.send_message(uid,f"""⚡ **SIGNAL MT5 SNIPER V29 💎**
@@ -695,7 +680,6 @@ def save_devise(call):
 ⚠️ Lot 0.001 pour indices""",parse_mode="Markdown")
         return
 
-    # ── POCKET BROKER ────────────────────────────────────────────────────
     palier = niveaux_martingale.get(uid,0)
     score  = cache.get('sc',5.0)
     mise   = int((CAPITAL_ACTUEL*0.02)*(COEF_MARTINGALE**palier))
@@ -747,7 +731,6 @@ def scanner_marche_auto():
                 statut,_ = est_symbole_autorise(paire)
                 if statut=="BLOCAGE_TOTAL": continue
 
-                # ── GOLD : traitement spécial ─────────────────────────────
                 if paire=="XAUUSD":
                     cle = "XAUUSD_STANDARD"
                     if cle in derniere_alerte_auto and time.time()-derniere_alerte_auto[cle]<300: continue
@@ -779,7 +762,6 @@ def scanner_marche_auto():
                             except: pass
                     continue
 
-                # ── TOUS LES AUTRES ACTIFS ───────────────────────────────
                 for mode in ["STANDARD","SCALP"]:
                     repos = 300 if mode=="STANDARD" else 120
                     cle = f"{paire}_{mode}"
@@ -794,7 +776,6 @@ def scanner_marche_auto():
                     sl=tp=rr=0
                     profil = obtenir_profil_actif(paire)
 
-                    # Filtre tendance M15
                     c15 = obtenir_donnees_deriv(paire,900)
                     if c15:
                         try:
@@ -804,13 +785,11 @@ def scanner_marche_auto():
                             tx  = "H" if d15['close'].iloc[-1]>e50.iloc[-1] else "B"
                             if act_s=="CALL" and tx=="B": valide=False
                             if act_s=="PUT"  and tx=="H": valide=False
-                            # ✅ FIX BUG4 : EMA alignée SEULEMENT pour MT5 Elite
                             if valide and paire in ELITE_PAIRS_MT5:
                                 ema_ok = e20.iloc[-1]>e50.iloc[-1] if tx=="H" else e20.iloc[-1]<e50.iloc[-1]
                                 if not ema_ok: valide=False
                         except: pass
 
-                    # SL/TP pour MT5 Elite
                     if valide and paire in ELITE_PAIRS_MT5:
                         c5 = obtenir_donnees_deriv(paire,300)
                         px = obtenir_prix_actuel_deriv(paire)
@@ -882,7 +861,7 @@ def relever_entree(uid,sym):
         trades_en_cours[uid]['prix_entree'] = px
 
 def verifier_resultat(uid):
-    global stats_journee,cooldown_actifs,niveaux_martingale
+    global stats_journee, cooldown_actifs, niveaux_martingale
     time.sleep(3)
     trade = trades_en_cours.get(uid)
     if not trade or not trade.get('prix_entree'): return
@@ -920,7 +899,13 @@ def verifier_resultat(uid):
                         elif act=="PUT" and der['close']>der['open'] and corps>tot*0.75 and fd>=2 and corps>cm*1.2:
                             act_m="CALL"; commentaire="🔄 **BREAKER BLOCK** — Pivot CALL"
                 except: pass
-            bot.send_message(uid,f"⚠️ **OTM Palier {palier}**\n{commentaire}\n⚡ Palier {palier+1} en cours...",parse_mode="Markdown")
+            
+            # ✅ Sécurité try/except pour éviter tout crash de messagerie sur OTM
+            try:
+                bot.send_message(uid,f"⚠️ **OTM Palier {palier}**\n{commentaire}\n⚡ Palier {palier+1} en cours...",parse_mode="Markdown")
+            except: 
+                pass
+                
             cle=f"{sym}_{mode_trading.get(uid,'STANDARD')}"
             signaux_cache[cle]={'time':time.time(),'action':"🟢 ACHAT (CALL)" if act_m=="CALL" else "🔴 VENTE (PUT)",
                 'conf':99,'exp':f"{trade['duree']//60} MIN",'dur':trade['duree'],'rsi':50,'stoch':50,
