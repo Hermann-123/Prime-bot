@@ -10,7 +10,6 @@ import pandas as pd
 import ta
 import requests
 import telebot
-import MetaTrader5 as mt5  # 🚀 Nouveau : Intégration MetaTrader 5 Négociation directe
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from flask import Flask
 from threading import Thread, Timer
@@ -28,18 +27,6 @@ FMP_API_KEY = os.environ.get("FMP_API_KEY", "D0srw6sB3otYTc00UdBE9otPIbhkKV8X")
 
 COEF_MARTINGALE = 2.5
 MAX_MARTINGALE = 3
-
-# 🚀 CONFIGURATION DU COMPTE METATRADER 5
-MT5_LOGIN = int(os.environ.get("MT5_LOGIN", 41080337))      # Mets ton identifiant MT5 ici
-MT5_PASSWORD = os.environ.get("MT5_PASSWORD", "Hermann-2006") # Mets ton mot de passe ici
-MT5_SERVER = os.environ.get("MT5_SERVER", "Deriv-Demo")      # Serveur de ton courtier
-
-# Dictionnaire de traduction des symboles pour l'environnement MT5
-MT5_SYMBOL_MAP = {
-    "XAUUSD": "XAUUSD",
-    "XAGUSD": "XAGUSD",
-    "USOUSD": "USOUSD"
-}
 
 # ==========================================
 # VARIABLES D'ÉTAT ET ROUTAGE
@@ -72,81 +59,6 @@ FOREX_PAIRS = [
 
 ELITE_PAIRS_MT5 = SYNTHETIC_PAIRS + COMMODITY_PAIRS
 ALL_PAIRS_POCKET = SYNTHETIC_PAIRS + COMMODITY_PAIRS + FOREX_PAIRS + CRYPTO_PAIRS
-
-# ==========================================
-# MOTEUR DE CONNEXION ET TOURNAGE MT5 AUTOMATIQUE
-# ==========================================
-
-def connecter_mt5():
-    """Initialise et connecte le script au terminal MT5 actif."""
-    if not mt5.initialize():
-        print("❌ Échec d'initialisation de l'API MetaTrader5", flush=True)
-        return False
-    
-    # Tentative de connexion au compte de trading
-    connecte = mt5.login(login=MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER)
-    if not connecte:
-        print(f"❌ Échec d'authentification MT5 sur le compte {MT5_LOGIN}", flush=True)
-        return False
-    return True
-
-def executer_ordre_automatique_mt5(symbole_interne, action_simple, lot_total, sl, tp1, tp2):
-    """Calcule, fractionne et pousse les ordres en temps réel sur MT5."""
-    if not connecter_mt5():
-        return "❌ Connexion MT5 Impossible"
-
-    symbole_broker = MT5_SYMBOL_MAP.get(symbole_interne, symbole_interne)
-    
-    # Activer le symbole dans le Market Watch s'il ne l'est pas
-    mt5.symbol_select(symbole_broker, True)
-    
-    tick = mt5.symbol_info_tick(symbole_broker)
-    if not tick:
-        return f"❌ Données de prix indisponibles pour {symbole_broker}"
-
-    # Détermination du prix d'entrée en fonction du type d'ordre
-    if action_simple == "CALL":
-        type_ordre = mt5.ORDER_TYPE_BUY
-        prix_entree = tick.ask
-    else:
-        type_ordre = mt5.ORDER_TYPE_SELL
-        prix_entree = tick.bid
-
-    # Séparation institutionnelle du risque : On divise le lot en 2 pour TP1 et TP2
-    lot_unitaire = round(lot_total / 2, 3)
-    cibles_tp = [tp1, tp2]
-
-    # Sécurité tailles de lots minimales de courtier
-    if lot_unitaire < 0.01:
-        lot_unitaire = lot_total
-        cibles_tp = [tp2]  # On garde uniquement le target final si non fractionnable
-
-    comptes_rendus = []
-
-    for indice, valeur_tp in enumerate(cibles_tp):
-        requete_ordre = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": symbole_broker,
-            "volume": float(lot_unitaire),
-            "type": type_ordre,
-            "price": float(prix_entree),
-            "sl": float(sl),
-            "tp": float(valeur_tp),
-            "deviation": 15,
-            "magic": 202630,  # Signature algorithmique unique du bot
-            "comment": f"Prime V30 - Pos {indice+1}",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
-        }
-
-        resultat_execution = mt5.order_send(requete_ordre)
-        
-        if resultat_execution.retcode != mt5.TRADE_RETCODE_DONE:
-            comptes_rendus.append(f"❌ TP{indice+1} Rejeté (Code: {resultat_execution.retcode})")
-        else:
-            comptes_rendus.append(f"✅ Position {indice+1} Ouverte")
-
-    return " | ".join(comptes_rendus)
 
 # ==========================================
 # PROFILS DYNAMIQUES V27 (AFFINÉS)
@@ -183,7 +95,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition V30 (MT5 AUTO-EXECUTION)"
+    return "Terminal Prime VIP : Édition V29 (MT5 PRO & POCKET FIXED)"
 
 def run():
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
@@ -254,9 +166,9 @@ def est_symbole_autorise(symbole):
     if symbole in SYNTHETIC_PAIRS:
         return "AUTORISE", ""
     now = datetime.datetime.utcnow()
-    the_day = now.weekday()
+    jour = now.weekday()
     heure_dec = now.hour + (now.minute / 60.0)
-    est_week_end = (the_day == 4 and heure_dec >= 21.0) or (the_day == 5) or (the_day == 6 and heure_dec < 21.0)
+    est_week_end = (jour == 4 and heure_dec >= 21.0) or (jour == 5) or (jour == 6 and heure_dec < 21.0)
     if est_week_end:
         if symbole in CRYPTO_PAIRS: return "AUTORISE", ""
         else: return "BLOCAGE_TOTAL", "🔒 **ACCÈS REFUSÉ** : Marchés fermés le week-end."
@@ -362,7 +274,7 @@ def obtenir_prix_actuel_deriv(symbole_brut):
     return None
 
 # ==========================================
-# ANALYSE ET CONFIRMATION D'ALIGNEMENT MARKET
+# CONFIRMATION MULTI-TIMEFRAME (MTF) & OUTILS SMC
 # ==========================================
 
 def confirmation_mtf(symbole, action_visee):
@@ -460,7 +372,7 @@ def verifier_correlation(symbole_base, action_visee):
     except: return True
 
 # ==========================================
-# COMMANDES INTERACTIVES TELEGRAM
+# COMMANDES INTERACTIVES
 # ==========================================
 
 @bot.message_handler(commands=['vision'])
@@ -507,7 +419,7 @@ def vision_marche(message):
     except: bot.edit_message_text("❌ Erreur d'analyse.", message.chat.id, msg.message_id)
 
 # ==========================================
-# MOTEUR DE DÉCISION (SMC / STRATÉGIE QUANT)
+# MOTEUR DE DÉCISION
 # ==========================================
 
 def analyser_binaire_pro(symbole, mode="STANDARD"):
@@ -623,7 +535,7 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
     return f"⚠️ En attente d'une opportunité ({mode}).", None, None, None, None, None, None, None
 
 # ==========================================
-# INTERFACE BOT ET MENUS DÉROULANTS
+# GESTION INTERFACE TELEGRAM
 # ==========================================
 
 def obtenir_clavier(user_id):
@@ -667,7 +579,7 @@ def toggle_plateforme(message):
     if user_id in trades_en_cours: return bot.send_message(user_id, "⚠️ Terminez le trade en cours.")
     if plateforme_trading.get(user_id, "MT5") == "POCKET":
         plateforme_trading[user_id] = "MT5"
-        bot.send_message(user_id, "📈 **MODE MT5 V30 ACTIVÉ**\nÉlite, SL/TP SMC, Exécution automatique.", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
+        bot.send_message(user_id, "📈 **MODE MT5 V29 ACTIVÉ**\nÉlite et SL/TP Dynamiques SMC.", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
     else:
         plateforme_trading[user_id] = "POCKET"
         bot.send_message(user_id, "🏦 **MODE POCKET ACTIVÉ**\n100% Forex Binaire.", reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
@@ -681,21 +593,23 @@ def bienvenue(message):
     mode_trading[user_id] = mode_trading.get(user_id, "STANDARD")
     plateforme_trading[user_id] = plateforme_trading.get(user_id, "MT5")
     filtre_special[user_id] = filtre_special.get(user_id, "TOUS")
-    texte = """🏴‍☠️ **TERMINAL PRIME - VERSION 30 AUTOMATIQUE** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - ÉDITION V29 (MT5 SMC PRO)** 🔥
 ──────────────────
-🚨 **SYSTÈME INTÉGRÉ MT5 DIRECT** 🚨
+🚨 **MOTEUR SMC UPGRADE GLOBAL** 🚨
 
-📈 **MODE MT5 EXECUTION :**
-✅ Robot connecté par API au terminal
-✅ Division de lot intelligente (Multi-TP1 & TP2)
-✅ Protection Anti-Slippage (IOC Order Filling)
-✅ Calculateur de volume automatique par classe d'actifs
+📈 **MODE MT5 (Nouveau) :**
+✅ Recherche d'Order Blocks & Swing ciblés
+✅ SL adaptatif (Liquidity + ATR Buffer)
+✅ Multi-Take Profit (TP1 Sécurité, TP2 Liquidité max)
+✅ Suggestion dynamique de lot (Risk Management)
 
-🏦 **MODE POCKET BINAIRE :**
-✅ Alertes Flash & Martingales adaptatives"""
+🏦 **MODE POCKET :**
+✅ MTF obligatoire (M15 + M5 + M1)
+✅ Filtre ATR et MACD
+✅ Martingale adaptative avec pivot intelligent"""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
-@bot.message_handler(func=lambda m: m.text in ["📊 CHOISIR UNE CIBLE"])
+@bot.message_handler(func=lambda m: m.text in ["📊 CHOISIR UNE CIBLE", "📊 CHOISIR UNE CIBLE ELITE"])
 def devises(message):
     if not est_autorise(message.chat.id): return
     plateforme = plateforme_trading.get(message.chat.id, "MT5")
@@ -704,7 +618,7 @@ def devises(message):
         markup.add(InlineKeyboardButton("🔥 V10", callback_data="set_V10"), InlineKeyboardButton("🔥 V25", callback_data="set_V25"), InlineKeyboardButton("🔥 V50", callback_data="set_V50"))
         markup.add(InlineKeyboardButton("⚡ V75", callback_data="set_V75"), InlineKeyboardButton("💥 V100", callback_data="set_V100"))
         markup.add(InlineKeyboardButton("🥇 GOLD", callback_data="set_XAUUSD"), InlineKeyboardButton("🥈 ARGENT", callback_data="set_XAGUSD"), InlineKeyboardButton("🛢 PÉTROLE", callback_data="set_USOUSD"))
-        texte_menu = "Sélectionne la cible à trader d'urgence sur ton compte MT5 :"
+        texte_menu = "Sélectionne ta cible (MT5 V29 PRO) :"
     else:
         markup.add(InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD"), InlineKeyboardButton("🇨🇦 CAD/JPY", callback_data="set_CADJPY"), InlineKeyboardButton("🇨🇭 CHF/JPY", callback_data="set_CHFJPY"))
         markup.add(InlineKeyboardButton("🇪🇺 EUR/JPY", callback_data="set_EURJPY"), InlineKeyboardButton("🇺🇸 USD/CAD", callback_data="set_USDCAD"), InlineKeyboardButton("🇦🇺 AUD/JPY", callback_data="set_AUDJPY"))
@@ -737,7 +651,7 @@ def calculer_entree_precise(duree_signal):
     return delai, heure_entree.strftime("%H:%M:%S")
 
 # ==========================================
-# EXÉCUTION DU TRADE (DÉPLOIEMENT DES PARAMS MT5)
+# AFFICHAGE FINAL ET EXÉCUTION
 # ==========================================
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
@@ -771,53 +685,47 @@ def save_devise(call):
     else: nom_affiche = f"💱 {actif[:3]}/{actif[3:]}"
 
     if not utiliser_cache:
-        return bot.send_message(chat_id, f"⏱️ **OPPORTUNITÉ EXPIRÉE SUR {actif}**\n\nSignal trop vieux (>90s).", parse_mode="Markdown")
+        return bot.send_message(chat_id, f"⏱️ **OPPORTUNITÉ EXPIRÉE SUR {actif}**\n\nSignal trop vieux (>90s). Le marché a bougé.", parse_mode="Markdown")
 
     delai_entree, str_entree = calculer_entree_precise(signal_cache.get('dur', 60))
     current_ask = obtenir_prix_actuel_deriv(actif) or 0.0
 
-    # 🆕 EXÉCUTION ET AFFICHAGE MT5 V30 DIRECTEUR COMPTE
+    # 🆕 AFFICHAGE MT5 V29 PRO
     if plateforme == "MT5":
-        action_simple = "CALL" if "ACHAT" in signal_cache['action'] else "PUT"
-        action_affiche = "🟢 ACHAT DIRECT MARKET" if action_simple == "CALL" else "🔴 VENTE DIRECTE MARKET"
+        action_affiche = "🟢 ACHAT (BUY LIMIT/MARKET)" if "ACHAT" in signal_cache['action'] else "🔴 VENTE (SELL LIMIT/MARKET)"
+        tp1 = signal_cache.get('mt5_tp1', 0.0)
+        tp2 = signal_cache.get('mt5_tp2', tp1)
         
-        # Attribution dynamique du lot initial
-        if actif in SYNTHETIC_PAIRS: base_lot = 0.02 if actif != "V75" else 0.002
-        elif actif in COMMODITY_PAIRS: base_lot = 0.02
-        else: base_lot = 0.10
+        # Gestion intelligente des lots suggérés
+        if actif in SYNTHETIC_PAIRS: lot_suggere = "0.005 à 0.05"
+        elif actif == "V75": lot_suggere = "0.001 (Micro lot)"
+        elif actif in COMMODITY_PAIRS: lot_suggere = "0.01 à 0.02"
+        else: lot_suggere = "0.01 à 0.10"
 
-        # Envoi immédiat à l'API MetaTrader 5
-        resultat_broker = executer_ordre_automatique_mt5(
-            symbole_interne=actif,
-            action_simple=action_simple,
-            lot_total=base_lot,
-            sl=signal_cache.get('mt5_sl', 0.0),
-            tp1=signal_cache.get('mt5_tp1', 0.0),
-            tp2=signal_cache.get('mt5_tp2', 0.0)
-        )
-
-        signal = f"""⚡ **RAPPORT D'EXÉCUTION AUTOMATIQUE MT5 V30 💎** ⚡
+        signal = f"""⚡ **SIGNAL MT5 ÉLITE V29 (SMC) 💎** ⚡
 ──────────────────
 🌐 **ACTIF :** {nom_affiche}
-👉 **ACTION :** {action_affiche}
-📊 **STATUT API :** `{resultat_broker}`
+👉 **ORDRE :** {action_affiche}
+🎯 **POTENTIEL R/R :** 1:{signal_cache.get('mt5_rr', 0.0):.2f}
 ──────────────────
-💰 **PRIX RELEVÉ :** `{current_ask:.5f}`
+💰 **PRIX D'ENTRÉE :** `{current_ask:.5f}`
 🛑 **STOP LOSS (SL) :** `{signal_cache.get('mt5_sl', 0.0):.5f}`
-✅ **TAKE PROFIT 1 :** `{signal_cache.get('mt5_tp1', 0.0):.5f}`
-🚀 **TAKE PROFIT 2 :** `{signal_cache.get('mt5_tp2', 0.0):.5f}`
+
+✅ **TAKE PROFIT 1 :** `{tp1:.5f}` *(Sécurité 50%)*
+🚀 **TAKE PROFIT 2 :** `{tp2:.5f}` *(Target SMC)*
 ──────────────────
-⚖️ **Volume Global Soumis :** `{base_lot}`"""
+⚖️ **Lot suggéré :** `{lot_suggere}`
+⚠️ *Astuce : Placez le trade à Break-Even (BE) dès le TP1 touché !*"""
         bot.send_message(chat_id, signal, parse_mode="Markdown")
         return
 
-    # AFFICHAGE POCKET BINAIRE
+    # AFFICHAGE POCKET
     else:
         palier, score = niveaux_martingale.get(chat_id, 0), signal_cache.get('sc', 5.0)
         mise = int((CAPITAL_ACTUEL * 0.02) * (COEF_MARTINGALE ** palier))
 
         if palier == 0 and score < 9.0:
-            signal = f"👻 **MODE FANTÔME (PALIER 0)** 👻\n──────────────────\n🌐 **ACTIF :** {nom_affiche}\n⏱ **ENTRÉE :** `{str_entree}`\n👉 **ACTION :** {signal_cache['action']}\n⏳ **DURÉE :** {signal_cache['exp']}\n📊 **SCORE :** `{score}/10`"
+            signal = f"👻 **MODE FANTÔME (PALIER 0)** 👻\n──────────────────\n🌐 **ACTIF :** {nom_affiche}\n⏱ **ENTRÉE :** `{str_entree}`\n👉 **ACTION :** {signal_cache['action']}\n⏳ **DURÉE :** {signal_cache['exp']}\n📊 **SCORE :** `{score}/10`\n*L'IA observe virtuellement.*"
         elif palier == 0 and score >= 9.0:
             niveaux_martingale[chat_id] = 1
             signal = f"🚨 **SIGNAL RÉEL VIP 💎 (SCORE {score}/10)** 🚨\n──────────────────\n🌐 **ACTIF :** {nom_affiche}\n⏱ **ENTRÉE :** `{str_entree}`\n⏳ **EXPIRATION :** {signal_cache['exp']}\n👉 **ACTION :** {signal_cache['action']}\n🛡️ {signal_cache['bb']}\n💵 **MISE CALCULÉE :** `{mise}$`"
@@ -855,6 +763,7 @@ def scanner_marche_auto():
                         action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
                         alerte_valide = True
                         sl, tp1, tp2, ratio_rr_tp2 = 0, 0, 0, 0
+                        profil = obtenir_profil_actif(paire)
 
                         candles_m15 = obtenir_donnees_deriv(paire, 900)
                         if candles_m15:
@@ -867,7 +776,7 @@ def scanner_marche_auto():
                             if (action_simplifiee == "CALL" and tendance_m15 == "BAISSIERE") or (action_simplifiee == "PUT" and tendance_m15 == "HAUSSIERE"): alerte_valide = False
                             if alerte_valide and not ema_alignee and paire in ELITE_PAIRS_MT5: alerte_valide = False
 
-                            # CALCULATION ALGORITHMIQUE DES COMPOSANTS SMC SÉCURISÉS
+                            # 🆕 LOGIQUE MT5 V29 : CALCULS SMC (LIQUIDITÉ ET SL ATR)
                             if alerte_valide and paire in ELITE_PAIRS_MT5:
                                 current_ask = obtenir_prix_actuel_deriv(paire)
                                 if current_ask:
@@ -876,10 +785,10 @@ def scanner_marche_auto():
 
                                     if action_simplifiee == "CALL":
                                         creux_recent = df_m15['low'].iloc[-20:-1].min()
-                                        sl = creux_recent - (atr_val * 0.8)
-                                        tp1 = df_m15['high'].iloc[-15:-1].max()
+                                        sl = creux_recent - (atr_val * 0.8)  # SL sécurisé sous l'order block
+                                        tp1 = df_m15['high'].iloc[-15:-1].max()  # TP1 Liquidité interne
                                         if tp1 <= current_ask: tp1 = current_ask + (abs(current_ask - sl) * 1.5)
-                                        tp2 = df_m15['high'].iloc[-40:-15].max()
+                                        tp2 = df_m15['high'].iloc[-40:-15].max() # TP2 Liquidité externe
                                         if tp2 <= tp1: tp2 = current_ask + (abs(current_ask - sl) * 3.0)
                                     else:
                                         sommet_recent = df_m15['high'].iloc[-20:-1].max()
@@ -893,7 +802,7 @@ def scanner_marche_auto():
                                     ratio_rr_tp1 = abs(tp1 - current_ask) / risque if risque > 0 else 0
                                     ratio_rr_tp2 = abs(tp2 - current_ask) / risque if risque > 0 else 0
                                     
-                                    if ratio_rr_tp1 < 1.0: alerte_valide = False
+                                    if ratio_rr_tp1 < 1.0: alerte_valide = False # Filtre sécurité MT5
 
                         if not alerte_valide: continue
 
@@ -912,8 +821,8 @@ def scanner_marche_auto():
                             if filtre_special.get(uid) == "SPECIAUX" and (sc is None or sc < 9.5): continue
 
                             nom_aff = f"V{paire.replace('V', '')}" if paire in SYNTHETIC_PAIRS else "GOLD" if paire == "XAUUSD" else "ARGENT" if paire == "XAGUSD" else "PÉTROLE" if paire == "USOUSD" else f"{paire[:3]}/{paire[3:]}"
-                            markup = InlineKeyboardMarkup().add(InlineKeyboardButton(f"⚡ Exécuter {nom_aff}", callback_data=f"set_{paire}"))
-                            msg = f"🔔 **STRUCTURE PREMIUM détectée : {nom_aff}**\nScore {sc:.1f}/10. Clique ci-dessous pour lancer l'exécution instantanée."
+                            markup = InlineKeyboardMarkup().add(InlineKeyboardButton(f"⚡ Frapper {nom_aff}", callback_data=f"set_{paire}"))
+                            msg = f"🔔 **{profil['nom']} {sc:.1f}/10 : {nom_aff}**\n✅ Triple MTF aligné. Signal premium. 90s pour frapper." if sc >= 9.5 else f"🔔 **RADAR {profil['nom']} : {nom_aff}**\nStructure validée. 90s pour agir."
                             try: bot.send_message(uid, msg, reply_markup=markup, parse_mode="Markdown")
                             except: pass
 
@@ -922,7 +831,7 @@ def scanner_marche_auto():
             except: pass
 
 # ==========================================
-# GESTION RELEVÉS RÉSULTATS POCKET
+# RÉSULTATS POCKET ET BOURSE
 # ==========================================
 
 def executer_tir_flash(chat_id, symbole, action_brute, duree, palier, nom_affiche):
@@ -963,7 +872,6 @@ def verifier_resultat(chat_id):
         try: bot.send_message(chat_id, texte, parse_mode="Markdown")
         except: pass
     else:
-        # LOGIQUE D'INVERSION MARTINGALE (BREAKER BLOCK) SI LIQUIDITÉ CONTRAIRE
         enregistrer_resultat_historique(symbole, action, "OTM")
         profil = obtenir_profil_actif(symbole)
         if palier_actuel < MAX_MARTINGALE:
@@ -981,12 +889,12 @@ def verifier_resultat(chat_id):
 
                     if taille_totale > 0:
                         if action == "CALL" and derniere['close'] < derniere['open'] and corps > (taille_totale * 0.75) and force_dir <= -2 and corps > corps_moyen * 1.2:
-                            action_martingale, commentaire_ia = "PUT", "🔄 **BREAKER BLOCK** : Momentum baissier massif. Pivot PUT."
+                            action_martingale, commentaire_ia = "PUT", "🔄 **BREAKER BLOCK CONFIRMÉ** : Momentum baissier massif. Pivot PUT."
                         elif action == "PUT" and derniere['close'] > derniere['open'] and corps > (taille_totale * 0.75) and force_dir >= 2 and corps > corps_moyen * 1.2:
-                            action_martingale, commentaire_ia = "CALL", "🔄 **BREAKER BLOCK** : Momentum haussier massif. Pivot CALL."
+                            action_martingale, commentaire_ia = "CALL", "🔄 **BREAKER BLOCK CONFIRMÉ** : Momentum haussier massif. Pivot CALL."
                 except Exception: pass
 
-            bot.send_message(chat_id, f"⚠️ **PIÈGE BROKER (Palier {palier_actuel} OTM)**\n🧠 **ANALYSE IA :** {commentaire_ia}\n⚡ Signal Palier {palier_actuel + 1} en cours...", parse_mode="Markdown")
+            bot.send_message(chat_id, f"⚠️ **PIÈGE BROKER (Palier {palier_actuel} OTM)**\n📉 **Sortie :** `{prix_sortie:.5f}`\n🧠 **ANALYSE IA :** {commentaire_ia}\n⚡ Signal Palier {palier_actuel + 1} en cours...", parse_mode="Markdown")
             cle_memoire = f"{symbole}_{mode_trading.get(chat_id, 'STANDARD')}"
             signaux_cache[cle_memoire] = {'time': time.time(), 'action': "🟢 ACHAT (CALL)" if action_martingale == "CALL" else "🔴 VENTE (PUT)", 'conf': 99, 'exp': f"{int(trade['duree']/60)} MIN" if trade['duree'] >= 60 else f"{trade['duree']} SEC", 'dur': trade['duree'], 'rsi': 50, 'stoch': 50, 'bb': f"Martingale ({commentaire_ia[:40]}...)", 'sc': 5.0}
             class CallFictif:
@@ -999,7 +907,7 @@ def verifier_resultat(chat_id):
             if palier_actuel > 0: stats_journee['OTM'] += 1
             cooldown_actifs[symbole] = {'time': time.time(), 'action': action, 'duree': cooldown_duree}
             if chat_id in trades_en_cours: del trades_en_cours[chat_id]
-            try: bot.send_message(chat_id, f"🛑 **SÉQUENCE ARRÊTÉE (OTM)**\nSécurisation des fonds.\n⏳ Radar verrouillé {cooldown_duree//60} min.", parse_mode="Markdown")
+            try: bot.send_message(chat_id, f"🛑 **SÉQUENCE ARRÊTÉE (OTM)**\nSécurisation des fonds sur {nom_affiche}.\n⏳ Radar verrouillé {cooldown_duree//60} min.", parse_mode="Markdown")
             except: pass
 
 @bot.callback_query_handler(func=lambda c: c.data == "force_win")
@@ -1009,7 +917,7 @@ def override_victoire_manuelle(call):
         trade = trades_en_cours[chat_id]
         stats_journee['ITM'] += 1
         enregistrer_resultat_historique(trade['symbole'], trade['action'], "ITM")
-        bot.send_message(chat_id, f"✅ **CIBLE ABATTUE (ITM MANUEL)**\n🚀 {trade['nom_affiche']}\n🔓 Radar déverrouillé.", parse_mode="Markdown")
+        bot.send_message(chat_id, f"✅ **CIBLE ABATTUE (ITM MANUEL)**\n🚀 {trade['nom_affiche']} ({trade['action']})\n🔓 Radar déverrouillé.", parse_mode="Markdown")
         del trades_en_cours[chat_id]
     niveaux_martingale[chat_id] = 0
     try: bot.answer_callback_query(call.id, "Victoire enregistrée.", show_alert=True)
@@ -1037,12 +945,12 @@ def gestionnaire_bilan():
         time.sleep(30)
 
 # ==========================================
-# INITIALISATION ET LANCEMENT DES SYSTÈMES
+# LANCEMENT
 # ==========================================
 
 if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestionnaire_bilan, daemon=True).start()
-    print("⬛ TERMINAL PRIME V30 HAUTE PERFORMANCE (MT5 AUTO) : Actif.", flush=True)
+    print("⬛ TERMINAL PRIME V29 (SMC PRO & POCKET FIXED) : Démarré.", flush=True)
     bot.infinity_polling()
