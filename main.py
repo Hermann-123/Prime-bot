@@ -17,14 +17,14 @@ from threading import Thread
 # CONFIGURATION
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAGTlIMDQhqRhT_JiJ-5woYgN3KlZFt9-hs"
+TELEGRAM_TOKEN = "8658287331:AAFGW1gnfIdqMDwiUxMwYpBfUnNrIJ_3Ons"
 bot            = telebot.TeleBot(TELEGRAM_TOKEN)
 ADMIN_ID       = 5968288964
 CAPITAL_ACTUEL = 40650
 FMP_API_KEY    = os.environ.get("FMP_API_KEY", "D0srw6sB3otYTc00UdBE9otPIbhkKV8X")
 
 # ==========================================
-# LISTES DE PAIRES — V35.1
+# LISTES DE PAIRES — V35.2
 # ==========================================
 
 SYNTHETIC_PAIRS = ["V10","V25","V50","V75","V100"]
@@ -66,7 +66,7 @@ stats_journee          = {'ITM': 0, 'OTM': 0}
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Terminal Prime V35.1 (Elite MT5 : Gold/Argent/Petrole/SP500/NASDAQ/DAX)"
+def home(): return "Terminal Prime V35.2 (Elite MT5 : Gold/Argent/Petrole/SP500/NASDAQ/DAX)"
 def run():   app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 def keep_alive(): Thread(target=run, daemon=True).start()
 
@@ -143,7 +143,6 @@ def activer_vip(message):
     if cle not in cles_generees:
         return bot.send_message(cid, "❌ **Clé invalide, expirée ou déjà utilisée.**", parse_mode="Markdown")
     
-    # ✅ FIX V35.1 : Correction de la faute de frappe 'clles_generees' -> 'cles_generees'
     jours = cles_generees.pop(cle)
     if jours == "LIFETIME":
         utilisateurs_autorises[cid] = "LIFETIME"
@@ -281,14 +280,20 @@ def prefixer_symbole(s):
     return f"frx{s}"
 
 def obtenir_donnees_deriv(symbole_brut, granularite=300):
-    # ✅ INTEGRATION FMP : Routage des actifs réels vers l'API de prix réels
+    # ✅ INTEGRATION FMP : Routage avec Table de Traduction (ETF) pour contourner le blocage gratuit
     if symbole_brut in ALL_PAIRS:
         tf = "5min" if granularite == 300 else "1hour"
-        sym_fmp = "FOREX:XAUUSD" if symbole_brut == "XAUUSD" else (
-                  "FOREX:XAGUSD" if symbole_brut == "XAGUSD" else (
-                  "^SPX" if symbole_brut == "SP500" else (
-                  "^NDX" if symbole_brut == "US100" else (
-                  "^GDAXI" if symbole_brut == "DAX" else symbole_brut))))
+        
+        mapping_fmp = {
+            "XAUUSD": "FOREX:XAUUSD",
+            "XAGUSD": "FOREX:XAGUSD",
+            "SP500": "SPY",      # S&P 500 ETF
+            "US100": "QQQ",      # NASDAQ ETF
+            "DAX": "EWG",        # DAX ETF
+            "USOUSD": "USO"      # Pétrole ETF
+        }
+        sym_fmp = mapping_fmp.get(symbole_brut, symbole_brut)
+        
         try:
             url = f"https://financialmodelingprep.com/api/v3/historical-chart/{tf}/{sym_fmp}?apikey={FMP_API_KEY}"
             res = requests.get(url, timeout=5).json()
@@ -306,7 +311,7 @@ def obtenir_donnees_deriv(symbole_brut, granularite=300):
         except Exception as e:
             print(f"[FMP Chart Error - {symbole_brut}] {e}", flush=True)
 
-    # Fallback ou Actifs Synthétiques sur le Flux Deriv
+    # Fallback Flux Deriv
     sym = prefixer_symbole(symbole_brut)
     for _ in range(2):
         ws = None
@@ -324,13 +329,18 @@ def obtenir_donnees_deriv(symbole_brut, granularite=300):
     return None
 
 def obtenir_prix_actuel_deriv(symbole_brut):
-    # ✅ INTEGRATION FMP : Cotations réelles en direct (évite le décalage de prix sur l'or)
+    # ✅ INTEGRATION FMP : Cotations réelles avec Table de Traduction (ETF)
     if symbole_brut in ALL_PAIRS:
-        sym_fmp = "FOREX:XAUUSD" if symbole_brut == "XAUUSD" else (
-                  "FOREX:XAGUSD" if symbole_brut == "XAGUSD" else (
-                  "^SPX" if symbole_brut == "SP500" else (
-                  "^NDX" if symbole_brut == "US100" else (
-                  "^GDAXI" if symbole_brut == "DAX" else symbole_brut))))
+        mapping_fmp = {
+            "XAUUSD": "FOREX:XAUUSD",
+            "XAGUSD": "FOREX:XAGUSD",
+            "SP500": "SPY",      # S&P 500 ETF
+            "US100": "QQQ",      # NASDAQ ETF
+            "DAX": "EWG",        # DAX ETF
+            "USOUSD": "USO"      # Pétrole ETF
+        }
+        sym_fmp = mapping_fmp.get(symbole_brut, symbole_brut)
+        
         try:
             url = f"https://financialmodelingprep.com/api/v3/quote/{sym_fmp}?apikey={FMP_API_KEY}"
             res = requests.get(url, timeout=5).json()
@@ -544,7 +554,7 @@ def bienvenue(message):
     plateforme_trading.setdefault(uid,"MT5")
     kz = "🟢 ACTIVE" if dans_killzone() else "🔴 INACTIVE"
     bot.send_message(uid,
-        f"🏴‍☠️ **TERMINAL PRIME V35.1** 🔥\n"
+        f"🏴‍☠️ **TERMINAL PRIME V35.2** 🔥\n"
         f"──────────────────\n"
         f"✅ **Actifs MT5 (Focus Élite) :**\n"
         f"   📈 S&P 500 | 💹 NASDAQ 100 | 🇩🇪 DAX\n"
@@ -722,5 +732,5 @@ def cmd_kasper(message):
 if __name__=="__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
-    print("⬛ TERMINAL PRIME V35.1 — Hybride FMP connecté et démarré.", flush=True)
+    print("⬛ TERMINAL PRIME V35.2 — Hybride FMP connecté et démarré.", flush=True)
     bot.infinity_polling()
