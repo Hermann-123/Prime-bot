@@ -11,57 +11,216 @@ import requests
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from flask import Flask
-from threading import Thread, Timer
+from threading import Thread
 
 # ==========================================
 # CONFIGURATION
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAGAZudkq2euSVjCIqS3a7GBhlrS7L0bKcY"
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
+TELEGRAM_TOKEN = "8658287331:AAFewv2i9JsnKUpFEPsKwoJuCO4oN9FF8G0"
+bot            = telebot.TeleBot(TELEGRAM_TOKEN)
 ADMIN_ID       = 5968288964
 CAPITAL_ACTUEL = 40650
-FMP_API_KEY    = os.environ.get("FMP_API_KEY","D0srw6sB3otYTc00UdBE9otPIbhkKV8X")
+FMP_API_KEY    = os.environ.get("FMP_API_KEY", "D0srw6sB3otYTc00UdBE9otPIbhkKV8X")
+
+# ==========================================
+# LISTES DE PAIRES — V34
+# ==========================================
+
+SYNTHETIC_PAIRS = ["V10","V25","V50","V75","V100"]
+
+# ✅ NOUVEAU : Indices boursiers MT5 ajoutés
+INDEX_PAIRS     = ["SP500","US100","DAX"]
+
+COMMODITY_PAIRS = ["XAUUSD","XAGUSD","USOUSD"]  # Gold, Argent, Pétrole
+CRYPTO_PAIRS    = ["BTCUSD","ETHUSD","LTCUSD"]
+FOREX_PAIRS     = ["AUDUSD","CADJPY","CHFJPY","EURJPY","USDCAD","AUDJPY",
+                   "EURAUD","EURUSD","AUDCAD","USDCHF","CADCHF","EURCHF",
+                   "USDJPY","GBPUSD"]
+
+# MT5 = Synthétiques + Indices + Commodités
+ELITE_PAIRS_MT5 = SYNTHETIC_PAIRS + INDEX_PAIRS + COMMODITY_PAIRS
+ALL_PAIRS       = SYNTHETIC_PAIRS + INDEX_PAIRS + COMMODITY_PAIRS + FOREX_PAIRS + CRYPTO_PAIRS
+
+# Noms affichés dans Telegram
+NOMS_AFFICHAGE = {
+    "XAUUSD":"🥇 GOLD",   "XAGUSD":"🥈 ARGENT",  "USOUSD":"🛢 PÉTROLE",
+    "SP500":"📈 S&P 500", "US100":"💹 NASDAQ 100","DAX":"🇩🇪 DAX",
+    "V10":"🔥 V10",       "V25":"🔥 V25",         "V50":"🔥 V50",
+    "V75":"⚡ V75",       "V100":"💥 V100",
+}
 
 # ==========================================
 # VARIABLES D'ÉTAT
 # ==========================================
 
-user_prefs          = {}
-plateforme_trading  = {}
-trades_en_cours     = {}
-utilisateurs_actifs = set()
-derniere_alerte_auto= {}
-signaux_cache       = {}
-historique_signaux  = {}
+user_prefs           = {}
+plateforme_trading   = {}
+trades_en_cours      = {}
+utilisateurs_actifs  = set()
+derniere_alerte_auto = {}
+signaux_cache        = {}
 
 utilisateurs_autorises = {ADMIN_ID: "LIFETIME"}
 cles_generees          = {}
 stats_journee          = {'ITM': 0, 'OTM': 0}
-
-SYNTHETIC_PAIRS  = ["V10","V25","V50","V75","V100"]
-COMMODITY_PAIRS  = ["XAUUSD","XAGUSD","USOUSD"]
-CRYPTO_PAIRS     = ["BTCUSD","ETHUSD","LTCUSD"]
-# ✅ FIX : GBPUSD ajouté dans FOREX_PAIRS (était dans le menu mais pas dans la liste)
-FOREX_PAIRS      = ["AUDUSD","CADJPY","CHFJPY","EURJPY","USDCAD","AUDJPY",
-                    "EURAUD","EURUSD","AUDCAD","USDCHF","CADCHF","EURCHF",
-                    "USDJPY","GBPUSD"]
-ELITE_PAIRS_MT5  = SYNTHETIC_PAIRS + COMMODITY_PAIRS
-ALL_PAIRS        = SYNTHETIC_PAIRS + COMMODITY_PAIRS + FOREX_PAIRS + CRYPTO_PAIRS
 
 # ==========================================
 # KEEP ALIVE
 # ==========================================
 
 app = Flask(__name__)
-@app.route('/') 
-def home(): return "Terminal Prime V33 FIXED (Kasper OTE 100% Fidèle)"
-def run():    app.run(host='0.0.0.0', port=int(os.environ.get('PORT',8080)))
+@app.route('/')
+def home(): return "Terminal Prime V34 (Indices + Keygen Fix)"
+def run():   app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 def keep_alive(): Thread(target=run, daemon=True).start()
 
 # ==========================================
-# ACCÈS VIP
+# ✅ KEYGEN CORRIGÉ — Gestion d'erreur complète
 # ==========================================
+
+DUREES_VALIDES = {
+    "1s":  (7,   "1 Semaine"),
+    "2s":  (14,  "2 Semaines"),
+    "1m":  (30,  "1 Mois"),
+    "3m":  (90,  "3 Mois"),
+    "6m":  (180, "6 Mois"),
+    "1a":  (365, "1 An"),
+    "vie": ("LIFETIME", "À VIE 👑"),
+}
+
+@bot.message_handler(commands=['keygen'])
+def generer_cle(message):
+    """
+    ✅ FIX KEYGEN : Gestion d'erreur complète + message d'aide si mauvais argument.
+    Usage : /keygen 1s | 2s | 1m | 3m | 6m | 1a | vie | <nombre_jours>
+    """
+    if message.chat.id != ADMIN_ID:
+        return  # Silencieux pour les non-admins
+
+    parts = message.text.strip().split()
+
+    # ── Pas d'argument → afficher l'aide ─────────────────────────────────
+    if len(parts) < 2:
+        aide = (
+            "⚙️ **GÉNÉRATEUR DE CLÉS VIP**\n"
+            "──────────────────\n"
+            "Usage : `/keygen <durée>`\n\n"
+            "**Durées disponibles :**\n"
+            "`/keygen 1s`  → 1 Semaine (7j)\n"
+            "`/keygen 2s`  → 2 Semaines (14j)\n"
+            "`/keygen 1m`  → 1 Mois (30j)\n"
+            "`/keygen 3m`  → 3 Mois (90j)\n"
+            "`/keygen 6m`  → 6 Mois (180j)\n"
+            "`/keygen 1a`  → 1 An (365j)\n"
+            "`/keygen vie` → À vie 👑\n"
+            "`/keygen 45`  → Nombre de jours personnalisé"
+        )
+        return bot.send_message(message.chat.id, aide, parse_mode="Markdown")
+
+    arg = parts[1].lower().strip()
+
+    # ── Argument reconnu dans le dictionnaire ────────────────────────────
+    if arg in DUREES_VALIDES:
+        jours, label = DUREES_VALIDES[arg]
+    else:
+        # ── Essai comme nombre de jours ──────────────────────────────────
+        try:
+            jours = int(arg)
+            if jours <= 0:
+                return bot.send_message(
+                    message.chat.id,
+                    "❌ **Erreur :** Le nombre de jours doit être positif.\nEx: `/keygen 30`",
+                    parse_mode="Markdown"
+                )
+            label = f"{jours} jours"
+        except ValueError:
+            # ── Argument complètement invalide ───────────────────────────
+            valides = " | ".join(DUREES_VALIDES.keys())
+            return bot.send_message(
+                message.chat.id,
+                f"❌ **Argument invalide :** `{arg}`\n\n"
+                f"**Valeurs acceptées :** `{valides}`\n"
+                f"Ou un nombre de jours : `/keygen 30`",
+                parse_mode="Markdown"
+            )
+
+    # ── Génération de la clé ──────────────────────────────────────────────
+    cle = "VIP-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=10))
+    cles_generees[cle] = jours
+
+    msg = (
+        f"✅ **CLÉ VIP GÉNÉRÉE**\n"
+        f"──────────────────\n"
+        f"🔑 **Clé :** `{cle}`\n"
+        f"⏳ **Durée :** {label}\n"
+        f"──────────────────\n"
+        f"_L'abonné active avec :_ `/vip {cle}`"
+    )
+    bot.send_message(message.chat.id, msg, parse_mode="Markdown")
+
+
+@bot.message_handler(commands=['vip'])
+def activer_vip(message):
+    cid = message.chat.id
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        return bot.send_message(cid, "⚠️ Usage : `/vip VOTRE-CLÉ`", parse_mode="Markdown")
+    cle = parts[1].strip()
+    if cle not in cles_generees:
+        return bot.send_message(cid,
+            "❌ **Clé invalide, expirée ou déjà utilisée.**\n"
+            "Contacte l'admin pour obtenir une nouvelle clé.",
+            parse_mode="Markdown")
+    jours = cles_generees.pop(cle)
+    if jours == "LIFETIME":
+        utilisateurs_autorises[cid] = "LIFETIME"
+        txt = "À VIE 👑"
+    else:
+        exp = datetime.datetime.now() + datetime.timedelta(days=jours)
+        utilisateurs_autorises[cid] = exp
+        txt = exp.strftime('%d/%m/%Y à %H:%M')
+    bot.send_message(cid,
+        f"🎉 **ACCÈS TERMINAL PRIME DÉVERROUILLÉ !**\n"
+        f"──────────────────\n"
+        f"⏳ **Expiration :** {txt}\n\n"
+        f"👉 Tape /start pour initialiser ton tableau de bord.",
+        parse_mode="Markdown")
+
+
+@bot.message_handler(commands=['abonnes'])
+def lister_abonnes(message):
+    """Commande admin : voir tous les abonnés actifs."""
+    if message.chat.id != ADMIN_ID: return
+    if not utilisateurs_autorises:
+        return bot.send_message(message.chat.id, "Aucun abonné actif.")
+    lignes = ["👥 **ABONNÉS ACTIFS :**\n──────────────────"]
+    now = datetime.datetime.now()
+    for uid, exp in utilisateurs_autorises.items():
+        if uid == ADMIN_ID: continue
+        if exp == "LIFETIME":
+            statut = "👑 À vie"
+        elif now < exp:
+            reste = (exp - now).days
+            statut = f"✅ {reste}j restants (exp: {exp.strftime('%d/%m/%Y')})"
+        else:
+            statut = "❌ Expiré"
+        lignes.append(f"• `{uid}` → {statut}")
+    bot.send_message(message.chat.id, "\n".join(lignes), parse_mode="Markdown")
+
+
+@bot.message_handler(commands=['cles'])
+def lister_cles(message):
+    """Commande admin : voir les clés en attente d'activation."""
+    if message.chat.id != ADMIN_ID: return
+    if not cles_generees:
+        return bot.send_message(message.chat.id, "Aucune clé en attente.")
+    lignes = ["🔑 **CLÉS EN ATTENTE :**\n──────────────────"]
+    for cle, jours in cles_generees.items():
+        dur = "À VIE" if jours == "LIFETIME" else f"{jours}j"
+        lignes.append(f"`{cle}` → {dur}")
+    bot.send_message(message.chat.id, "\n".join(lignes), parse_mode="Markdown")
+
 
 def est_autorise(uid):
     if uid == ADMIN_ID: return True
@@ -69,73 +228,49 @@ def est_autorise(uid):
         exp = utilisateurs_autorises[uid]
         if exp == "LIFETIME" or datetime.datetime.now() < exp: return True
         del utilisateurs_autorises[uid]
-        try: bot.send_message(uid,"⚠️ Abonnement expiré.",parse_mode="Markdown")
+        try: bot.send_message(uid, "⚠️ **Abonnement expiré.**\nContacte l'admin pour renouveler.", parse_mode="Markdown")
         except: pass
     return False
 
-@bot.message_handler(commands=['keygen'])
-def generer_cle(message):
-    if message.chat.id != ADMIN_ID: return
-    try:
-        arg  = message.text.split()[1].lower()
-        jrs  = {"1s":7,"2s":14,"1m":30,"3m":90,"vie":"LIFETIME"}.get(arg, int(arg))
-        cle  = "VIP-"+"".join(random.choices(string.ascii_uppercase+string.digits, k=8))
-        cles_generees[cle] = jrs
-        dur  = "À VIE 👑" if jrs=="LIFETIME" else f"{jrs} jours"
-        bot.send_message(message.chat.id, f"✅ **CLÉ :** `{cle}`\n⏳ **Durée :** {dur}", parse_mode="Markdown")
-    except: pass
-
-@bot.message_handler(commands=['vip'])
-def activer_vip(message):
-    cid = message.chat.id
-    try:
-        cle = message.text.split()[1]
-        if cle not in cles_generees:
-            return bot.send_message(cid,"❌ Clé invalide.")
-        jrs = cles_generees.pop(cle)
-        if jrs == "LIFETIME":
-            utilisateurs_autorises[cid] = "LIFETIME"; txt = "À VIE 👑"
-        else:
-            exp = datetime.datetime.now()+datetime.timedelta(days=jrs)
-            utilisateurs_autorises[cid] = exp; txt = exp.strftime('%d/%m/%Y %H:%M')
-        bot.send_message(cid, f"🎉 **ACCÈS DÉVERROUILLÉ !**\n⏳ Fin : {txt}\n\n👉 /start", parse_mode="Markdown")
-    except: pass
-
 # ==========================================
-# KILLZONES & TEMPS
+# KILLZONES
 # ==========================================
 
 def dans_killzone():
-    """London 07h-10h GMT | New York 12h-15h GMT — comme dans la vidéo."""
     h = datetime.datetime.utcnow().hour + datetime.datetime.utcnow().minute/60.0
     return (7.0 <= h <= 10.0) or (12.0 <= h <= 15.0)
 
 def nom_killzone():
     h = datetime.datetime.utcnow().hour + datetime.datetime.utcnow().minute/60.0
-    if 7.0 <= h <= 10.0:  return "🇬🇧 London Killzone"
+    if 7.0  <= h <= 10.0: return "🇬🇧 London Killzone"
     if 12.0 <= h <= 15.0: return "🇺🇸 New York Killzone"
-    return "Hors session"
+    return "⏳ Hors session"
 
 def est_symbole_autorise(symbole):
     if symbole in SYNTHETIC_PAIRS: return "AUTORISE", ""
     now = datetime.datetime.utcnow()
-    j = now.weekday()
-    h = now.hour + now.minute/60.0
+    j   = now.weekday()
+    h   = now.hour + now.minute/60.0
     weekend = (j==4 and h>=21) or j==5 or (j==6 and h<21)
     if weekend:
         return ("AUTORISE","") if symbole in CRYPTO_PAIRS else ("BLOCAGE_TOTAL","Week-end")
     if symbole in CRYPTO_PAIRS: return "BLOCAGE_TOTAL","Cryptos semaine"
-    if (symbole in COMMODITY_PAIRS or symbole in FOREX_PAIRS) and not dans_killzone():
-        return "HORS_SESSION","🔒 Hors Killzone"
+    # Indices, Commodités, Forex → seulement pendant les killzones
+    if not dans_killzone(): return "HORS_SESSION","🔒 Hors Killzone"
     return "AUTORISE", ""
 
 # ==========================================
-# WEBSOCKET DERIV (CONNEXION PAR APPEL)
+# WEBSOCKET DERIV — PREFIXES
 # ==========================================
 
 def prefixer_symbole(s):
+    """
+    ✅ Préfixes Deriv corrects pour chaque type d'actif.
+    Indices boursiers = frx + symbole sur Deriv.
+    """
     if s in SYNTHETIC_PAIRS: return f"R_{s.replace('V','')}"
     if s in CRYPTO_PAIRS:    return f"cry{s}"
+    # Indices et Commodités et Forex → préfixe frx
     return f"frx{s}"
 
 def obtenir_donnees_deriv(symbole_brut, granularite=300):
@@ -176,268 +311,114 @@ def obtenir_prix_actuel_deriv(symbole_brut):
             time.sleep(0.3)
     return None
 
-# ============================================================
-# MOTEUR KASPER OTE — 100% FIDÈLE À LA VIDÉO
-# ============================================================
+# ==========================================
+# MOTEUR KASPER OTE (EMA Cloud + Fibonacci)
+# ==========================================
 
 def calculer_ema_cloud(df):
-    """
-    Étape 1 — Ripster EMA Cloud sur H1
-    4 EMAs exactes de la vidéo : 72, 89, 180, 200
-    """
-    ema72  = ta.trend.EMAIndicator(close=df['close'], window=72).ema_indicator()
-    ema89  = ta.trend.EMAIndicator(close=df['close'], window=89).ema_indicator()
-    ema180 = ta.trend.EMAIndicator(close=df['close'], window=180).ema_indicator()
-    ema200 = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
-
-    rapide = "BULL" if ema72.iloc[-1]  > ema89.iloc[-1]  else "BEAR"
-    lent   = "BULL" if ema180.iloc[-1] > ema200.iloc[-1] else "BEAR"
-
-    if   rapide=="BULL" and lent=="BULL": return "BULL", "FORT 🟢🟢"
-    elif rapide=="BEAR" and lent=="BEAR": return "BEAR", "FORT 🔴🔴"
-    else: return rapide, "MODÉRÉ 🟡"
-
+    e72  = ta.trend.EMAIndicator(close=df['close'], window=72).ema_indicator()
+    e89  = ta.trend.EMAIndicator(close=df['close'], window=89).ema_indicator()
+    e180 = ta.trend.EMAIndicator(close=df['close'], window=180).ema_indicator()
+    e200 = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
+    r = "BULL" if e72.iloc[-1]  > e89.iloc[-1]  else "BEAR"
+    l = "BULL" if e180.iloc[-1] > e200.iloc[-1] else "BEAR"
+    if r=="BULL" and l=="BULL": return "BULL","FORT 🟢🟢"
+    if r=="BEAR" and l=="BEAR": return "BEAR","FORT 🔴🔴"
+    return r, "MODÉRÉ 🟡"
 
 def trouver_dernier_swing(df, tendance):
-    """
-    ✅ FIX ERREUR 3 — Recherche du VRAI dernier swing significatif.
-    
-    Méthode : on cherche un pivot (haut/bas) qui est plus haut/bas
-    que les N bougies de chaque côté = swing point réel.
-    Comme le trader dans la vidéo qui identifie visuellement le swing.
-    """
-    n = 3  # Bougies de chaque côté pour valider un pivot
-
+    n = 3
     highs = df['high'].values
     lows  = df['low'].values
-
-    swing_highs = []
-    swing_lows  = []
-
+    swing_highs, swing_lows = [], []
     for i in range(n, len(highs)-n):
-        # Swing High : plus haut que les N bougies à gauche et à droite
-        if all(highs[i] > highs[i-k] for k in range(1,n+1)) and \
-           all(highs[i] > highs[i+k] for k in range(1,n+1)):
+        if all(highs[i]>highs[i-k] for k in range(1,n+1)) and all(highs[i]>highs[i+k] for k in range(1,n+1)):
             swing_highs.append((i, highs[i]))
-
-        # Swing Low : plus bas que les N bougies à gauche et à droite
-        if all(lows[i] < lows[i-k] for k in range(1,n+1)) and \
-           all(lows[i] < lows[i+k] for k in range(1,n+1)):
+        if all(lows[i]<lows[i-k]  for k in range(1,n+1)) and all(lows[i]<lows[i+k]  for k in range(1,n+1)):
             swing_lows.append((i, lows[i]))
-
     if not swing_highs or not swing_lows:
-        # Fallback simple si pas assez de bougies
         return df['high'].iloc[-40:].max(), df['low'].iloc[-40:].min()
-
-    # Prendre les swings les plus récents
-    last_swing_high = max(swing_highs[-3:], key=lambda x: x[0])  # le plus récent
-    last_swing_low  = max(swing_lows[-3:],  key=lambda x: x[0])
-
     if tendance == "BEAR":
-        # On veut : swing High récent → swing Low après (mouvement baissier à retracer)
-        # Chercher un swing High suivi d'un swing Low plus bas
         for sh in reversed(swing_highs[-5:]):
-            lows_apres = [sl for sl in swing_lows if sl[0] > sh[0]]
-            if lows_apres:
-                sl = min(lows_apres, key=lambda x: x[1])  # Le plus bas après le haut
-                return sh[1], sl[1]
-        return last_swing_high[1], last_swing_low[1]
+            after = [sl for sl in swing_lows if sl[0]>sh[0]]
+            if after: return sh[1], min(after, key=lambda x: x[1])[1]
     else:
-        # On veut : swing Low récent → swing High après (mouvement haussier à retracer)
         for sl in reversed(swing_lows[-5:]):
-            highs_apres = [sh for sh in swing_highs if sh[0] > sl[0]]
-            if highs_apres:
-                sh = max(highs_apres, key=lambda x: x[1])  # Le plus haut après le bas
-                return sh[1], sl[1]
-        return last_swing_high[1], last_swing_low[1]
+            after = [sh for sh in swing_highs if sh[0]>sl[0]]
+            if after: return max(after, key=lambda x: x[1])[1], sl[1]
+    return max(swing_highs[-3:], key=lambda x:x[0])[1], max(swing_lows[-3:], key=lambda x:x[0])[1]
 
-
-def calculer_zone_ote(swing_high, swing_low, tendance):
-    """
-    Étape 3 — Zone OTE entre Fibonacci 0.618 et 0.786
-    
-    ✅ FIX ERREUR 6 — TP calculé en 1.5R RÉEL (distance SL × 1.5)
-    pas comme avant où c'était 50% du swing (incorrect).
-    """
-    diff = swing_high - swing_low
-
+def calculer_zone_ote(sh, sl, tendance):
+    diff = sh - sl
     if tendance == "BEAR":
-        # Retracement haussier dans une tendance baissière → SELL dans la zone
-        ote_bas  = swing_low  + diff * 0.618
-        ote_haut = swing_low  + diff * 0.786
-        sl       = swing_high + diff * 0.05   # Légèrement au-dessus du swing high (Fibo 1.0+)
+        ob, oh = sl+diff*0.618, sl+diff*0.786
+        sl_lvl = sh + diff*0.05
+        dist   = abs(oh - sl_lvl)
+        tp1, tp15 = oh - dist, oh - dist*1.5
+    else:
+        ob, oh = sh-diff*0.786, sh-diff*0.618
+        sl_lvl = sl - diff*0.05
+        dist   = abs(ob - sl_lvl)
+        tp1, tp15 = ob + dist, ob + dist*1.5
+    return {"ote_bas":round(ob,5),"ote_haut":round(oh,5),"sl":round(sl_lvl,5),
+            "tp_1r":round(tp1,5),"tp_15r":round(tp15,5)}
 
-        # ✅ FIX : TP = SL_distance × 1.5 (vrai 1.5R)
-        sl_distance = abs(ote_haut - sl)      # Distance entre milieu OTE et SL
-        tp_1r       = ote_haut - sl_distance  # 1R
-        tp_15r      = ote_haut - sl_distance * 1.5  # 1.5R
-
-    else:  # BULL
-        # Retracement baissier dans une tendance haussière → BUY dans la zone
-        ote_bas  = swing_high - diff * 0.786
-        ote_haut = swing_high - diff * 0.618
-        sl       = swing_low  - diff * 0.05   # Légèrement sous le swing low
-
-        # ✅ FIX : TP = SL_distance × 1.5 (vrai 1.5R)
-        sl_distance = abs(ote_bas - sl)
-        tp_1r       = ote_bas + sl_distance
-        tp_15r      = ote_bas + sl_distance * 1.5
-
-    return {
-        "ote_bas":  round(ote_bas,  5),
-        "ote_haut": round(ote_haut, 5),
-        "sl":       round(sl,       5),
-        "tp_1r":    round(tp_1r,    5),
-        "tp_15r":   round(tp_15r,   5),
-        "fib_618":  round(ote_bas,  5),
-        "fib_786":  round(ote_haut, 5),
-    }
-
-
-def detecter_reaction_ote(df, zone_ote, tendance):
-    """
-    Étape 4 — Réaction dans la zone OTE.
-    
-    ✅ FIX ERREUR 9 — Utilise iloc[-2] (bougie FERMÉE)
-    pas iloc[-1] qui est la bougie en cours (non confirmée).
-    
-    On confirme sur la bougie fermée, on exécute sur la bougie suivante.
-    """
-    # ✅ CORRECTION PRINCIPALE : bougie confirmée = iloc[-2]
-    last = df.iloc[-2]   # Bougie FERMÉE (confirmée)
-    prev = df.iloc[-3]   # Bougie avant
-
-    px_fermeture = last['close']
-
-    # Le prix de fermeture est-il dans la zone OTE ?
-    dans_zone = zone_ote["ote_bas"] <= px_fermeture <= zone_ote["ote_haut"]
-    # Ou la bougie précédente avait fermé dans la zone ?
-    prev_dans  = zone_ote["ote_bas"] <= prev['close'] <= zone_ote["ote_haut"]
-
-    if not (dans_zone or prev_dans):
-        return False, "Hors zone OTE"
-
-    corps   = abs(last['close'] - last['open'])
-    taille  = last['high'] - last['low']
-    meche_h = last['high'] - max(last['open'], last['close'])
-    meche_b = min(last['open'], last['close']) - last['low']
-
-    if taille == 0: return False, "Bougie doji (pas de signal)"
-
+def detecter_reaction_ote(df, zone, tendance):
+    last = df.iloc[-2]  # Bougie FERMÉE
+    prev = df.iloc[-3]
+    px   = last['close']
+    dans = zone["ote_bas"] <= px <= zone["ote_haut"]
+    pdans= zone["ote_bas"] <= prev['close'] <= zone["ote_haut"]
+    if not (dans or pdans): return False, "Hors zone OTE"
+    corps   = abs(last['close']-last['open'])
+    taille  = last['high']-last['low']
+    meche_h = last['high']-max(last['open'],last['close'])
+    meche_b = min(last['open'],last['close'])-last['low']
+    if taille == 0: return False, "Bougie doji"
     if tendance == "BEAR":
-        # Cherche un signal baissier dans la zone
-        engulfing = (prev['close'] > prev['open'] and
-                     last['close'] < last['open'] and
-                     last['close'] < prev['open'] and corps > 0)
-        pin_bar   = meche_h > corps * 2.0
-        rejet     = last['close'] < last['open'] and corps > taille * 0.4
-
-        if engulfing: return True, "🕯️ Engulfing Baissier (bougie fermée)"
-        if pin_bar:   return True, "📍 Pin Bar Baissier (bougie fermée)"
-        if rejet:     return True, "📉 Rejet Baissier confirmé"
-
-    else:  # BULL
-        engulfing = (prev['close'] < prev['open'] and
-                     last['close'] > last['open'] and
-                     last['close'] > prev['open'] and corps > 0)
-        pin_bar   = meche_b > corps * 2.0
-        rejet     = last['close'] > last['open'] and corps > taille * 0.4
-
-        if engulfing: return True, "🕯️ Engulfing Haussier (bougie fermée)"
-        if pin_bar:   return True, "📍 Pin Bar Haussier (bougie fermée)"
-        if rejet:     return True, "📈 Rejet Haussier confirmé"
-
-    return False, "Pas de réaction nette en OTE"
-
-
-def verifier_invalidation(df, zone_ote, tendance):
-    """
-    ✅ FIX ERREUR 10 — Invalidation automatique du signal.
-    
-    Si la bougie actuelle a FERMÉ AU-DELÀ du swing high/low
-    (c'est-à-dire au-dessus de SL) → signal invalidé.
-    """
-    px_actuel = df['close'].iloc[-1]
-    sl = zone_ote["sl"]
-
-    if tendance == "BEAR" and px_actuel > sl:
-        return True, f"⚠️ Prix au-dessus du SL ({sl:.3f}) — Signal INVALIDÉ"
-    if tendance == "BULL" and px_actuel < sl:
-        return True, f"⚠️ Prix en dessous du SL ({sl:.3f}) — Signal INVALIDÉ"
-    return False, ""
-
+        if prev['close']>prev['open'] and last['close']<last['open'] and last['close']<prev['open']:
+            return True,"🕯️ Engulfing Baissier (bougie fermée)"
+        if meche_h > corps*2.0: return True,"📍 Pin Bar Baissier (bougie fermée)"
+        if last['close']<last['open'] and corps>taille*0.4: return True,"📉 Rejet Baissier confirmé"
+    else:
+        if prev['close']<prev['open'] and last['close']>last['open'] and last['close']>prev['open']:
+            return True,"🕯️ Engulfing Haussier (bougie fermée)"
+        if meche_b > corps*2.0: return True,"📍 Pin Bar Haussier (bougie fermée)"
+        if last['close']>last['open'] and corps>taille*0.4: return True,"📈 Rejet Haussier confirmé"
+    return False,"Pas de réaction nette"
 
 def analyser_kasper_complet(symbole):
-    """
-    Moteur Kasper OTE complet — 6 étapes de la vidéo + 2 fixes.
-    """
-    candles_m5 = obtenir_donnees_deriv(symbole, 300)   # M5 pour OTE
-    candles_h1 = obtenir_donnees_deriv(symbole, 3600)  # H1 pour EMA Cloud
-
-    if not candles_m5 or not candles_h1: return None
-
+    c5 = obtenir_donnees_deriv(symbole, 300)
+    c1h= obtenir_donnees_deriv(symbole, 3600)
+    if not c5 or not c1h: return None
     try:
-        df_m5 = pd.DataFrame([{
-            'open':float(c['open']), 'close':float(c['close']),
-            'high':float(c['high']), 'low':float(c['low'])
-        } for c in candles_m5])
-
-        df_h1 = pd.DataFrame([{
-            'open':float(c['open']), 'close':float(c['close']),
-            'high':float(c['high']), 'low':float(c['low'])
-        } for c in candles_h1])
-
-        # ── Étape 1+2 : EMA Cloud H1 → Tendance ─────────────────────────
-        tendance, force = calculer_ema_cloud(df_h1)
-
-        # ── Étape 3 : Swing + Zone OTE ───────────────────────────────────
-        swing_h, swing_l = trouver_dernier_swing(df_m5, tendance)
-        diff = swing_h - swing_l
-
-        if diff < 0.3:  # Swing trop petit (moins de 30 pips)
-            return None
-
-        zone_ote = calculer_zone_ote(swing_h, swing_l, tendance)
-
-        # ── Vérification invalidation ─────────────────────────────────────
-        invalide, msg_inv = verifier_invalidation(df_m5, zone_ote, tendance)
-        if invalide: return None
-
-        # ── Étape 4 : Réaction OTE (sur bougie FERMÉE) ───────────────────
-        reaction_ok, reaction_msg = detecter_reaction_ote(df_m5, zone_ote, tendance)
-        if not reaction_ok: return None
-
-        # ── Calcul R/R réel ───────────────────────────────────────────────
-        px = df_m5['close'].iloc[-1]
-        risque     = abs(px - zone_ote["sl"])
-        recompense = abs(zone_ote["tp_15r"] - px)
-        rr         = round(recompense / risque, 2) if risque > 0 else 0
-
-        # ✅ FIX ERREUR 8 : Seuil R/R = 1.5 (pas 1.0 comme avant)
+        df5 = pd.DataFrame([{'open':float(c['open']),'close':float(c['close']),'high':float(c['high']),'low':float(c['low'])} for c in c5])
+        dfh = pd.DataFrame([{'open':float(c['open']),'close':float(c['close']),'high':float(c['high']),'low':float(c['low'])} for c in c1h])
+        tendance, force = calculer_ema_cloud(dfh)
+        sh, sl = trouver_dernier_swing(df5, tendance)
+        if (sh-sl) < 0.3: return None
+        zone = calculer_zone_ote(sh, sl, tendance)
+        px = df5['close'].iloc[-1]
+        # Invalidation si prix au-delà du SL
+        if tendance=="BEAR" and px > zone["sl"]: return None
+        if tendance=="BULL" and px < zone["sl"]: return None
+        react, msg_r = detecter_reaction_ote(df5, zone, tendance)
+        if not react: return None
+        risque = abs(px-zone["sl"])
+        recomp = abs(zone["tp_15r"]-px)
+        rr = round(recomp/risque,2) if risque>0 else 0
         if rr < 1.5: return None
-
-        action = "🟢 ACHAT (BUY)" if tendance == "BULL" else "🔴 VENTE (SELL)"
-
         return {
-            "action":       action,
-            "tendance":     tendance,
-            "force":        force,
-            "msg":          reaction_msg,
-            "swing_h":      round(swing_h, 3),
-            "swing_l":      round(swing_l, 3),
-            "zone":         zone_ote,
-            "sl":           zone_ote["sl"],
-            "tp_1r":        zone_ote["tp_1r"],
-            "tp":           zone_ote["tp_15r"],
-            "rr":           rr,
-            "px":           round(px, 3),
-            "killzone":     nom_killzone()
+            "action":   "🟢 ACHAT (BUY)" if tendance=="BULL" else "🔴 VENTE (SELL)",
+            "tendance": tendance, "force":force, "msg":msg_r,
+            "sh":round(sh,3), "sl_swing":round(sl,3),
+            "zone":zone, "sl":zone["sl"], "tp1":zone["tp_1r"],
+            "tp":zone["tp_15r"], "rr":rr, "px":round(px,3),
+            "kz":nom_killzone()
         }
-
     except Exception as e:
-        print(f"[Kasper] ⚠️ {symbole}: {e}", flush=True)
-        return None
-
+        print(f"[Kasper/{symbole}] {e}", flush=True)
+    return None
 
 # ==========================================
 # NETTOYAGE TRADES BLOQUÉS
@@ -447,11 +428,11 @@ def nettoyer_trades_bloques():
     now = time.time()
     for uid in list(trades_en_cours.keys()):
         t = trades_en_cours[uid]
-        if now - t.get('timestamp', now) > t.get('duree', 300) + 120:
+        if now - t.get('ts', now) > t.get('dur',300)+120:
             del trades_en_cours[uid]
 
 # ==========================================
-# SCANNER AUTOMATIQUE
+# SCANNER AUTOMATIQUE — V34
 # ==========================================
 
 def scanner_marche_auto():
@@ -459,49 +440,36 @@ def scanner_marche_auto():
         try:
             time.sleep(30)
             nettoyer_trades_bloques()
-
-            # Pas de scan hors killzone (économise les ressources)
             if not dans_killzone():
-                time.sleep(60)
-                continue
+                time.sleep(60); continue
 
             libres = [u for u in utilisateurs_actifs if est_autorise(u) and u not in trades_en_cours]
             if not libres: continue
 
+            # ── Scan MT5 : Indices + Commodités + Synthétiques ───────────
             for paire in ELITE_PAIRS_MT5 + FOREX_PAIRS:
-                statut, _ = est_symbole_autorise(paire)
+                statut,_ = est_symbole_autorise(paire)
                 if statut != "AUTORISE": continue
 
                 cle = f"{paire}_KASPER"
-                if cle in derniere_alerte_auto and time.time()-derniere_alerte_auto[cle] < 300:
-                    continue
+                if cle in derniere_alerte_auto and time.time()-derniere_alerte_auto[cle]<300: continue
 
                 res = analyser_kasper_complet(paire)
                 if not res: continue
 
                 px = obtenir_prix_actuel_deriv(paire) or res['px']
-
                 signaux_cache[cle] = {
-                    'time':    time.time(),
-                    'action':  res['action'],
-                    'conf':    95,
-                    'sc':      9.5,
-                    'mt5_sl':  res['sl'],
-                    'mt5_tp':  res['tp'],
-                    'mt5_tp1': res['tp_1r'],
-                    'mt5_rr':  res['rr'],
-                    'zone':    res['zone'],
-                    'swing_h': res['swing_h'],
-                    'swing_l': res['swing_l'],
-                    'force':   res['force'],
-                    'msg':     res['msg'],
-                    'killzone':res['killzone'],
-                    'dur':     300
+                    'time':time.time(), 'action':res['action'], 'sc':9.5,
+                    'mt5_sl':res['sl'], 'mt5_tp':res['tp'], 'mt5_tp1':res['tp1'],
+                    'mt5_rr':res['rr'], 'zone':res['zone'],
+                    'sh':res['sh'], 'sl_swing':res['sl_swing'],
+                    'force':res['force'], 'msg':res['msg'], 'kz':res['kz'], 'dur':300
                 }
                 derniere_alerte_auto[cle] = time.time()
 
-                nom_a  = "🥇 GOLD" if paire=="XAUUSD" else f"{paire[:3]}/{paire[3:]}"
-                dir_ic = "🟢 BUY" if "BUY" in res['action'] else "🔴 SELL"
+                nom  = NOMS_AFFICHAGE.get(paire, f"{paire[:3]}/{paire[3:]}")
+                dir_ = "🟢 BUY" if "BUY" in res['action'] else "🔴 SELL"
+                z    = res['zone']
 
                 for uid in libres:
                     pf = plateforme_trading.get(uid,"MT5")
@@ -509,17 +477,18 @@ def scanner_marche_auto():
                     if pf=="POCKET" and paire not in FOREX_PAIRS:     continue
 
                     markup = InlineKeyboardMarkup().add(
-                        InlineKeyboardButton(f"⚡ Copier signal {nom_a}", callback_data=f"set_{paire}")
+                        InlineKeyboardButton(f"⚡ Copier signal {nom}", callback_data=f"set_{paire}")
                     )
-                    msg = (
-                        f"🎯 **KASPER OTE — {nom_a}** {dir_ic}\n"
+                    txt = (
+                        f"🎯 **KASPER OTE — {nom}** {dir_}\n"
                         f"☁️ EMA Cloud : `{res['force']}`\n"
                         f"📍 {res['msg']}\n"
-                        f"🔑 {res['killzone']}\n"
-                        f"⚖️ R/R : `{res['rr']}R` | Zone : `{res['zone']['ote_bas']:.3f}` → `{res['zone']['ote_haut']:.3f}`\n"
-                        f"_90 secondes pour agir_"
+                        f"🔑 {res['kz']}\n"
+                        f"🟡 Zone OTE : `{z['ote_bas']:.3f}` → `{z['ote_haut']:.3f}`\n"
+                        f"⚖️ R/R : `{res['rr']}R`\n"
+                        f"_90s pour agir_"
                     )
-                    try: bot.send_message(uid, msg, reply_markup=markup, parse_mode="Markdown")
+                    try: bot.send_message(uid, txt, reply_markup=markup, parse_mode="Markdown")
                     except: pass
 
         except Exception as e:
@@ -542,22 +511,24 @@ def obtenir_clavier(uid):
 @bot.message_handler(commands=['start'])
 def bienvenue(message):
     uid = message.chat.id
-    if not est_autorise(uid): return bot.send_message(uid,"🔒 Accès restreint.")
+    if not est_autorise(uid): return bot.send_message(uid,"🔒 Accès restreint. Utilise /vip VOTRE-CLÉ pour activer.")
     utilisateurs_actifs.add(uid)
     plateforme_trading.setdefault(uid,"MT5")
     kz = "🟢 ACTIVE" if dans_killzone() else "🔴 INACTIVE"
-    texte = f"""🏴‍☠️ **TERMINAL PRIME V33 FIXED — KASPER OTE** 🔥
-──────────────────
-✅ EMA Cloud H1 (72/89/180/200) — Fidèle à la vidéo
-✅ Fibonacci OTE 0.618-0.786 sur vrais swings pivots
-✅ Réaction sur bougie FERMÉE (pas en cours)
-✅ TP calculé en 1.5R réel (distance SL × 1.5)
-✅ Seuil R/R minimum : 1.5 (pas 1.0)
-✅ GBPUSD ajouté en mode Pocket
-✅ Invalidation automatique si prix dépasse SL
-──────────────────
-⏰ **Killzone :** {kz}"""
-    bot.send_message(uid, texte, reply_markup=obtenir_clavier(uid), parse_mode="Markdown")
+    bot.send_message(uid,
+        f"🏴‍☠️ **TERMINAL PRIME V34** 🔥\n"
+        f"──────────────────\n"
+        f"✅ **Nouveaux actifs MT5 :**\n"
+        f"   📈 S&P 500 | 💹 NASDAQ 100 | 🇩🇪 DAX\n"
+        f"   🥇 Gold | 🥈 Argent | 🛢 Pétrole\n"
+        f"   🔥 Synthétiques V10→V100\n"
+        f"──────────────────\n"
+        f"✅ **Keygen corrigé** — /keygen 1s / 2s / 1m / 3m / 6m / 1a / vie\n"
+        f"✅ **Moteur Kasper OTE** — EMA Cloud + Fibonacci 0.618-0.786\n"
+        f"✅ **Killzones** — Londres & New York uniquement\n"
+        f"──────────────────\n"
+        f"⏰ **Killzone actuelle :** {kz}",
+        reply_markup=obtenir_clavier(uid), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text.startswith("🏦 BROKER:") or m.text.startswith("📈 BROKER:"))
 def toggle_pf(message):
@@ -565,10 +536,10 @@ def toggle_pf(message):
     if not est_autorise(uid): return
     if plateforme_trading.get(uid,"MT5")=="POCKET":
         plateforme_trading[uid]="MT5"
-        bot.send_message(uid,"📈 **MT5 ACTIVÉ** — Gold & Synthétiques", reply_markup=obtenir_clavier(uid), parse_mode="Markdown")
+        bot.send_message(uid,"📈 **MT5 ACTIVÉ**\nIndices + Gold + Argent + Pétrole + Synthétiques",reply_markup=obtenir_clavier(uid),parse_mode="Markdown")
     else:
         plateforme_trading[uid]="POCKET"
-        bot.send_message(uid,"🏦 **POCKET ACTIVÉ** — Forex Binaire", reply_markup=obtenir_clavier(uid), parse_mode="Markdown")
+        bot.send_message(uid,"🏦 **POCKET ACTIVÉ**\nForex Binaire",reply_markup=obtenir_clavier(uid),parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text=="⏰ HEURES DE TRADING")
 def horaires(message):
@@ -578,27 +549,40 @@ def horaires(message):
         f"🇬🇧 **Londres :** 07:00 – 10:00 GMT\n"
         f"🇺🇸 **New York :** 12:00 – 15:00 GMT\n\n"
         f"⏰ **Statut actuel :** {kz}\n\n"
-        f"_Le scanner est automatiquement désactivé hors de ces fenêtres._",
+        f"_Le scanner est désactivé hors de ces fenêtres._",
         parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text in ["📊 CHOISIR UNE CIBLE","📊 CHOISIR UNE CIBLE ELITE"])
 def devises(message):
     uid = message.chat.id
     if not est_autorise(uid): return
-    pf = plateforme_trading.get(uid,"MT5")
+    pf  = plateforme_trading.get(uid,"MT5")
     markup = InlineKeyboardMarkup(row_width=3)
-    if pf=="MT5":
+
+    if pf == "MT5":
+        # ── Indices boursiers (NOUVEAU) ───────────────────────────────────
+        markup.add(
+            InlineKeyboardButton("📈 S&P 500",    callback_data="set_SP500"),
+            InlineKeyboardButton("💹 NASDAQ 100", callback_data="set_US100"),
+            InlineKeyboardButton("🇩🇪 DAX",       callback_data="set_DAX")
+        )
+        # ── Commodités ────────────────────────────────────────────────────
         markup.add(
             InlineKeyboardButton("🥇 GOLD",    callback_data="set_XAUUSD"),
             InlineKeyboardButton("🥈 ARGENT",  callback_data="set_XAGUSD"),
             InlineKeyboardButton("🛢 PÉTROLE", callback_data="set_USOUSD")
         )
+        # ── Synthétiques ──────────────────────────────────────────────────
         markup.add(
-            InlineKeyboardButton("🔥 V75",  callback_data="set_V75"),
-            InlineKeyboardButton("💥 V100", callback_data="set_V100"),
-            InlineKeyboardButton("⚡ V50",  callback_data="set_V50")
+            InlineKeyboardButton("🔥 V10",  callback_data="set_V10"),
+            InlineKeyboardButton("🔥 V25",  callback_data="set_V25"),
+            InlineKeyboardButton("🔥 V50",  callback_data="set_V50")
         )
-        bot.send_message(uid,"🎯 **Sélectionne ta cible MT5 :**", reply_markup=markup, parse_mode="Markdown")
+        markup.add(
+            InlineKeyboardButton("⚡ V75",  callback_data="set_V75"),
+            InlineKeyboardButton("💥 V100", callback_data="set_V100")
+        )
+        bot.send_message(uid,"🎯 **Sélectionne ta cible MT5 :**",reply_markup=markup,parse_mode="Markdown")
     else:
         markup.add(
             InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="set_EURUSD"),
@@ -615,7 +599,7 @@ def devises(message):
             InlineKeyboardButton("🇨🇦 CAD/JPY", callback_data="set_CADJPY"),
             InlineKeyboardButton("🇪🇺 EUR/AUD", callback_data="set_EURAUD")
         )
-        bot.send_message(uid,"🎯 **Sélectionne ta cible Pocket Forex :**", reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(uid,"🎯 **Sélectionne ta cible Pocket Forex :**",reply_markup=markup,parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text=="🚀 LANCER L'ANALYSE")
 def lancer(message):
@@ -631,7 +615,7 @@ def lancer(message):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
 def save_devise(call):
-    uid  = call.message.chat.id
+    uid   = call.message.chat.id
     if not est_autorise(uid): return
     nettoyer_trades_bloques()
     if uid in trades_en_cours:
@@ -647,103 +631,109 @@ def save_devise(call):
     try: bot.delete_message(uid, call.message.message_id)
     except: pass
 
-    # Signal expiré (90 secondes max)
     if not cache or (time.time()-cache['time']) > 90:
         return bot.send_message(uid,
-            f"⏱️ **Signal OTE expiré sur {actif}**\n"
-            "La zone OTE a peut-être été invalidée. Attends la prochaine alerte.",
+            f"⏱️ **Signal OTE expiré sur {NOMS_AFFICHAGE.get(actif,actif)}**\n"
+            "La zone a peut-être bougé. Attends la prochaine alerte du radar.",
             parse_mode="Markdown")
 
-    px  = obtenir_prix_actuel_deriv(actif) or cache.get('mt5_sl', 0)
-    nom = "🥇 GOLD" if actif=="XAUUSD" else f"{actif[:3]}/{actif[3:]}"
-    z   = cache.get('zone', {})
-    dir_aff = "🟢 BUY MARKET" if "BUY" in cache['action'] else "🔴 SELL MARKET"
+    px   = obtenir_prix_actuel_deriv(actif) or 0
+    nom  = NOMS_AFFICHAGE.get(actif, f"{actif[:3]}/{actif[3:]}" if len(actif)>4 else actif)
+    z    = cache.get('zone',{})
+    dir_ = "🟢 BUY MARKET" if "BUY" in cache['action'] else "🔴 SELL MARKET"
 
-    signal = f"""🎯 **KASPER SNIPER — {nom}**
-━━━━━━━━━━━━━━━━━━━━━━
-{dir_aff}
-☁️ EMA Cloud : `{cache.get('force','—')}`
-🔑 {cache.get('killzone','—')}
-━━━━━━━━━━━━━━━━━━━━━━
-📍 **Swing High :** `{cache.get('swing_h', 0):.3f}`
-📍 **Swing Low  :** `{cache.get('swing_l', 0):.3f}`
-━━━━━━━━━━━━━━━━━━━━━━
-🟡 **Zone OTE (0.618–0.786) :**
-   `{z.get('ote_bas',0):.3f}` → `{z.get('ote_haut',0):.3f}`
-💰 **Prix actuel :** `{px:.3f}`
-━━━━━━━━━━━━━━━━━━━━━━
-🛑 **STOP LOSS :** `{cache['mt5_sl']:.3f}`
-🎯 **TP 1R     :** `{cache['mt5_tp1']:.3f}`
-🚀 **TP 1.5R   :** `{cache['mt5_tp']:.3f}`
-⚖️ **Ratio R/R :** `{cache['mt5_rr']:.2f}R`
-━━━━━━━━━━━━━━━━━━━━━━
-{cache.get('msg','—')}
-⚠️ _Gestion : 1% du capital max par trade_"""
+    # Format prix adapté (indices = 0 décimales, forex = 5)
+    if actif in INDEX_PAIRS:
+        fmt = ".0f"
+    elif actif in COMMODITY_PAIRS:
+        fmt = ".2f"
+    else:
+        fmt = ".5f"
 
+    signal = (
+        f"🎯 **KASPER SNIPER — {nom}**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{dir_}\n"
+        f"☁️ EMA Cloud : `{cache.get('force','—')}`\n"
+        f"🔑 {cache.get('kz','—')}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📍 Swing High : `{cache.get('sh',0):{fmt}}`\n"
+        f"📍 Swing Low  : `{cache.get('sl_swing',0):{fmt}}`\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🟡 **Zone OTE (0.618–0.786) :**\n"
+        f"   `{z.get('ote_bas',0):{fmt}}` → `{z.get('ote_haut',0):{fmt}}`\n"
+        f"💰 **Prix actuel :** `{px:{fmt}}`\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🛑 **STOP LOSS :**  `{cache['mt5_sl']:{fmt}}`\n"
+        f"🎯 **TP 1R     :**  `{cache['mt5_tp1']:{fmt}}`\n"
+        f"🚀 **TP 1.5R   :**  `{cache['mt5_tp']:{fmt}}`\n"
+        f"⚖️ **R/R       :**  `{cache['mt5_rr']:.2f}R`\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{cache.get('msg','—')}\n"
+        f"⚠️ _Gestion : 1% du capital max_"
+    )
     bot.send_message(uid, signal, parse_mode="Markdown")
 
-# ==========================================
+# ──────────────────────────────────────────
 # COMMANDE /kasper — Analyse manuelle
-# ==========================================
+# ──────────────────────────────────────────
 
 @bot.message_handler(commands=['kasper'])
 def cmd_kasper(message):
     uid = message.chat.id
     if not est_autorise(uid): return
     parts   = message.text.split()
-    symbole = parts[1].upper() if len(parts) > 1 else "XAUUSD"
+    symbole = parts[1].upper() if len(parts)>1 else "XAUUSD"
     if symbole not in ALL_PAIRS:
-        return bot.send_message(uid,"❌ Symbole non reconnu.")
-    msg_obj = bot.send_message(uid, f"🔍 *Analyse Kasper OTE sur {symbole}...*", parse_mode="Markdown")
+        return bot.send_message(uid,"❌ Symbole non reconnu.\nEx: /kasper XAUUSD | /kasper SP500 | /kasper EURUSD")
+    msg_obj = bot.send_message(uid,f"🔍 _Analyse Kasper OTE sur {NOMS_AFFICHAGE.get(symbole,symbole)}..._",parse_mode="Markdown")
     res = analyser_kasper_complet(symbole)
+    nom = NOMS_AFFICHAGE.get(symbole, symbole)
+    if actif in INDEX_PAIRS:   fmt = ".0f"
+    elif actif in COMMODITY_PAIRS: fmt = ".2f"
+    else: fmt = ".5f"
     if not res:
-        candles_h1 = obtenir_donnees_deriv(symbole, 3600)
-        candles_m5 = obtenir_donnees_deriv(symbole, 300)
-        if candles_h1 and candles_m5:
-            df_h1 = pd.DataFrame([{'open':float(c['open']),'close':float(c['close']),'high':float(c['high']),'low':float(c['low'])} for c in candles_h1])
-            df_m5 = pd.DataFrame([{'open':float(c['open']),'close':float(c['close']),'high':float(c['high']),'low':float(c['low'])} for c in candles_m5])
-            tendance, force = calculer_ema_cloud(df_h1)
-            swing_h, swing_l = trouver_dernier_swing(df_m5, tendance)
-            zone = calculer_zone_ote(swing_h, swing_l, tendance)
-            px = df_m5['close'].iloc[-1]
+        # Affichage de la zone sans signal confirmé
+        c5  = obtenir_donnees_deriv(symbole,300)
+        c1h = obtenir_donnees_deriv(symbole,3600)
+        if c5 and c1h:
+            df5 = pd.DataFrame([{'open':float(c['open']),'close':float(c['close']),'high':float(c['high']),'low':float(c['low'])} for c in c5])
+            dfh = pd.DataFrame([{'open':float(c['open']),'close':float(c['close']),'high':float(c['high']),'low':float(c['low'])} for c in c1h])
+            t,f = calculer_ema_cloud(dfh)
+            sh,sl = trouver_dernier_swing(df5,t)
+            z = calculer_zone_ote(sh,sl,t)
+            px = df5['close'].iloc[-1]
             kz = "🟢 ACTIVE" if dans_killzone() else "🔴 INACTIVE"
-            texte = (
-                f"👁️ **KASPER OTE — {symbole}**\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"☁️ EMA Cloud H1 : `{force}` ({'🟢 BULL' if tendance=='BULL' else '🔴 BEAR'})\n"
-                f"📍 Swing High : `{swing_h:.3f}` | Low : `{swing_l:.3f}`\n"
-                f"🟡 **Zone OTE :** `{zone['ote_bas']:.3f}` → `{zone['ote_haut']:.3f}`\n"
-                f"💰 Prix actuel : `{px:.3f}`\n"
-                f"🛑 SL : `{zone['sl']:.3f}` | 🚀 TP 1.5R : `{zone['tp_15r']:.3f}`\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"⏳ En attente d'une réaction dans la zone\n"
-                f"⏰ Killzone : {kz}"
-            )
+            texte=(f"👁️ **KASPER OTE — {nom}**\n━━━━━━━━━━━━━━━━━━━━━━\n"
+                   f"☁️ EMA Cloud H1 : `{f}` ({'🟢 BULL' if t=='BULL' else '🔴 BEAR'})\n"
+                   f"📍 Swing H/L : `{sh:{fmt}}` / `{sl:{fmt}}`\n"
+                   f"🟡 Zone OTE : `{z['ote_bas']:{fmt}}` → `{z['ote_haut']:{fmt}}`\n"
+                   f"💰 Prix actuel : `{px:{fmt}}`\n"
+                   f"🛑 SL : `{z['sl']:{fmt}}` | 🚀 TP 1.5R : `{z['tp_15r']:{fmt}}`\n"
+                   f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                   f"⏳ En attente d'une réaction dans la zone\n"
+                   f"⏰ Killzone : {kz}")
         else:
-            texte = "⚠️ Données indisponibles pour cette paire."
-        bot.edit_message_text(texte, uid, msg_obj.message_id, parse_mode="Markdown")
-        return
-    z    = res['zone']
-    kz   = "🟢 ACTIVE" if dans_killzone() else "🔴 INACTIVE"
-    texte = (
-        f"🎯 **KASPER OTE — {symbole}**\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"{'🟢 BUY' if res['tendance']=='BULL' else '🔴 SELL'} | Score ≈ 9.5/10\n"
-        f"☁️ EMA Cloud : `{res['force']}`\n"
-        f"🔑 {res['killzone']}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📍 Swing High : `{res['swing_h']:.3f}` | Low : `{res['swing_l']:.3f}`\n"
-        f"🟡 Zone OTE : `{z['ote_bas']:.3f}` → `{z['ote_haut']:.3f}`\n"
-        f"💰 Prix : `{res['px']:.3f}`\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🛑 SL : `{res['sl']:.3f}`\n"
-        f"🎯 TP 1R : `{res['tp_1r']:.3f}`\n"
-        f"🚀 TP 1.5R : `{res['tp']:.3f}`\n"
-        f"⚖️ R/R : `{res['rr']}R`\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"{res['msg']}"
-    )
-    bot.edit_message_text(texte, uid, msg_obj.message_id, parse_mode="Markdown")
+            texte = "⚠️ Données indisponibles. Réessaie dans quelques secondes."
+        return bot.edit_message_text(texte,uid,msg_obj.message_id,parse_mode="Markdown")
+
+    z   = res['zone']
+    kz_ = "🟢 ACTIVE" if dans_killzone() else "🔴 INACTIVE"
+    texte=(f"🎯 **KASPER OTE — {nom}**\n━━━━━━━━━━━━━━━━━━━━━━\n"
+           f"{'🟢 BUY' if res['tendance']=='BULL' else '🔴 SELL'}\n"
+           f"☁️ EMA Cloud : `{res['force']}`  | ⏰ {kz_}\n"
+           f"━━━━━━━━━━━━━━━━━━━━━━\n"
+           f"📍 Swing H : `{res['sh']:{fmt}}` | L : `{res['sl_swing']:{fmt}}`\n"
+           f"🟡 Zone OTE : `{z['ote_bas']:{fmt}}` → `{z['ote_haut']:{fmt}}`\n"
+           f"💰 Prix : `{res['px']:{fmt}}`\n"
+           f"━━━━━━━━━━━━━━━━━━━━━━\n"
+           f"🛑 SL : `{res['sl']:{fmt}}`\n"
+           f"🎯 TP 1R : `{res['tp1']:{fmt}}`\n"
+           f"🚀 TP 1.5R : `{res['tp']:{fmt}}`\n"
+           f"⚖️ R/R : `{res['rr']}R`\n"
+           f"━━━━━━━━━━━━━━━━━━━━━━\n"
+           f"{res['msg']}")
+    bot.edit_message_text(texte,uid,msg_obj.message_id,parse_mode="Markdown")
 
 # ==========================================
 # LANCEMENT
@@ -752,5 +742,5 @@ def cmd_kasper(message):
 if __name__=="__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
-    print("⬛ TERMINAL PRIME V33 FIXED — Démarré.", flush=True)
+    print("⬛ TERMINAL PRIME V34 — Démarré.", flush=True)
     bot.infinity_polling()
