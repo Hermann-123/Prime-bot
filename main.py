@@ -1,5 +1,4 @@
 import os
-import sys
 import datetime
 import random
 import time
@@ -18,19 +17,19 @@ from threading import Thread
 # CONFIGURATION
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAFVH_ktKZWm01D5-jJ60O7TQPWHOxcOkuM"
+TELEGRAM_TOKEN = "8658287331:AAG3DlTuc-j42-RU_X61THLo8Fb0FvyAI-Q"
 bot            = telebot.TeleBot(TELEGRAM_TOKEN)
 ADMIN_ID       = 5968288964
 CAPITAL_ACTUEL = 40650
 FMP_API_KEY    = os.environ.get("FMP_API_KEY", "D0srw6sB3otYTc00UdBE9otPIbhkKV8X")
 
 # ==========================================
-# LISTES DE PAIRES — V34.1
+# LISTES DE PAIRES — V34
 # ==========================================
 
 SYNTHETIC_PAIRS = ["V10","V25","V50","V75","V100"]
 
-# ✅ Indices boursiers MT5 ajoutés
+# ✅ NOUVEAU : Indices boursiers MT5 ajoutés
 INDEX_PAIRS     = ["SP500","US100","DAX"]
 
 COMMODITY_PAIRS = ["XAUUSD","XAGUSD","USOUSD"]  # Gold, Argent, Pétrole
@@ -72,12 +71,12 @@ stats_journee          = {'ITM': 0, 'OTM': 0}
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Terminal Prime V34.1 (Killzone Asiatique ajoutée)"
+def home(): return "Terminal Prime V34 (Indices + Keygen Fix)"
 def run():   app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 def keep_alive(): Thread(target=run, daemon=True).start()
 
 # ==========================================
-# KEYGEN CORRIGÉ — Gestion d'erreur complète
+# ✅ KEYGEN CORRIGÉ — Gestion d'erreur complète
 # ==========================================
 
 DUREES_VALIDES = {
@@ -92,11 +91,16 @@ DUREES_VALIDES = {
 
 @bot.message_handler(commands=['keygen'])
 def generer_cle(message):
+    """
+    ✅ FIX KEYGEN : Gestion d'erreur complète + message d'aide si mauvais argument.
+    Usage : /keygen 1s | 2s | 1m | 3m | 6m | 1a | vie | <nombre_jours>
+    """
     if message.chat.id != ADMIN_ID:
-        return  
+        return  # Silencieux pour les non-admins
 
     parts = message.text.strip().split()
 
+    # ── Pas d'argument → afficher l'aide ─────────────────────────────────
     if len(parts) < 2:
         aide = (
             "⚙️ **GÉNÉRATEUR DE CLÉS VIP**\n"
@@ -116,9 +120,11 @@ def generer_cle(message):
 
     arg = parts[1].lower().strip()
 
+    # ── Argument reconnu dans le dictionnaire ────────────────────────────
     if arg in DUREES_VALIDES:
         jours, label = DUREES_VALIDES[arg]
     else:
+        # ── Essai comme nombre de jours ──────────────────────────────────
         try:
             jours = int(arg)
             if jours <= 0:
@@ -129,6 +135,7 @@ def generer_cle(message):
                 )
             label = f"{jours} jours"
         except ValueError:
+            # ── Argument complètement invalide ───────────────────────────
             valides = " | ".join(DUREES_VALIDES.keys())
             return bot.send_message(
                 message.chat.id,
@@ -138,6 +145,7 @@ def generer_cle(message):
                 parse_mode="Markdown"
             )
 
+    # ── Génération de la clé ──────────────────────────────────────────────
     cle = "VIP-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=10))
     cles_generees[cle] = jours
 
@@ -182,6 +190,7 @@ def activer_vip(message):
 
 @bot.message_handler(commands=['abonnes'])
 def lister_abonnes(message):
+    """Commande admin : voir tous les abonnés actifs."""
     if message.chat.id != ADMIN_ID: return
     if not utilisateurs_autorises:
         return bot.send_message(message.chat.id, "Aucun abonné actif.")
@@ -202,6 +211,7 @@ def lister_abonnes(message):
 
 @bot.message_handler(commands=['cles'])
 def lister_cles(message):
+    """Commande admin : voir les clés en attente d'activation."""
     if message.chat.id != ADMIN_ID: return
     if not cles_generees:
         return bot.send_message(message.chat.id, "Aucune clé en attente.")
@@ -223,40 +233,84 @@ def est_autorise(uid):
     return False
 
 # ==========================================
-# ✅ KILLZONES MISES À JOUR (ASIE INCLUSE)
+# KILLZONES
 # ==========================================
 
-def dans_killzone():
+# Paires autorisées par session (ICT Killzones)
+PAIRES_SESSION_ASIE    = ["AUDJPY","CADJPY","CHFJPY","USDJPY","EURJPY",
+                           "AUDUSD","AUDCAD","XAUUSD","XAGUSD"]
+PAIRES_SESSION_LONDRES = ["EURUSD","GBPUSD","EURCHF","USDCHF","CADCHF",
+                           "EURJPY","EURAUD","XAUUSD","XAGUSD","USOUSD","DAX"]
+PAIRES_SESSION_NY      = ["EURUSD","GBPUSD","USDCAD","USDCHF","AUDUSD",
+                           "XAUUSD","XAGUSD","USOUSD","SP500","US100"]
+
+def get_session_active():
+    """Retourne la session active et les paires autorisées."""
     h = datetime.datetime.utcnow().hour + datetime.datetime.utcnow().minute/60.0
-    # 🇯🇵 Asie: 00:00-04:00 | 🇬🇧 Londres: 07:00-10:00 | 🇺🇸 NY: 12:00-15:00
-    return (0.0 <= h <= 4.0) or (7.0 <= h <= 10.0) or (12.0 <= h <= 15.0)
+    # Session Asiatique : 00h00 → 08h00 GMT
+    if 0.0 <= h < 8.0:
+        return "ASIE", PAIRES_SESSION_ASIE
+    # Chevauchement Asie/Londres : 07h-08h déjà inclus dans Asie et Londres
+    # Session Londonienne : 07h00 → 10h00 GMT
+    if 7.0 <= h <= 10.0:
+        return "LONDRES", PAIRES_SESSION_LONDRES
+    # Session New York : 12h00 → 15h00 GMT
+    if 12.0 <= h <= 15.0:
+        return "NEW_YORK", PAIRES_SESSION_NY
+    return None, []
+
+def dans_killzone():
+    session, _ = get_session_active()
+    return session is not None
 
 def nom_killzone():
     h = datetime.datetime.utcnow().hour + datetime.datetime.utcnow().minute/60.0
-    if 0.0  <= h <= 4.0:  return "🇯🇵 Asian Killzone"
-    if 7.0  <= h <= 10.0: return "🇬🇧 London Killzone"
-    if 12.0 <= h <= 15.0: return "🇺🇸 New York Killzone"
+    if 0.0  <= h <  8.0:  return "🌏 Asian Killzone (00h-08h)"
+    if 7.0  <= h <= 10.0: return "🇬🇧 London Killzone (07h-10h)"
+    if 12.0 <= h <= 15.0: return "🇺🇸 New York Killzone (12h-15h)"
     return "⏳ Hors session"
 
 def est_symbole_autorise(symbole):
+    # Synthétiques : toujours actifs (24h/24, 7j/7)
     if symbole in SYNTHETIC_PAIRS: return "AUTORISE", ""
+
     now = datetime.datetime.utcnow()
     j   = now.weekday()
     h   = now.hour + now.minute/60.0
     weekend = (j==4 and h>=21) or j==5 or (j==6 and h<21)
+
     if weekend:
         return ("AUTORISE","") if symbole in CRYPTO_PAIRS else ("BLOCAGE_TOTAL","Week-end")
     if symbole in CRYPTO_PAIRS: return "BLOCAGE_TOTAL","Cryptos semaine"
-    if not dans_killzone(): return "HORS_SESSION","🔒 Hors Killzone"
-    return "AUTORISE", ""
+
+    # Vérifier si le symbole est actif dans la session en cours
+    session, paires_session = get_session_active()
+
+    if session is None:
+        return "HORS_SESSION", f"🔒 Hors Killzone (prochaine session à 00h ou 07h GMT)"
+
+    if symbole in paires_session:
+        return "AUTORISE", ""
+
+    # Indices boursiers : seulement Londres et NY
+    if symbole in INDEX_PAIRS:
+        if session in ("LONDRES","NEW_YORK"): return "AUTORISE", ""
+        return "HORS_SESSION", f"📊 Indices inactifs en session {session}"
+
+    return "HORS_SESSION", f"🔒 {symbole} inactif en session {session}"
 
 # ==========================================
 # WEBSOCKET DERIV — PREFIXES
 # ==========================================
 
 def prefixer_symbole(s):
+    """
+    ✅ Préfixes Deriv corrects pour chaque type d'actif.
+    Indices boursiers = frx + symbole sur Deriv.
+    """
     if s in SYNTHETIC_PAIRS: return f"R_{s.replace('V','')}"
     if s in CRYPTO_PAIRS:    return f"cry{s}"
+    # Indices et Commodités et Forex → préfixe frx
     return f"frx{s}"
 
 def obtenir_donnees_deriv(symbole_brut, granularite=300):
@@ -350,7 +404,7 @@ def calculer_zone_ote(sh, sl, tendance):
             "tp_1r":round(tp1,5),"tp_15r":round(tp15,5)}
 
 def detecter_reaction_ote(df, zone, tendance):
-    last = df.iloc[-2]  
+    last = df.iloc[-2]  # Bougie FERMÉE
     prev = df.iloc[-3]
     px   = last['close']
     dans = zone["ote_bas"] <= px <= zone["ote_haut"]
@@ -385,7 +439,7 @@ def analyser_kasper_complet(symbole):
         if (sh-sl) < 0.3: return None
         zone = calculer_zone_ote(sh, sl, tendance)
         px = df5['close'].iloc[-1]
-        
+        # Invalidation si prix au-delà du SL
         if tendance=="BEAR" and px > zone["sl"]: return None
         if tendance=="BULL" and px < zone["sl"]: return None
         react, msg_r = detecter_reaction_ote(df5, zone, tendance)
@@ -418,7 +472,7 @@ def nettoyer_trades_bloques():
             del trades_en_cours[uid]
 
 # ==========================================
-# SCANNER AUTOMATIQUE
+# SCANNER AUTOMATIQUE — V34
 # ==========================================
 
 def scanner_marche_auto():
@@ -427,11 +481,13 @@ def scanner_marche_auto():
             time.sleep(30)
             nettoyer_trades_bloques()
             if not dans_killzone():
-                time.sleep(60); continue
+                time.sleep(60)
+                continue
 
             libres = [u for u in utilisateurs_actifs if est_autorise(u) and u not in trades_en_cours]
             if not libres: continue
 
+            # ── Scan MT5 : Indices + Commodités + Synthétiques ───────────
             for paire in ELITE_PAIRS_MT5 + FOREX_PAIRS:
                 statut,_ = est_symbole_autorise(paire)
                 if statut != "AUTORISE": continue
@@ -500,9 +556,8 @@ def bienvenue(message):
     utilisateurs_actifs.add(uid)
     plateforme_trading.setdefault(uid,"MT5")
     kz = "🟢 ACTIVE" if dans_killzone() else "🔴 INACTIVE"
-    
     bot.send_message(uid,
-        f"🏴‍☠️ **TERMINAL PRIME V34.1** 🔥\n"
+        f"🏴‍☠️ **TERMINAL PRIME V34** 🔥\n"
         f"──────────────────\n"
         f"✅ **Nouveaux actifs MT5 :**\n"
         f"   📈 S&P 500 | 💹 NASDAQ 100 | 🇩🇪 DAX\n"
@@ -511,7 +566,7 @@ def bienvenue(message):
         f"──────────────────\n"
         f"✅ **Keygen corrigé** — /keygen 1s / 2s / 1m / 3m / 6m / 1a / vie\n"
         f"✅ **Moteur Kasper OTE** — EMA Cloud + Fibonacci 0.618-0.786\n"
-        f"✅ **Killzones** — Asie, Londres & New York\n"
+        f"✅ **3 Killzones** — Asie (00h-08h) | Londres (07h-10h) | NY (12h-15h)\n"
         f"──────────────────\n"
         f"⏰ **Killzone actuelle :** {kz}",
         reply_markup=obtenir_clavier(uid), parse_mode="Markdown")
@@ -532,11 +587,11 @@ def horaires(message):
     kz = "🟢 EN COURS" if dans_killzone() else "🔴 INACTIVE"
     bot.send_message(message.chat.id,
         f"🕒 **KILLZONES KASPER OTE**\n\n"
-        f"🇯🇵 **Asie :** 00:00 – 04:00 GMT\n"
-        f"🇬🇧 **Londres :** 07:00 – 10:00 GMT\n"
+        f"🌏 **Asie     :** 00:00 – 08:00 GMT\n"
+        f"🇬🇧 **Londres  :** 07:00 – 10:00 GMT\n"
         f"🇺🇸 **New York :** 12:00 – 15:00 GMT\n\n"
         f"⏰ **Statut actuel :** {kz}\n\n"
-        f"_Le scanner est désactivé hors de ces fenêtres._",
+        f"_Le scanner suit les paires adaptées à chaque session._",
         parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text in ["📊 CHOISIR UNE CIBLE","📊 CHOISIR UNE CIBLE ELITE"])
@@ -547,16 +602,19 @@ def devises(message):
     markup = InlineKeyboardMarkup(row_width=3)
 
     if pf == "MT5":
+        # ── Indices boursiers (NOUVEAU) ───────────────────────────────────
         markup.add(
             InlineKeyboardButton("📈 S&P 500",    callback_data="set_SP500"),
             InlineKeyboardButton("💹 NASDAQ 100", callback_data="set_US100"),
             InlineKeyboardButton("🇩🇪 DAX",       callback_data="set_DAX")
         )
+        # ── Commodités ────────────────────────────────────────────────────
         markup.add(
             InlineKeyboardButton("🥇 GOLD",    callback_data="set_XAUUSD"),
             InlineKeyboardButton("🥈 ARGENT",  callback_data="set_XAGUSD"),
             InlineKeyboardButton("🛢 PÉTROLE", callback_data="set_USOUSD")
         )
+        # ── Synthétiques ──────────────────────────────────────────────────
         markup.add(
             InlineKeyboardButton("🔥 V10",  callback_data="set_V10"),
             InlineKeyboardButton("🔥 V25",  callback_data="set_V25"),
@@ -626,6 +684,7 @@ def save_devise(call):
     z    = cache.get('zone',{})
     dir_ = "🟢 BUY MARKET" if "BUY" in cache['action'] else "🔴 SELL MARKET"
 
+    # Format prix adapté (indices = 0 décimales, forex = 5)
     if actif in INDEX_PAIRS:
         fmt = ".0f"
     elif actif in COMMODITY_PAIRS:
@@ -647,10 +706,10 @@ def save_devise(call):
         f"   `{z.get('ote_bas',0):{fmt}}` → `{z.get('ote_haut',0):{fmt}}`\n"
         f"💰 **Prix actuel :** `{px:{fmt}}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🛑 **STOP LOSS :** `{cache['mt5_sl']:{fmt}}`\n"
-        f"🎯 **TP 1R     :** `{cache['mt5_tp1']:{fmt}}`\n"
-        f"🚀 **TP 1.5R   :** `{cache['mt5_tp']:{fmt}}`\n"
-        f"⚖️ **R/R       :** `{cache['mt5_rr']:.2f}R`\n"
+        f"🛑 **STOP LOSS :**  `{cache['mt5_sl']:{fmt}}`\n"
+        f"🎯 **TP 1R     :**  `{cache['mt5_tp1']:{fmt}}`\n"
+        f"🚀 **TP 1.5R   :**  `{cache['mt5_tp']:{fmt}}`\n"
+        f"⚖️ **R/R       :**  `{cache['mt5_rr']:.2f}R`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{cache.get('msg','—')}\n"
         f"⚠️ _Gestion : 1% du capital max_"
@@ -672,12 +731,11 @@ def cmd_kasper(message):
     msg_obj = bot.send_message(uid,f"🔍 _Analyse Kasper OTE sur {NOMS_AFFICHAGE.get(symbole,symbole)}..._",parse_mode="Markdown")
     res = analyser_kasper_complet(symbole)
     nom = NOMS_AFFICHAGE.get(symbole, symbole)
-    
-    if symbole in INDEX_PAIRS:   fmt = ".0f"
-    elif symbole in COMMODITY_PAIRS: fmt = ".2f"
+    if actif in INDEX_PAIRS:   fmt = ".0f"
+    elif actif in COMMODITY_PAIRS: fmt = ".2f"
     else: fmt = ".5f"
-    
     if not res:
+        # Affichage de la zone sans signal confirmé
         c5  = obtenir_donnees_deriv(symbole,300)
         c1h = obtenir_donnees_deriv(symbole,3600)
         if c5 and c1h:
@@ -726,5 +784,5 @@ def cmd_kasper(message):
 if __name__=="__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
-    print("⬛ TERMINAL PRIME V34.1 — Démarré.", flush=True)
+    print("⬛ TERMINAL PRIME V34 — Démarré.", flush=True)
     bot.infinity_polling()
