@@ -17,14 +17,14 @@ from threading import Thread
 # CONFIGURATION
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAG3DlTuc-j42-RU_X61THLo8Fb0FvyAI-Q"
+TELEGRAM_TOKEN = "8658287331:AAGNP-p5FG1JNd5DE-lHjYxq7DJ4L_Z1p1w"
 bot            = telebot.TeleBot(TELEGRAM_TOKEN)
 ADMIN_ID       = 5968288964
 CAPITAL_ACTUEL = 40650
 FMP_API_KEY    = os.environ.get("FMP_API_KEY", "D0srw6sB3otYTc00UdBE9otPIbhkKV8X")
 
 # ==========================================
-# LISTES DE PAIRES — V34
+# LISTES DE PAIRES — V35
 # ==========================================
 
 SYNTHETIC_PAIRS = ["V10","V25","V50","V75","V100"]
@@ -38,9 +38,9 @@ FOREX_PAIRS     = ["AUDUSD","CADJPY","CHFJPY","EURJPY","USDCAD","AUDJPY",
                    "EURAUD","EURUSD","AUDCAD","USDCHF","CADCHF","EURCHF",
                    "USDJPY","GBPUSD"]
 
-# MT5 = Synthétiques + Indices + Commodités
-ELITE_PAIRS_MT5 = SYNTHETIC_PAIRS + INDEX_PAIRS + COMMODITY_PAIRS
-ALL_PAIRS       = SYNTHETIC_PAIRS + INDEX_PAIRS + COMMODITY_PAIRS + FOREX_PAIRS + CRYPTO_PAIRS
+# ✅ V35 : MT5 = UNIQUEMENT Indices + Commodités (Synthétiques retirés)
+ELITE_PAIRS_MT5 = INDEX_PAIRS + COMMODITY_PAIRS
+ALL_PAIRS       = INDEX_PAIRS + COMMODITY_PAIRS + FOREX_PAIRS + CRYPTO_PAIRS
 
 # Noms affichés dans Telegram
 NOMS_AFFICHAGE = {
@@ -71,7 +71,7 @@ stats_journee          = {'ITM': 0, 'OTM': 0}
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Terminal Prime V34 (Indices + Keygen Fix)"
+def home(): return "Terminal Prime V35 (Elite MT5 : Gold/Argent/Petrole/SP500/NASDAQ/DAX)"
 def run():   app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 def keep_alive(): Thread(target=run, daemon=True).start()
 
@@ -472,7 +472,7 @@ def nettoyer_trades_bloques():
             del trades_en_cours[uid]
 
 # ==========================================
-# SCANNER AUTOMATIQUE — V34
+# SCANNER AUTOMATIQUE — V35
 # ==========================================
 
 def scanner_marche_auto():
@@ -487,7 +487,7 @@ def scanner_marche_auto():
             libres = [u for u in utilisateurs_actifs if est_autorise(u) and u not in trades_en_cours]
             if not libres: continue
 
-            # ── Scan MT5 : Indices + Commodités + Synthétiques ───────────
+            # ── Scan MT5 : Indices + Commodités (Synthétiques retirés V35) ──
             for paire in ELITE_PAIRS_MT5 + FOREX_PAIRS:
                 statut,_ = est_symbole_autorise(paire)
                 if statut != "AUTORISE": continue
@@ -557,12 +557,11 @@ def bienvenue(message):
     plateforme_trading.setdefault(uid,"MT5")
     kz = "🟢 ACTIVE" if dans_killzone() else "🔴 INACTIVE"
     bot.send_message(uid,
-        f"🏴‍☠️ **TERMINAL PRIME V34** 🔥\n"
+        f"🏴‍☠️ **TERMINAL PRIME V35** 🔥\n"
         f"──────────────────\n"
-        f"✅ **Nouveaux actifs MT5 :**\n"
+        f"✅ **Actifs MT5 (Focus Élite) :**\n"
         f"   📈 S&P 500 | 💹 NASDAQ 100 | 🇩🇪 DAX\n"
         f"   🥇 Gold | 🥈 Argent | 🛢 Pétrole\n"
-        f"   🔥 Synthétiques V10→V100\n"
         f"──────────────────\n"
         f"✅ **Keygen corrigé** — /keygen 1s / 2s / 1m / 3m / 6m / 1a / vie\n"
         f"✅ **Moteur Kasper OTE** — EMA Cloud + Fibonacci 0.618-0.786\n"
@@ -577,7 +576,7 @@ def toggle_pf(message):
     if not est_autorise(uid): return
     if plateforme_trading.get(uid,"MT5")=="POCKET":
         plateforme_trading[uid]="MT5"
-        bot.send_message(uid,"📈 **MT5 ACTIVÉ**\nIndices + Gold + Argent + Pétrole + Synthétiques",reply_markup=obtenir_clavier(uid),parse_mode="Markdown")
+        bot.send_message(uid,"📈 **MT5 ACTIVÉ**\n🥇 Gold | 🥈 Argent | 🛢 Pétrole | 📈 S&P500 | 💹 NASDAQ | 🇩🇪 DAX",reply_markup=obtenir_clavier(uid),parse_mode="Markdown")
     else:
         plateforme_trading[uid]="POCKET"
         bot.send_message(uid,"🏦 **POCKET ACTIVÉ**\nForex Binaire",reply_markup=obtenir_clavier(uid),parse_mode="Markdown")
@@ -613,16 +612,6 @@ def devises(message):
             InlineKeyboardButton("🥇 GOLD",    callback_data="set_XAUUSD"),
             InlineKeyboardButton("🥈 ARGENT",  callback_data="set_XAGUSD"),
             InlineKeyboardButton("🛢 PÉTROLE", callback_data="set_USOUSD")
-        )
-        # ── Synthétiques ──────────────────────────────────────────────────
-        markup.add(
-            InlineKeyboardButton("🔥 V10",  callback_data="set_V10"),
-            InlineKeyboardButton("🔥 V25",  callback_data="set_V25"),
-            InlineKeyboardButton("🔥 V50",  callback_data="set_V50")
-        )
-        markup.add(
-            InlineKeyboardButton("⚡ V75",  callback_data="set_V75"),
-            InlineKeyboardButton("💥 V100", callback_data="set_V100")
         )
         bot.send_message(uid,"🎯 **Sélectionne ta cible MT5 :**",reply_markup=markup,parse_mode="Markdown")
     else:
@@ -784,5 +773,5 @@ def cmd_kasper(message):
 if __name__=="__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
-    print("⬛ TERMINAL PRIME V34 — Démarré.", flush=True)
+    print("⬛ TERMINAL PRIME V35 — Démarré.", flush=True)
     bot.infinity_polling()
