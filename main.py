@@ -17,14 +17,14 @@ from threading import Thread
 # CONFIGURATION
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAEwUrjYc7UMsEkMZx4xAyV2JI-Rwu_0yW0"
+TELEGRAM_TOKEN = "8658287331:AAGTlIMDQhqRhT_JiJ-5woYgN3KlZFt9-hs"
 bot            = telebot.TeleBot(TELEGRAM_TOKEN)
 ADMIN_ID       = 5968288964
 CAPITAL_ACTUEL = 40650
 FMP_API_KEY    = os.environ.get("FMP_API_KEY", "D0srw6sB3otYTc00UdBE9otPIbhkKV8X")
 
 # ==========================================
-# LISTES DE PAIRES — V35
+# LISTES DE PAIRES — V35.1
 # ==========================================
 
 SYNTHETIC_PAIRS = ["V10","V25","V50","V75","V100"]
@@ -66,7 +66,7 @@ stats_journee          = {'ITM': 0, 'OTM': 0}
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Terminal Prime V35 (Elite MT5 : Gold/Argent/Petrole/SP500/NASDAQ/DAX)"
+def home(): return "Terminal Prime V35.1 (Elite MT5 : Gold/Argent/Petrole/SP500/NASDAQ/DAX)"
 def run():   app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 def keep_alive(): Thread(target=run, daemon=True).start()
 
@@ -143,7 +143,8 @@ def activer_vip(message):
     if cle not in cles_generees:
         return bot.send_message(cid, "❌ **Clé invalide, expirée ou déjà utilisée.**", parse_mode="Markdown")
     
-    jours = clles_generees.pop(cle)
+    # ✅ FIX V35.1 : Correction de la faute de frappe 'clles_generees' -> 'cles_generees'
+    jours = cles_generees.pop(cle)
     if jours == "LIFETIME":
         utilisateurs_autorises[cid] = "LIFETIME"
         txt = "À VIE 👑"
@@ -264,11 +265,10 @@ def est_symbole_autorise(symbole):
     return "HORS_SESSION", f"🔒 {symbole} inactif en session {session}"
 
 # ==========================================
-# WEBSOCKET DERIV — SYMBOLS MAPPING FIX
+# HYBRID DATA ENGINE (FMP REAL ASSETS / DERIV FALLBACK)
 # ==========================================
 
 def prefixer_symbole(s):
-    """ ✅ FIX MAP : Traduction exacte des indices pour le WS Deriv """
     mapping_specifique = {
         "SP500": "frxSPX",
         "US100": "frxNDAQ",
@@ -281,6 +281,32 @@ def prefixer_symbole(s):
     return f"frx{s}"
 
 def obtenir_donnees_deriv(symbole_brut, granularite=300):
+    # ✅ INTEGRATION FMP : Routage des actifs réels vers l'API de prix réels
+    if symbole_brut in ALL_PAIRS:
+        tf = "5min" if granularite == 300 else "1hour"
+        sym_fmp = "FOREX:XAUUSD" if symbole_brut == "XAUUSD" else (
+                  "FOREX:XAGUSD" if symbole_brut == "XAGUSD" else (
+                  "^SPX" if symbole_brut == "SP500" else (
+                  "^NDX" if symbole_brut == "US100" else (
+                  "^GDAXI" if symbole_brut == "DAX" else symbole_brut))))
+        try:
+            url = f"https://financialmodelingprep.com/api/v3/historical-chart/{tf}/{sym_fmp}?apikey={FMP_API_KEY}"
+            res = requests.get(url, timeout=5).json()
+            if isinstance(res, list) and len(res) > 0:
+                bougies = []
+                for b in reversed(res[:250]):
+                    bougies.append({
+                        "open": float(b["open"]),
+                        "high": float(b["high"]),
+                        "low": float(b["low"]),
+                        "close": float(b["close"]),
+                        "epoch": int(time.time())
+                    })
+                return bougies
+        except Exception as e:
+            print(f"[FMP Chart Error - {symbole_brut}] {e}", flush=True)
+
+    # Fallback ou Actifs Synthétiques sur le Flux Deriv
     sym = prefixer_symbole(symbole_brut)
     for _ in range(2):
         ws = None
@@ -298,6 +324,22 @@ def obtenir_donnees_deriv(symbole_brut, granularite=300):
     return None
 
 def obtenir_prix_actuel_deriv(symbole_brut):
+    # ✅ INTEGRATION FMP : Cotations réelles en direct (évite le décalage de prix sur l'or)
+    if symbole_brut in ALL_PAIRS:
+        sym_fmp = "FOREX:XAUUSD" if symbole_brut == "XAUUSD" else (
+                  "FOREX:XAGUSD" if symbole_brut == "XAGUSD" else (
+                  "^SPX" if symbole_brut == "SP500" else (
+                  "^NDX" if symbole_brut == "US100" else (
+                  "^GDAXI" if symbole_brut == "DAX" else symbole_brut))))
+        try:
+            url = f"https://financialmodelingprep.com/api/v3/quote/{sym_fmp}?apikey={FMP_API_KEY}"
+            res = requests.get(url, timeout=5).json()
+            if isinstance(res, list) and len(res) > 0:
+                return float(res[0]["price"])
+        except Exception as e:
+            print(f"[FMP Quote Error - {symbole_brut}] {e}", flush=True)
+
+    # Fallback Flux Deriv
     sym = prefixer_symbole(symbole_brut)
     for _ in range(2):
         ws = None
@@ -398,7 +440,7 @@ def analyser_kasper_complet(symbole):
         tendance, force = calculer_ema_cloud(dfh)
         sh, sl = trouver_dernier_swing(df5, tendance)
         
-        if sh <= sl: return None  # ✅ FIX FOREX : Remplacement de l'ancien check strict de 0.3 points
+        if sh <= sl: return None  
         
         zone = calculer_zone_ote(sh, sl, tendance)
         px = df5['close'].iloc[-1]
@@ -502,13 +544,13 @@ def bienvenue(message):
     plateforme_trading.setdefault(uid,"MT5")
     kz = "🟢 ACTIVE" if dans_killzone() else "🔴 INACTIVE"
     bot.send_message(uid,
-        f"🏴‍☠️ **TERMINAL PRIME V35** 🔥\n"
+        f"🏴‍☠️ **TERMINAL PRIME V35.1** 🔥\n"
         f"──────────────────\n"
         f"✅ **Actifs MT5 (Focus Élite) :**\n"
         f"   📈 S&P 500 | 💹 NASDAQ 100 | 🇩🇪 DAX\n"
         f"   🥇 Gold | 🥈 Argent | 🛢 Pétrole\n"
         f"──────────────────\n"
-        f"✅ **Moteur OTE corrigé** (Indices, Forex & Commodités fonctionnels)\n"
+        f"✅ **Moteur OTE corrigé** (Indices, Forex & Commodités couplés à l'API FMP)\n"
         f"⏰ **Killzone actuelle :** {kz}",
         reply_markup=obtenir_clavier(uid), parse_mode="Markdown")
 
@@ -613,7 +655,7 @@ def save_devise(call):
     bot.send_message(uid, signal, parse_mode="Markdown")
 
 # ==========================================
-# COMMANDE MANUAL /kasper — CONFIG FIXED
+# COMMANDE MANUAL /kasper
 # ==========================================
 
 @bot.message_handler(commands=['kasper'])
@@ -629,7 +671,6 @@ def cmd_kasper(message):
     res = analyser_kasper_complet(symbole)
     nom = NOMS_AFFICHAGE.get(symbole, symbole)
     
-    # ✅ FIX CODE : Remplacement de la variable non-définie 'actif' par 'symbole'
     fmt = ".0f" if symbole in INDEX_PAIRS else (".2f" if symbole in COMMODITY_PAIRS else ".5f")
     
     if not res:
@@ -641,7 +682,7 @@ def cmd_kasper(message):
             t,f = calculer_ema_cloud(dfh)
             sh,sl = trouver_dernier_swing(df5,t)
             z = calculer_zone_ote(sh,sl,t)
-            px = df5['close'].iloc[-1]
+            px = obtenir_prix_actuel_deriv(symbole) or df5['close'].iloc[-1]
             kz = "🟢 ACTIVE" if dans_killzone() else "🔴 INACTIVE"
             texte=(f"👁️ **KASPER OTE — {nom}**\n━━━━━━━━━━━━━━━━━━━━━━\n"
                    f"☁️ EMA Cloud H1 : `{f}` ({'🟢 BULL' if t=='BULL' else '🔴 BEAR'})\n"
@@ -681,5 +722,5 @@ def cmd_kasper(message):
 if __name__=="__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
-    print("⬛ TERMINAL PRIME V35 — Sécurisé et démarré.", flush=True)
+    print("⬛ TERMINAL PRIME V35.1 — Hybride FMP connecté et démarré.", flush=True)
     bot.infinity_polling()
