@@ -17,14 +17,14 @@ from threading import Thread
 # CONFIGURATION
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAFGW1gnfIdqMDwiUxMwYpBfUnNrIJ_3Ons"
+TELEGRAM_TOKEN = "8658287331:AAFkIWY0UHXzhdmSjD8urCifdRnw09ESRMA"
 bot            = telebot.TeleBot(TELEGRAM_TOKEN)
 ADMIN_ID       = 5968288964
 CAPITAL_ACTUEL = 40650
 FMP_API_KEY    = os.environ.get("FMP_API_KEY", "D0srw6sB3otYTc00UdBE9otPIbhkKV8X")
 
 # ==========================================
-# LISTES DE PAIRES — V35.2
+# LISTES DE PAIRES — V36.2 (Volatility Intégré)
 # ==========================================
 
 SYNTHETIC_PAIRS = ["V10","V25","V50","V75","V100"]
@@ -49,12 +49,13 @@ NOMS_AFFICHAGE = {
 # VARIABLES D'ÉTAT
 # ==========================================
 
-user_prefs           = {}
-plateforme_trading   = {}
-trades_en_cours      = {}
-utilisateurs_actifs  = set()
-derniere_alerte_auto = {}
-signaux_cache        = {}
+user_prefs             = {}
+plateforme_trading     = {}
+trades_en_cours        = {}
+utilisateurs_actifs    = set()
+derniere_alerte_auto   = {}
+signaux_cache          = {}
+SYNTHETIC_SCAN_ENABLED = False  # Bascule dynamique via /Volatility
 
 utilisateurs_autorises = {ADMIN_ID: "LIFETIME"}
 cles_generees          = {}
@@ -66,7 +67,7 @@ stats_journee          = {'ITM': 0, 'OTM': 0}
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Terminal Prime V35.2 (Elite MT5 : Gold/Argent/Petrole/SP500/NASDAQ/DAX)"
+def home(): return "Terminal Prime V36.2 (Hybrid Engine & Volatility Enabled)"
 def run():   app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 def keep_alive(): Thread(target=run, daemon=True).start()
 
@@ -194,6 +195,29 @@ def est_autorise(uid):
     return False
 
 # ==========================================
+# COMMANDES DE COMMUTATION DYNAMIQUES
+# ==========================================
+
+@bot.message_handler(commands=['Volatility', 'volatility'])
+def basculer_volatility(message):
+    global SYNTHETIC_SCAN_ENABLED
+    uid = message.chat.id
+    if not est_autorise(uid): return
+
+    SYNTHETIC_SCAN_ENABLED = not SYNTHETIC_SCAN_ENABLED
+    statut = "ACTIVÉ ✅ (Scan continu 24h/7j)" if SYNTHETIC_SCAN_ENABLED else "DÉSACTIVÉ ❌"
+    
+    msg = (
+        f"🔄 **CONFIGURATION DU RADAR D'ANALYSE**\n"
+        f"──────────────────\n"
+        f"Actifs : **Indices Volatility (V10 à V100)**\n"
+        f"Statut : **{statut}**\n"
+        f"──────────────────\n"
+        f"_Les stratégies Kasper OTE traitent désormais ces données._"
+    )
+    bot.send_message(uid, msg, parse_mode="Markdown")
+
+# ==========================================
 # KILLZONES & HORAIRES
 # ==========================================
 
@@ -241,8 +265,12 @@ def nom_killzone():
     return "⏳ Hors session"
 
 def est_symbole_autorise(symbole):
+    # Les indices de Volatilité tournent 24h/24 7j/7 et dépendent du switch d'état global
     if symbole in SYNTHETIC_PAIRS:
-        return "BLOCAGE_TOTAL", "Synthétiques désactivés en mode MT5 V35"
+        if SYNTHETIC_SCAN_ENABLED:
+            return "AUTORISE", ""
+        else:
+            return "BLOCAGE_TOTAL", "Indices Volatility désactivés (utilisez /Volatility)"
 
     now = datetime.datetime.utcnow()
     j   = now.weekday()
@@ -280,17 +308,17 @@ def prefixer_symbole(s):
     return f"frx{s}"
 
 def obtenir_donnees_deriv(symbole_brut, granularite=300):
-    # ✅ INTEGRATION FMP : Routage avec Table de Traduction (ETF) pour contourner le blocage gratuit
+    # Routage FMP pour les actifs réels énumérés dans ALL_PAIRS
     if symbole_brut in ALL_PAIRS:
         tf = "5min" if granularite == 300 else "1hour"
         
         mapping_fmp = {
             "XAUUSD": "FOREX:XAUUSD",
             "XAGUSD": "FOREX:XAGUSD",
-            "SP500": "SPY",      # S&P 500 ETF
-            "US100": "QQQ",      # NASDAQ ETF
-            "DAX": "EWG",        # DAX ETF
-            "USOUSD": "USO"      # Pétrole ETF
+            "SP500": "SPY",      
+            "US100": "QQQ",      
+            "DAX": "EWG",        
+            "USOUSD": "USO"      
         }
         sym_fmp = mapping_fmp.get(symbole_brut, symbole_brut)
         
@@ -311,7 +339,7 @@ def obtenir_donnees_deriv(symbole_brut, granularite=300):
         except Exception as e:
             print(f"[FMP Chart Error - {symbole_brut}] {e}", flush=True)
 
-    # Fallback Flux Deriv
+    # Fallback Flux Deriv (S'applique nativement aux SYNTHETIC_PAIRS)
     sym = prefixer_symbole(symbole_brut)
     for _ in range(2):
         ws = None
@@ -329,15 +357,15 @@ def obtenir_donnees_deriv(symbole_brut, granularite=300):
     return None
 
 def obtenir_prix_actuel_deriv(symbole_brut):
-    # ✅ INTEGRATION FMP : Cotations réelles avec Table de Traduction (ETF)
+    # Cotations réelles via FMP
     if symbole_brut in ALL_PAIRS:
         mapping_fmp = {
             "XAUUSD": "FOREX:XAUUSD",
             "XAGUSD": "FOREX:XAGUSD",
-            "SP500": "SPY",      # S&P 500 ETF
-            "US100": "QQQ",      # NASDAQ ETF
-            "DAX": "EWG",        # DAX ETF
-            "USOUSD": "USO"      # Pétrole ETF
+            "SP500": "SPY",      
+            "US100": "QQQ",      
+            "DAX": "EWG",        
+            "USOUSD": "USO"      
         }
         sym_fmp = mapping_fmp.get(symbole_brut, symbole_brut)
         
@@ -349,7 +377,7 @@ def obtenir_prix_actuel_deriv(symbole_brut):
         except Exception as e:
             print(f"[FMP Quote Error - {symbole_brut}] {e}", flush=True)
 
-    # Fallback Flux Deriv
+    # Fallback Flux Deriv (S'applique nativement aux SYNTHETIC_PAIRS)
     sym = prefixer_symbole(symbole_brut)
     for _ in range(2):
         ws = None
@@ -468,7 +496,7 @@ def analyser_kasper_complet(symbole):
             "sh":round(sh,5), "sl_swing":round(sl,5),
             "zone":zone, "sl":zone["sl"], "tp1":zone["tp_1r"],
             "tp":zone["tp_15r"], "rr":rr, "px":round(px,5),
-            "kz":nom_killzone()
+            "kz":nom_killzone() if symbole not in SYNTHETIC_PAIRS else "⏳ Synthétique (24/7 h24)"
         }
     except Exception as e:
         print(f"[Kasper/{symbole}] {e}", flush=True)
@@ -492,7 +520,8 @@ def scanner_marche_auto():
             libres = [u for u in utilisateurs_actifs if est_autorise(u) and u not in trades_en_cours]
             if not libres: continue
 
-            for paire in ELITE_PAIRS_MT5 + FOREX_PAIRS:
+            # Inclusion des SYNTHETIC_PAIRS dans la liste globale du scanner
+            for paire in ELITE_PAIRS_MT5 + FOREX_PAIRS + SYNTHETIC_PAIRS:
                 statut,_ = est_symbole_autorise(paire)
                 if statut != "AUTORISE": continue
 
@@ -517,7 +546,8 @@ def scanner_marche_auto():
 
                 for uid in libres:
                     pf = plateforme_trading.get(uid,"MT5")
-                    if pf=="MT5"    and paire not in ELITE_PAIRS_MT5: continue
+                    # Filtrage intelligent : MT5 prend l'élite et les synthétiques, Pocket prend le Forex
+                    if pf=="MT5"    and (paire not in ELITE_PAIRS_MT5 and paire not in SYNTHETIC_PAIRS): continue
                     if pf=="POCKET" and paire not in FOREX_PAIRS:     continue
 
                     markup = InlineKeyboardMarkup().add(InlineKeyboardButton(f"⚡ Copier signal {nom}", callback_data=f"set_{paire}"))
@@ -554,14 +584,15 @@ def bienvenue(message):
     plateforme_trading.setdefault(uid,"MT5")
     kz = "🟢 ACTIVE" if dans_killzone() else "🔴 INACTIVE"
     bot.send_message(uid,
-        f"🏴‍☠️ **TERMINAL PRIME V35.2** 🔥\n"
+        f"🏴‍☠️ **TERMINAL PRIME V36.2** 🔥\n"
         f"──────────────────\n"
-        f"✅ **Actifs MT5 (Focus Élite) :**\n"
+        f"✅ **Actifs MT5 (Focus Élite & Volatility) :**\n"
         f"   📈 S&P 500 | 💹 NASDAQ 100 | 🇩🇪 DAX\n"
         f"   🥇 Gold | 🥈 Argent | 🛢 Pétrole\n"
+        f"   ⚡ Volatility : V10, V25, V50, V75, V100 (/Volatility)\n"
         f"──────────────────\n"
-        f"✅ **Moteur OTE corrigé** (Indices, Forex & Commodités couplés à l'API FMP)\n"
-        f"⏰ **Killzone actuelle :** {kz}",
+        f"✅ **Moteur OTE Multi-Flux** (Indices, Forex & Commodités couplés à l'API FMP)\n"
+        f"⏰ **Killzone Forex actuelle :** {kz}",
         reply_markup=obtenir_clavier(uid), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text.startswith("🏦 BROKER:") or m.text.startswith("📈 BROKER:"))
@@ -570,7 +601,7 @@ def toggle_pf(message):
     if not est_autorise(uid): return
     if plateforme_trading.get(uid,"MT5")=="POCKET":
         plateforme_trading[uid]="MT5"
-        bot.send_message(uid,"📈 **MT5 ACTIVÉ**\n🥇 Gold | 🥈 Argent | 🛢 Pétrole | 📈 S&P500 | 💹 NASDAQ | 🇩🇪 DAX",reply_markup=obtenir_clavier(uid),parse_mode="Markdown")
+        bot.send_message(uid,"📈 **MT5 ACTIVÉ**\n🥇 Gold | 🥈 Argent | 🛢 Pétrole | 📈 S&P500 | 💹 NASDAQ | 🇩🇪 DAX | ⚡ Volatilités",reply_markup=obtenir_clavier(uid),parse_mode="Markdown")
     else:
         plateforme_trading[uid]="POCKET"
         bot.send_message(uid,"🏦 **POCKET ACTIVÉ**\nForex Binaire",reply_markup=obtenir_clavier(uid),parse_mode="Markdown")
@@ -583,7 +614,8 @@ def horaires(message):
         f"🌏 **Asie     :** 00:00 – 08:00 GMT\n"
         f"🇬🇧 **Londres  :** 07:00 – 10:00 GMT\n"
         f"🇺🇸 **New York :** 12:00 – 15:00 GMT\n\n"
-        f"⏰ **Statut actuel :** {kz}",
+        f"🔥 **Volatility (V10-V100) :** 🟢 Continu 24h/24 7j/7\n\n"
+        f"⏰ **Statut Forex :** {kz}",
         parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text in ["📊 CHOISIR UNE CIBLE","📊 CHOISIR UNE CIBLE ELITE"])
@@ -596,6 +628,12 @@ def devises(message):
     if pf == "MT5":
         markup.add(InlineKeyboardButton("📈 S&P 500", callback_data="set_SP500"), InlineKeyboardButton("💹 NASDAQ 100", callback_data="set_US100"), InlineKeyboardButton("🇩🇪 DAX", callback_data="set_DAX"))
         markup.add(InlineKeyboardButton("🥇 GOLD", callback_data="set_XAUUSD"), InlineKeyboardButton("🥈 ARGENT", callback_data="set_XAGUSD"), InlineKeyboardButton("🛢 PÉTROLE", callback_data="set_USOUSD"))
+        
+        # Injection dynamique des boutons de volatilité si activés globalement
+        if SYNTHETIC_SCAN_ENABLED:
+            markup.add(InlineKeyboardButton("🔥 V10", callback_data="set_V10"), InlineKeyboardButton("🔥 V25", callback_data="set_V25"), InlineKeyboardButton("🔥 V50", callback_data="set_V50"))
+            markup.add(InlineKeyboardButton("⚡ V75", callback_data="set_V75"), InlineKeyboardButton("💥 V100", callback_data="set_V100"))
+            
         bot.send_message(uid,"🎯 **Sélectionne ta cible MT5 :**",reply_markup=markup,parse_mode="Markdown")
     else:
         markup.add(InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="set_EURUSD"), InlineKeyboardButton("🇬🇧 GBP/USD", callback_data="set_GBPUSD"), InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY"))
@@ -639,7 +677,8 @@ def save_devise(call):
     z    = cache.get('zone',{})
     dir_ = "🟢 BUY MARKET" if "BUY" in cache['action'] else "🔴 SELL MARKET"
 
-    fmt = ".0f" if actif in INDEX_PAIRS else (".2f" if actif in COMMODITY_PAIRS else ".5f")
+    # Format de décimales adapté aux paires d'indices et de volatilité
+    fmt = ".0f" if actif in INDEX_PAIRS else (".2f" if (actif in COMMODITY_PAIRS or actif in SYNTHETIC_PAIRS) else ".5f")
 
     signal = (
         f"🎯 **KASPER SNIPER — {nom}**\n"
@@ -674,14 +713,20 @@ def cmd_kasper(message):
     if not est_autorise(uid): return
     parts   = message.text.split()
     symbole = parts[1].upper() if len(parts)>1 else "XAUUSD"
-    if symbole not in ALL_PAIRS:
-        return bot.send_message(uid,"❌ Symbole non reconnu.\nEx: /kasper XAUUSD | /kasper SP500")
     
+    # Prise en charge des SYNTHETIC_PAIRS dans la validation de saisie
+    if symbole not in ALL_PAIRS + SYNTHETIC_PAIRS:
+        return bot.send_message(uid,"❌ Symbole non reconnu.\nEx: /kasper XAUUSD | /kasper V75 | /kasper SP500")
+    
+    statut, raison = est_symbole_autorise(symbole)
+    if statut == "BLOCAGE_TOTAL":
+        return bot.send_message(uid, f"❌ **Analyse Impossible :** {raison}", parse_mode="Markdown")
+
     msg_obj = bot.send_message(uid,f"🔍 _Analyse Kasper OTE sur {NOMS_AFFICHAGE.get(symbole,symbole)}..._",parse_mode="Markdown")
     res = analyser_kasper_complet(symbole)
     nom = NOMS_AFFICHAGE.get(symbole, symbole)
     
-    fmt = ".0f" if symbole in INDEX_PAIRS else (".2f" if symbole in COMMODITY_PAIRS else ".5f")
+    fmt = ".0f" if symbole in INDEX_PAIRS else (".2f" if (symbole in COMMODITY_PAIRS or symbole in SYNTHETIC_PAIRS) else ".5f")
     
     if not res:
         c5  = obtenir_donnees_deriv(symbole,300)
@@ -694,6 +739,8 @@ def cmd_kasper(message):
             z = calculer_zone_ote(sh,sl,t)
             px = obtenir_prix_actuel_deriv(symbole) or df5['close'].iloc[-1]
             kz = "🟢 ACTIVE" if dans_killzone() else "🔴 INACTIVE"
+            if symbole in SYNTHETIC_PAIRS: kz = "🟢 Continu 24h/7j"
+            
             texte=(f"👁️ **KASPER OTE — {nom}**\n━━━━━━━━━━━━━━━━━━━━━━\n"
                    f"☁️ EMA Cloud H1 : `{f}` ({'🟢 BULL' if t=='BULL' else '🔴 BEAR'})\n"
                    f"📍 Swing H/L : `{sh:{fmt}}` / `{sl:{fmt}}`\n"
@@ -708,7 +755,7 @@ def cmd_kasper(message):
         return bot.edit_message_text(texte,uid,msg_obj.message_id,parse_mode="Markdown")
 
     z   = res['zone']
-    kz_ = "🟢 ACTIVE" if dans_killzone() else "🔴 INACTIVE"
+    kz_ = res['kz']
     texte=(f"🎯 **KASPER OTE — {nom}**\n━━━━━━━━━━━━━━━━━━━━━━\n"
            f"{'🟢 BUY' if res['tendance']=='BULL' else '🔴 SELL'}\n"
            f"☁️ EMA Cloud : `{res['force']}`  | ⏰ {kz_}\n"
@@ -732,5 +779,5 @@ def cmd_kasper(message):
 if __name__=="__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
-    print("⬛ TERMINAL PRIME V35.2 — Hybride FMP connecté et démarré.", flush=True)
+    print("⬛ TERMINAL PRIME V36.2 — Engine Hybride & Volatility opérationnels.", flush=True)
     bot.infinity_polling()
