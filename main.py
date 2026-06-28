@@ -33,7 +33,7 @@ from enum import Enum
 # CONFIGURATION
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAFiCzhzN0T5hwoc46mKN7kUx6Y1FTU415E"
+TELEGRAM_TOKEN = "8658287331:AAH-g5x2raGDziwZMReadzJtUT8VljE3c2A"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 ADMIN_ID = 5968288964
 CAPITAL_ACTUEL = 40650
@@ -1197,6 +1197,171 @@ def save_devise(call):
 # ==========================================
 # LANCEMENT
 # ==========================================
+
+
+# ==========================================
+# ✅ V39 NEW: STRATÉGIE 3 — ZONE TRADING
+# ==========================================
+
+def identifier_zone_consolidation(df, lookback=50):
+    """Identifier une zone de consolidation (range-bound)"""
+    df_recent = df.iloc[-lookback:] if len(df) > lookback else df
+    
+    recent_high = df_recent['high'].max()
+    recent_low = df_recent['low'].min()
+    
+    zone = {
+        'resistance': recent_high,
+        'support': recent_low,
+        'width': recent_high - recent_low
+    }
+    
+    rebond_count_up = 0
+    rebond_count_down = 0
+    
+    for i in range(len(df_recent)):
+        low = df_recent['low'].iloc[i]
+        high = df_recent['high'].iloc[i]
+        close = df_recent['close'].iloc[i]
+        
+        if low < zone['support'] * 1.002 and close > zone['support'] * 1.005:
+            rebond_count_up += 1
+        
+        if high > zone['resistance'] * 0.998 and close < zone['resistance'] * 0.995:
+            rebond_count_down += 1
+    
+    zone['rebond_count'] = rebond_count_up + rebond_count_down
+    
+    if zone['rebond_count'] < 3:
+        return None
+    
+    return zone
+
+def analyser_strategie_3_zone_trading(symbole):
+    """V39 NEW: Zone Trading Strategy"""
+    c4h = obtenir_donnees_deriv(symbole, 14400)  # 4H
+    c1h = obtenir_donnees_deriv(symbole, 3600)   # 1H
+    
+    if not c4h or not c1h:
+        return None
+    
+    try:
+        df4h = pd.DataFrame([{
+            'open': float(c['open']),
+            'close': float(c['close']),
+            'high': float(c['high']),
+            'low': float(c['low'])
+        } for c in c4h])
+        
+        df1h = pd.DataFrame([{
+            'open': float(c['open']),
+            'close': float(c['close']),
+            'high': float(c['high']),
+            'low': float(c['low'])
+        } for c in c1h])
+        
+        zone = identifier_zone_consolidation(df4h, lookback=50)
+        if not zone:
+            return None
+        
+        vol_zone = (df4h.iloc[-50:]['high'] - df4h.iloc[-50:]['low']).std()
+        vol_general = (df4h['high'] - df4h['low']).std()
+        
+        if vol_zone > vol_general * 0.7:
+            return None
+        
+        px_current = df4h['close'].iloc[-1]
+        zone_width = zone['resistance'] - zone['support']
+        
+        distance_from_support = px_current - zone['support']
+        distance_from_resistance = zone['resistance'] - px_current
+        
+        signal = None
+        direction = None
+        
+        if distance_from_support < zone_width * 0.2:
+            last = df1h.iloc[-2]
+            if last['low'] < zone['support'] * 1.002 and last['close'] > zone['support']:
+                signal = "BUY"
+                direction = "BULL"
+                sl = zone['support'] - (zone_width * 0.05)
+                tp = zone['resistance']
+        
+        elif distance_from_resistance < zone_width * 0.2:
+            last = df1h.iloc[-2]
+            if last['high'] > zone['resistance'] * 0.998 and last['close'] < zone['resistance']:
+                signal = "SELL"
+                direction = "BEAR"
+                sl = zone['resistance'] + (zone_width * 0.05)
+                tp = zone['support']
+        
+        if not signal:
+            return None
+        
+        risque = abs(px_current - sl)
+        recompense = abs(tp - px_current)
+        rr = round(recompense / risque, 2) if risque > 0 else 0
+        
+        if rr < 1.5:
+            return None
+        
+        try:
+            rsi = ta.momentum.RSIIndicator(close=df1h['close'], window=14).rsi()
+            rsi_current = rsi.iloc[-1]
+            
+            if direction == "BULL":
+                oscillateur_ok = rsi_current < 70 and rsi_current > 20
+            else:
+                oscillateur_ok = rsi_current > 30 and rsi_current < 80
+        except:
+            oscillateur_ok = False
+        
+        confiance = 50
+        if zone['rebond_count'] >= 5:
+            confiance += 15
+        elif zone['rebond_count'] >= 3:
+            confiance += 10
+        
+        if vol_zone / vol_general < 0.5:
+            confiance += 15
+        elif vol_zone / vol_general < 0.7:
+            confiance += 8
+        
+        if rr >= 2.0:
+            confiance += 15
+        elif rr >= 1.5:
+            confiance += 10
+        
+        if oscillateur_ok:
+            confiance += 10
+        
+        confiance = max(0, min(100, confiance))
+        
+        if confiance < 60:
+            return None
+        
+        return {
+            "action": "🟢 ACHAT (BUY)" if signal == "BUY" else "🔴 VENTE (SELL)",
+            "direction": direction,
+            "strategy": 3,
+            "confiance": confiance,
+            "zone_support": round(zone['support'], 5),
+            "zone_resistance": round(zone['resistance'], 5),
+            "zone_width": round(zone_width, 5),
+            "zone_rebonds": zone['rebond_count'],
+            "sl": round(sl, 5),
+            "tp": round(tp, 5),
+            "rr": rr,
+            "px": round(px_current, 5),
+            "vol_ratio": round(vol_zone / vol_general, 2)
+        }
+    except Exception as e:
+        print(f"[Zone Trading/{symbole}] {e}", flush=True)
+    
+    return None
+
+# V39: Variables d'état Stratégie 3
+signaux_strategie_3 = {}
 
 if __name__=="__main__":
     keep_alive()
