@@ -17,7 +17,7 @@ from threading import Thread
 # CONFIGURATION
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAFPh0Z1DXi9DN_cnVJ_WBtetoe0GI1ovwY"
+TELEGRAM_TOKEN = "8658287331:AAG-lPUvB_fwgVlQfZWzkDblGmqIspRCsHQ"
 bot            = telebot.TeleBot(TELEGRAM_TOKEN)
 ADMIN_ID       = 5968288964
 CAPITAL_ACTUEL = 40650
