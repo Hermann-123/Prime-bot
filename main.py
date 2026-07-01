@@ -40,7 +40,7 @@ from enum import Enum
 # CONFIGURATION
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAEoEXt-h73WXWeJZGfmXYLXakIyJF7F4IA"
+TELEGRAM_TOKEN = "8658287331:AAEdZNRBuPzt04B4vUvoo1M1_S5L1ixnNbY"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 ADMIN_ID = 5968288964
 CAPITAL_ACTUEL = 40650
@@ -149,7 +149,7 @@ def keep_alive():
     Thread(target=run, daemon=True).start()
 
 # ==========================================
-# UTILITAIRES PRIX (base V38)
+# UTILITAIRES PRIX (base V38 OPTIMISÉE)
 # ==========================================
 
 def prefixer_symbole(s):
@@ -168,7 +168,7 @@ def obtenir_donnees_deriv(symbole_brut, granularite=300):
         try:
             url = (f"https://financialmodelingprep.com/api/v3/historical-chart/"
                    f"{tf}/{sym_fmp}?apikey={FMP_API_KEY}")
-            res = requests.get(url, timeout=5).json()
+            res = requests.get(url, timeout=2.0).json()
             if isinstance(res, list) and len(res) > 0:
                 bougies = []
                 for b in reversed(res[:250]):
@@ -189,7 +189,7 @@ def obtenir_donnees_deriv(symbole_brut, granularite=300):
         ws = None
         try:
             ws = websocket.WebSocket()
-            ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=7)
+            ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=3.0)
             ws.send(json.dumps({"ticks_history": sym, "end": "latest",
                                 "count": 250, "style": "candles",
                                 "granularity": gran_real}))
@@ -200,15 +200,13 @@ def obtenir_donnees_deriv(symbole_brut, granularite=300):
         except:
             try: ws.close()
             except: pass
-            time.sleep(0.3)
+            time.sleep(0.1)
     return None
 
 def obtenir_donnees_h4(symbole):
-    """Récupère des données 4H en agrégeant 4x les bougies H1 si l'API ne supporte pas 14400 directement"""
     data = obtenir_donnees_deriv(symbole, 14400)
     if data and len(data) > 20:
         return data
-    # Fallback: agréger H1 par groupes de 4
     h1 = obtenir_donnees_deriv(symbole, 3600)
     if not h1 or len(h1) < 8:
         return None
@@ -229,7 +227,7 @@ def obtenir_prix_broker_realtime(symbole):
         mapping_fmp = {"XAUUSD":"FOREX:XAUUSD","XAGUSD":"FOREX:XAGUSD"}
         sym_fmp = mapping_fmp.get(symbole, symbole)
         url = f"https://financialmodelingprep.com/api/v3/quote/{sym_fmp}?apikey={FMP_API_KEY}"
-        res = requests.get(url, timeout=3).json()
+        res = requests.get(url, timeout=1.5).json()
         if isinstance(res, list) and len(res) > 0:
             prix = float(res[0]["price"])
             prix_broker[symbole] = {
@@ -246,7 +244,7 @@ def obtenir_prix_broker_realtime(symbole):
         ws = None
         try:
             ws = websocket.WebSocket()
-            ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=5)
+            ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=2.0)
             ws.send(json.dumps({"ticks": sym}))
             res = json.loads(ws.recv())
             ws.close()
@@ -258,13 +256,12 @@ def obtenir_prix_broker_realtime(symbole):
         except:
             try: ws.close()
             except: pass
-            time.sleep(0.5)
+            time.sleep(0.1)
     return None
 
 def valider_prix_avant_signal(symbole, prix_bot, tolerance=0.001):
     prix_real = obtenir_prix_broker_realtime(symbole)
     if not prix_real:
-        print(f"[Validation {symbole}] Impossible obtenir prix broker", flush=True)
         return False
     decalage = abs(prix_bot - prix_real) / prix_real
     if decalage > tolerance:
@@ -273,14 +270,13 @@ def valider_prix_avant_signal(symbole, prix_bot, tolerance=0.001):
     return True
 
 # ==========================================
-# ✅ V43 NEW: GESTION DU RISQUE PROFESSIONNELLE
+# RISK MANAGEMENT — CONFIGURATION GLOBALE
 # ==========================================
 
 def get_today_str():
     return datetime.datetime.utcnow().strftime("%Y-%m-%d")
 
 def init_daily_stats(uid):
-    """Initialise ou réinitialise les stats du jour si on a changé de date"""
     today = get_today_str()
     if uid not in daily_stats or daily_stats[uid]["date"] != today:
         daily_stats[uid] = {
@@ -293,14 +289,12 @@ def init_daily_stats(uid):
     return daily_stats[uid]
 
 def utilisateur_en_pause(uid):
-    """Vérifie si l'utilisateur est en pause anti-tilt"""
     stats = init_daily_stats(uid)
     if stats["paused_until"] and time.time() < stats["paused_until"]:
         return True, stats["paused_until"]
     return False, None
 
 def daily_loss_limit_atteinte(uid):
-    """Vérifie si la limite de perte journalière est atteinte"""
     stats = init_daily_stats(uid)
     limite = -(CAPITAL_ACTUEL * RISK_CONFIG["daily_loss_limit_pct"] / 100.0)
     return stats["pnl"] <= limite
@@ -310,13 +304,6 @@ def max_trades_jour_atteint(uid):
     return stats["trades"] >= RISK_CONFIG["max_trades_per_day"]
 
 def utilisateur_peut_trader(uid):
-    """
-    ✅ Circuit breaker complet:
-    - Limite de perte journalière
-    - Pause anti-tilt (pertes consécutives)
-    - Nombre max de trades par jour
-    Retourne (bool_peut_trader, raison_si_non)
-    """
     stats = init_daily_stats(uid)
 
     if daily_loss_limit_atteinte(uid):
@@ -338,22 +325,12 @@ def utilisateur_peut_trader(uid):
     return True, None
 
 def calculer_position_size(capital, risk_pct, prix_entree, prix_sl, symbole):
-    """
-    ✅ V43 NEW: Calcul RÉEL de la taille de position
-    Au lieu d'un montant fixe arbitraire, calcule selon:
-      - Le capital actuel
-      - Le % de risque accepté
-      - La distance réelle entre entrée et stop loss
-    Retourne le montant en argent risqué + un "lot factor" relatif pour affichage
-    """
     montant_risque = capital * (risk_pct / 100.0)
     distance_sl = abs(prix_entree - prix_sl)
 
     if distance_sl <= 0:
         return {"montant_risque": montant_risque, "lot_factor": 0, "distance_sl": 0}
 
-    # Lot factor = combien d'unités on peut se permettre pour respecter le risque
-    # (simplifié — sert de guide proportionnel, le lot exact dépend du broker/contract size)
     lot_factor = montant_risque / distance_sl
 
     return {
@@ -364,7 +341,6 @@ def calculer_position_size(capital, risk_pct, prix_entree, prix_sl, symbole):
     }
 
 def enregistrer_resultat_trade(uid, pnl, win):
-    """Met à jour les stats journalières + déclenche la pause anti-tilt si besoin"""
     stats = init_daily_stats(uid)
     stats["pnl"]    += pnl
     stats["trades"] += 1
@@ -383,7 +359,6 @@ def enregistrer_resultat_trade(uid, pnl, win):
     if pnl < stats["worst_trade"]:
         stats["worst_trade"] = pnl
 
-    # Déclenchement pause anti-tilt
     if stats["consecutive_losses"] >= RISK_CONFIG["max_consecutive_losses"]:
         stats["paused_until"] = time.time() + (RISK_CONFIG["pause_duration_minutes"] * 60)
         print(f"[Risk] {uid} EN PAUSE anti-tilt ({stats['consecutive_losses']} pertes consécutives)", flush=True)
@@ -391,21 +366,13 @@ def enregistrer_resultat_trade(uid, pnl, win):
     return stats
 
 # ==========================================
-# ✅ V43 NEW: PARTIAL TP 85% + BREAKEVEN + TRAILING STOP
-# (Technique exacte observée dans la Stratégie 4: "Prise de profits 85%
-#  puis Break Even")
+# PARTIAL TP 85% + BREAKEVEN + TRAILING STOP
 # ==========================================
 
 def create_trade_id():
     return "TRD-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
 def ouvrir_trade(uid, symbole, direction, entry_price, sl, tp1, tp_final, strategy, confiance, label="SIGNAL"):
-    """
-    Ouvre un trade avec gestion complète:
-      - Position sizing réel
-      - TP1 (objectif intermédiaire, 85% de la position)
-      - TP final (15% restant après passage en breakeven)
-    """
     trade_id = create_trade_id()
     sizing = calculer_position_size(CAPITAL_ACTUEL, RISK_CONFIG["risk_per_trade_pct"],
                                     entry_price, sl, symbole)
@@ -430,7 +397,6 @@ def ouvrir_trade(uid, symbole, direction, entry_price, sl, tp1, tp_final, strate
     return trade_id, sizing
 
 def fermer_trade_complet(uid, exit_price, win):
-    """Ferme totalement un trade et enregistre dans l'historique + stats journalières"""
     if uid not in trades_actifs:
         return None
     trade    = trades_actifs[uid]
@@ -438,22 +404,15 @@ def fermer_trade_complet(uid, exit_price, win):
 
     risque_initial = trade["sizing"]["montant_risque"]
 
-    # ✅ Si une fermeture partielle (85%) a déjà eu lieu, ce closing ne porte
-    # que sur les 15% restants — on doit donc proportionner le risque utilisé
-    # pour le calcul du P&L de cette portion finale, sinon on surestime le gain/perte.
     portion_restante = (1 - RISK_CONFIG["partial_tp_ratio"]) if trade.get("partial_closed") else 1.0
     risque_portion    = risque_initial * portion_restante
 
     if win:
-        # gain proportionnel à la distance parcourue vs distance de risque
         gain_ratio = abs(exit_price - trade["entry_price"]) / trade["sizing"]["distance_sl"] if trade["sizing"]["distance_sl"] > 0 else 1
         pnl_final = risque_portion * gain_ratio
     else:
         pnl_final = -risque_portion
 
-    # ✅ P&L TOTAL réel du trade = portion déjà sécurisée (85%) + portion finale (15%/100%)
-    # C'est cette valeur qui doit être affichée à l'utilisateur (historique, meilleur/pire trade),
-    # alors que pnl_final (seul) sert à incrémenter les compteurs journaliers sans double-compte.
     pnl_trade_total = trade.get("partial_pnl", 0.0) + pnl_final
 
     trade["state"]      = TradeState.TRADE_WIN if win else TradeState.TRADE_LOSS
@@ -472,7 +431,9 @@ def fermer_trade_complet(uid, exit_price, win):
     })
 
     pnl_total[uid] = pnl_total.get(uid, 0) + pnl_final
-    enregistrer_resultat_trade(uid, pnl_final, win, pnl_pour_bilan=pnl_trade_total)
+    
+    # FIX CORRECTION BUG 2: Retrait du paramètre non supporté pnl_pour_bilan pour éviter le plantage
+    enregistrer_resultat_trade(uid, pnl_final, win)
 
     del trades_actifs[uid]
     print(f"[Trade Closed] {uid}: {trade_id} PnL final={pnl_final:.2f} | "
@@ -481,10 +442,6 @@ def fermer_trade_complet(uid, exit_price, win):
             "win": win, "duration": duration_seconds}
 
 def fermer_trade_partiel(uid, exit_price):
-    """
-    ✅ V43 NEW: Ferme 85% de la position au TP1, déplace SL à breakeven pour les 15% restants
-    (Technique exacte de la Stratégie 4)
-    """
     if uid not in trades_actifs:
         return None
     trade = trades_actifs[uid]
@@ -501,7 +458,6 @@ def fermer_trade_partiel(uid, exit_price):
     trade["breakeven_active"] = True
     trade["state"]            = TradeState.TRADE_PARTIAL
 
-    # Déplacer le SL au point d'entrée (+ petit buffer pour couvrir les frais)
     buffer = trade["entry_price"] * RISK_CONFIG["breakeven_buffer_pct"]
     if trade["direction"] == "BUY":
         trade["sl"] = trade["entry_price"] + buffer
@@ -510,11 +466,6 @@ def fermer_trade_partiel(uid, exit_price):
 
     pnl_total[uid] = pnl_total.get(uid, 0) + pnl_partiel
 
-    # ✅ Important: le profit partiel doit aussi alimenter le P&L du jour,
-    # sinon le circuit breaker (limite de perte journalière) et le rapport
-    # quotidien sous-estiment fortement les gains (85% du trade serait ignoré).
-    # On ne touche pas au compteur de trades ni au win/loss ici car l'issue
-    # finale du trade (15% restant) n'est pas encore connue.
     stats = init_daily_stats(uid)
     stats["pnl"] += pnl_partiel
 
@@ -524,10 +475,6 @@ def fermer_trade_partiel(uid, exit_price):
     return {"pnl_partiel": round(pnl_partiel, 2), "nouveau_sl": trade["sl"]}
 
 def appliquer_trailing_stop(uid, prix_current):
-    """
-    ✅ V43 NEW: Trailing stop actif uniquement APRÈS le passage en breakeven (15% restants)
-    Sécurise les gains progressivement sur la portion qui continue de courir
-    """
     if uid not in trades_actifs:
         return False
     trade = trades_actifs[uid]
@@ -591,7 +538,6 @@ def nom_killzone():
     return "⏳ Hors session"
 
 def session_actuelle_v43():
-    """Sessions spécifiques à la Stratégie 4 (heures observées dans la vidéo, en UTC approx)"""
     h = datetime.datetime.utcnow().hour + datetime.datetime.utcnow().minute / 60.0
     if 1.0 <= h < 6.0:
         return "ASIAN_ACCUMULATION"
@@ -628,15 +574,10 @@ def est_symbole_autorise(symbole):
     return "HORS_SESSION", f"🔒 {symbole} inactif en {session}"
 
 # ==========================================
-# ✅ V43 NEW: ASIAN RANGE TRACKER
-# (mémorise le high/low de la session asiatique chaque jour, par paire)
+# ASIAN RANGE TRACKER
 # ==========================================
 
 def maj_asian_range(symbole):
-    """
-    Calcule et met à jour le high/low de la session asiatique (1h-6h UTC) du jour.
-    Utilisé pour détecter le BOS (Break of Structure) pendant Londres.
-    """
     today = get_today_str()
     cached = asian_range_cache.get(symbole)
     if cached and cached["date"] == today:
@@ -646,16 +587,12 @@ def maj_asian_range(symbole):
     if not c1h or len(c1h) < 10:
         return None
 
-    # Prendre les bougies H1 correspondant à la session asiatique (approximation:
-    # on prend une fenêtre de 6 dernières bougies H1 si on est en/après la session asiatique)
-    fenetre = c1h[-30:]  # ~30h de données disponibles, on filtre par heure si possible
+    fenetre = c1h[-30:]
     highs, lows = [], []
     for c in fenetre:
         highs.append(float(c["high"]))
         lows.append(float(c["low"]))
 
-    # Approximation robuste: on prend le high/low des 6 à 12 dernières bougies H1
-    # représentant la plage asiatique la plus récente
     sample = fenetre[-12:-6] if len(fenetre) >= 12 else fenetre[:max(1,len(fenetre)//2)]
     if not sample:
         sample = fenetre
@@ -669,11 +606,6 @@ def maj_asian_range(symbole):
     return result
 
 def detecter_bos_londres(symbole, asian_range):
-    """
-    Détecte si le prix a cassé (Break of Structure) le high ou le low de la
-    plage asiatique pendant la session de Londres → confirme la direction du jour.
-    Retourne "BULL", "BEAR" ou None
-    """
     if not asian_range:
         return None
     px = obtenir_prix_broker_realtime(symbole)
@@ -993,17 +925,10 @@ def analyser_zone_trading(symbole):
     return None
 
 # ==========================================
-# ✅ V43 NEW: STRATÉGIE 4 — BOUGIE PIVOT SESSION
-# (Order Block + Liquidity Sweep + Session Asie→Londres→NY)
+# STRATÉGIE 4 — BOUGIE PIVOT SESSION
 # ==========================================
 
 def trouver_bougie_pivot(df, tendance, lookback=30):
-    """
-    Identifie la "bougie pivot" (= Order Block ICT): dernière bougie de
-    direction CONTRAIRE à la tendance, juste avant un mouvement impulsif
-    dans le sens de la tendance. C'est la bougie qui forme la "base" de
-    l'expansion, comme expliqué dans la vidéo Stratégie 4.
-    """
     df_r = df.iloc[-lookback:] if len(df) > lookback else df
     if len(df_r) < 5:
         return None
@@ -1018,7 +943,6 @@ def trouver_bougie_pivot(df, tendance, lookback=30):
         corps_next   = bougie_next["close"] - bougie_next["open"]
 
         if tendance == "BULL":
-            # Pivot = bougie baissière (ou neutre) suivie d'une expansion haussière forte
             if corps_bougie <= 0 and corps_next > 0:
                 taille_next = abs(corps_next)
                 taille_pivot = bougie["high"] - bougie["low"]
@@ -1029,7 +953,6 @@ def trouver_bougie_pivot(df, tendance, lookback=30):
                         "open": float(bougie["open"]), "close": float(bougie["close"]),
                     }
         else:
-            # Pivot = bougie haussière (ou neutre) suivie d'une expansion baissière forte
             if corps_bougie >= 0 and corps_next < 0:
                 taille_next = abs(corps_next)
                 taille_pivot = bougie["high"] - bougie["low"]
@@ -1042,12 +965,6 @@ def trouver_bougie_pivot(df, tendance, lookback=30):
     return None
 
 def detecter_liquidity_sweep(df, pivot, tendance, lookback=15):
-    """
-    Vérifie qu'un balayage de liquidité (SSL/BSL) a eu lieu juste avant le
-    retour sur la bougie pivot: le prix doit avoir dépassé temporairement
-    un swing récent (mèche) avant de revenir dans la zone — signature
-    typique d'une manipulation Smart Money.
-    """
     df_r = df.iloc[-lookback:]
     if len(df_r) < 3:
         return False
@@ -1057,28 +974,12 @@ def detecter_liquidity_sweep(df, pivot, tendance, lookback=15):
     last        = df_r.iloc[-2]
 
     if tendance == "BULL":
-        # sweep sous le pivot (mèche basse au-delà du low du pivot) puis clôture au-dessus
         return last["low"] <= pivot["low"] * 1.0015 and last["close"] > pivot["low"]
     else:
         return last["high"] >= pivot["high"] * 0.9985 and last["close"] < pivot["high"]
 
 def analyser_bougie_pivot_session(symbole):
-    """
-    ✅ STRATÉGIE 4 — Bougie Pivot Session (déduite de l'analyse vidéo)
-
-    Étape 1: Identifier la bougie pivot H1 (base de l'expansion / Order Block)
-    Étape 2: Vérifier l'alignement multi-TF — bougie pivot M15 contenue dans la
-             zone H1 (top-down: H1/H4 = zone d'intérêt, M15/M5 = précision)
-    Étape 3: Construire le setup complet:
-             Zone (pivot) + Structure (BOS vs range asiatique) + Liquidité (sweep)
-             + Entrée/Stop/Target
-
-    Gestion: SL juste au-delà de la mèche extrême du pivot M15,
-             TP intermédiaire (zone opposée proche) + TP final (mesure étendue),
-             utilisés ensuite par le moteur de Partial TP 85%/Breakeven.
-    """
     c1h = obtenir_donnees_deriv(symbole, 3600)
-    c15 = obtenir_donnees_deriv(symbole, 900) if False else None  # 15min non garanti par API
     c5  = obtenir_donnees_deriv(symbole, 300)
     if not c1h or not c5:
         return None
@@ -1089,42 +990,33 @@ def analyser_bougie_pivot_session(symbole):
         df5 = pd.DataFrame([{"open":float(c["open"]),"close":float(c["close"]),
                               "high":float(c["high"]),"low":float(c["low"])} for c in c5])
 
-        # ── Étape: Structure — Range asiatique + BOS ────────────────────
         asian_range = maj_asian_range(symbole)
         bos = detecter_bos_londres(symbole, asian_range) if asian_range else None
 
-        # Tendance de référence: BOS si disponible, sinon EMA cloud H1
         if bos:
             tendance = bos
         else:
             tendance, _ = calculer_ema_cloud(dfh)
 
-        # ── Étape 1: Bougie Pivot H1 (zone d'intérêt) ───────────────────
         pivot_h1 = trouver_bougie_pivot(dfh, tendance, lookback=30)
         if not pivot_h1:
             return None
 
-        # ── Étape 2: Bougie Pivot M5 (précision, proxy de M15) ──────────
         pivot_m5 = trouver_bougie_pivot(df5, tendance, lookback=40)
         if not pivot_m5:
             return None
 
-        # Vérifier alignement multi-TF: le pivot M5 doit être dans la zone H1
         zone_h1_haut = max(pivot_h1["high"], pivot_h1["open"], pivot_h1["close"])
         zone_h1_bas  = min(pivot_h1["low"],  pivot_h1["open"], pivot_h1["close"])
         pivot_m5_mid = (pivot_m5["high"] + pivot_m5["low"]) / 2
 
-        # Tolérance élargie car proxy M5 au lieu de M15 réel
         marge = (zone_h1_haut - zone_h1_bas) * 1.5
         if not (zone_h1_bas - marge <= pivot_m5_mid <= zone_h1_haut + marge):
             return None
 
-        # ── Étape 3: Liquidité — sweep avant retour sur pivot ───────────
         sweep_ok = detecter_liquidity_sweep(df5, pivot_m5, tendance)
-
         px = df5["close"].iloc[-1]
 
-        # ── Construire Entrée / Stop / Target ───────────────────────────
         if tendance == "BULL":
             entree = pivot_m5["high"]
             sl     = pivot_m5["low"] * 0.9985
@@ -1151,13 +1043,12 @@ def analyser_bougie_pivot_session(symbole):
         if rr < 2.0:
             return None
 
-        # ── Score de confiance spécifique Stratégie 4 ───────────────────
         confiance = 50
-        if bos:                       confiance += 20   # BOS confirmé vs range asiatique
-        if sweep_ok:                  confiance += 20   # Sweep de liquidité confirmé
+        if bos:                       confiance += 20
+        if sweep_ok:                  confiance += 20
         session_v43 = session_actuelle_v43()
         if session_v43 in ("LONDON_EXPANSION","NY_CONTINUATION"):
-            confiance += 10           # Bonne fenêtre temporelle
+            confiance += 10
         if rr >= 4.0:                 confiance += 10
         elif rr >= 2.0:                confiance += 5
         confiance = max(0, min(100, confiance))
@@ -1191,18 +1082,10 @@ def analyser_bougie_pivot_session(symbole):
     return None
 
 # ==========================================
-# ✅ V43: DÉTECTION DU CONTEXTE MARCHÉ
+# DÉTECTION DU CONTEXTE MARCHÉ
 # ==========================================
 
 def detecter_contexte(symbole):
-    """
-    Analyse le marché et retourne le contexte:
-      TENDANCE  → EMA bien alignées + volatilité élevée
-      SCALPING  → RSI extrême (< 30 ou > 70)
-      RANGE     → EMA divergentes + basse volatilité
-      SESSION_PIVOT → Fenêtre Londres/NY + BOS récent détectable
-      INDECIS   → Pas assez de signal clair
-    """
     cached = contexte_marche_cache.get(symbole)
     if cached and (time.time() - cached["ts"]) < 120:
         return cached["contexte"]
@@ -1239,8 +1122,6 @@ def detecter_contexte(symbole):
 
         session_v43 = session_actuelle_v43()
 
-        # PRIORITÉ: si on est dans la fenêtre Londres/NY ET qu'un BOS existe
-        # par rapport au range asiatique → contexte SESSION_PIVOT (Stratégie 4)
         if session_v43 in ("LONDON_EXPANSION", "NY_CONTINUATION"):
             asian_range = maj_asian_range(symbole)
             bos = detecter_bos_londres(symbole, asian_range) if asian_range else None
@@ -1265,29 +1146,15 @@ def detecter_contexte(symbole):
         return "INDECIS"
 
 # ==========================================
-# ✅ V43: CERVEAU PRO TRADER V2 (4 stratégies)
+# CERVEAU PRO TRADER V2 (4 stratégies)
 # ==========================================
 
 def cerveau_pro_trader(symbole):
-    """
-    Détecte le contexte, puis lance UNIQUEMENT la stratégie adaptée.
-    Comme un vrai trader pro qui choisit son outil selon le marché.
-
-    SESSION_PIVOT → Stratégie 4 (Bougie Pivot Session) — priorité la plus
-                    élevée car c'est un setup à très haut R:R quand il
-                    apparaît (BOS + sweep de liquidité confirmés)
-    TENDANCE      → Stratégie 1 (Kasper OTE Strict)
-    SCALPING      → Stratégie 2 (OTE Scalping)
-    RANGE         → Stratégie 3 (Zone Trading)
-    INDECIS       → Rien (patience = professionnalisme)
-    """
     contexte = detecter_contexte(symbole)
 
     if contexte == "SESSION_PIVOT":
         res = analyser_bougie_pivot_session(symbole)
         emoji_ctx = "🎯 SESSION PIVOT (BOS + Liquidité)"
-        # Fallback: si pas de setup pivot valide malgré le bon contexte,
-        # on retente la tendance classique pour ne pas perdre l'opportunité
         if not res:
             res = analyser_kasper_ote(symbole)
             emoji_ctx = "📈 TENDANCE (fallback)"
@@ -1304,7 +1171,7 @@ def cerveau_pro_trader(symbole):
         res = analyser_zone_trading(symbole)
         emoji_ctx = "📦 ZONE / RANGE"
 
-    else:  # INDECIS
+    else:
         return None, contexte
 
     if res:
@@ -1313,7 +1180,7 @@ def cerveau_pro_trader(symbole):
     return res, contexte
 
 # ==========================================
-# ✅ /Volatility GRANULAIRE
+# /Volatility GRANULAIRE
 # ==========================================
 
 @bot.message_handler(commands=['Volatility'])
@@ -1360,7 +1227,7 @@ def gerer_volatility(message):
         f"❌ Paire inconnue: {paire}\nValides: V10, V25, V50, V75, V100, ALL")
 
 # ==========================================
-# ✅ V43 NEW: /risk — Configurer le risque par trade
+# /risk — Configurer le risque par trade
 # ==========================================
 
 @bot.message_handler(commands=['risk'])
@@ -1397,7 +1264,7 @@ def gerer_risque(message):
     bot.send_message(message.chat.id, "❌ Paramètre inconnu.")
 
 # ==========================================
-# ✅ V43 NEW: /rapport — Rapport quotidien
+# /rapport — Rapport quotidien
 # ==========================================
 
 def generer_rapport_texte(uid):
@@ -1426,7 +1293,6 @@ def rapport_quotidien(message):
     bot.send_message(uid, generer_rapport_texte(uid), parse_mode="Markdown")
 
 def envoyer_rapports_quotidiens_auto():
-    """Envoie automatiquement le rapport à 22h UTC chaque jour à tous les users actifs"""
     dernier_envoi = None
     while True:
         try:
@@ -1445,7 +1311,7 @@ def envoyer_rapports_quotidiens_auto():
             print(f"[Rapport Auto] {e}", flush=True)
 
 # ==========================================
-# ✅ V43 NEW: /pause /resume — Circuit breaker manuel
+# /pause /resume — Circuit breaker manuel
 # ==========================================
 
 @bot.message_handler(commands=['pause'])
@@ -1453,7 +1319,7 @@ def pause_manuelle(message):
     uid = message.chat.id
     if not est_autorise(uid): return
     stats = init_daily_stats(uid)
-    stats["paused_until"] = time.time() + (12 * 3600)  # pause 12h
+    stats["paused_until"] = time.time() + (12 * 3600)
     bot.send_message(uid, "⏸️ Trading mis en pause manuellement pour 12h.\n"
                           "Utilise /resume pour reprendre.", parse_mode="Markdown")
 
@@ -1481,7 +1347,6 @@ def scanner_marche_auto():
                 statut, _ = est_symbole_autorise(paire)
                 if statut != "AUTORISE": continue
 
-                # ── Cerveau Pro Trader V2 ────────────────────────────
                 res, contexte = cerveau_pro_trader(paire)
                 if not res: continue
 
@@ -1513,7 +1378,7 @@ def scanner_marche_auto():
                     if utilisateur_a_trade_actif(uid): continue
 
                     peut_trader, raison = utilisateur_peut_trader(uid)
-                    if not peut_trader: continue   # circuit breaker actif, on ne notifie pas en boucle
+                    if not peut_trader: continue
 
                     pf = plateforme_trading.get(uid, "MT5")
                     if pf == "MT5"    and paire not in ELITE_PAIRS_MT5: continue
@@ -1523,7 +1388,6 @@ def scanner_marche_auto():
                         InlineKeyboardButton(f"⚡ Copier {nom}", callback_data=f"set_{paire}")
                     )
 
-                    # Détails spécifiques par stratégie
                     if res["strategie"] == 3:
                         ligne_extra = (f"📦 Zone : {res['zone_support']:.5f}"
                                        f" → {res['zone_resistance']:.5f}"
@@ -1568,8 +1432,7 @@ def scanner_marche_auto():
             print(f"[Scanner V43] {e}", flush=True)
 
 # ==========================================
-# ✅ V43 NEW: MONITORING AVANCÉ DES TRADES
-# Gère: TP1 partiel (85%) → Breakeven → Trailing Stop → TP final / SL
+# MONITORING AVANCÉ DES TRADES
 # ==========================================
 
 def monitorer_trades_actifs():
@@ -1586,7 +1449,6 @@ def monitorer_trades_actifs():
 
                 direction = trade["direction"]
 
-                # ── PHASE 1: Trade encore plein (avant TP1) ─────────────
                 if trade["state"] == TradeState.TRADE_OPEN:
 
                     hit_tp1 = (direction == "BUY"  and prix_current >= trade["tp1"]) or \
@@ -1606,10 +1468,8 @@ def monitorer_trades_actifs():
                             envoyer_message_partiel(uid, trade, partiel, prix_current)
                         continue
 
-                # ── PHASE 2: 85% fermé, 15% en breakeven + trailing ─────
                 elif trade["state"] == TradeState.TRADE_PARTIAL:
 
-                    # Appliquer le trailing stop (sécurise les gains progressivement)
                     appliquer_trailing_stop(uid, prix_current)
 
                     hit_tp_final = (direction == "BUY"  and prix_current >= trade["tp_final"]) or \
@@ -1625,8 +1485,6 @@ def monitorer_trades_actifs():
                         continue
 
                     if hit_be_sl:
-                        # Sortie au breakeven ou en trailing stop — jamais une vraie perte
-                        # car le SL ne peut être déplacé que dans le sens favorable après TP1
                         result = fermer_trade_complet(uid, prix_current, win=True)
                         if result:
                             envoyer_message_resultat(uid, trade, result, perte_totale=False,
@@ -1697,7 +1555,6 @@ def envoyer_message_resultat(uid, trade, result, perte_totale, partiel_deja_pris
         f"🏦 P&L total : {pnl_total.get(uid,0):+.2f} USD"
     )
 
-    # Alerte si circuit breaker se déclenche après ce trade
     if daily_loss_limit_atteinte(uid):
         msg += (f"\n\n🛑 *LIMITE DE PERTE JOURNALIÈRE ATTEINTE.*\n"
                 f"Trading suspendu jusqu'à demain — protection du capital.")
@@ -1798,7 +1655,7 @@ def lister_cles(message):
     bot.send_message(message.chat.id, "\n".join(lignes), parse_mode="Markdown")
 
 # ==========================================
-# ✅ V43 NEW: /historique — Derniers trades
+# /historique — Derniers trades
 # ==========================================
 
 @bot.message_handler(commands=['historique'])
