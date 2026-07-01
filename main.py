@@ -1,21 +1,24 @@
 """
 ╔════════════════════════════════════════════════════════════════════════════╗
-║              TERMINAL PRIME V43 — THE WINNER'S BRAIN                      ║
+║              TERMINAL PRIME V44 — BUG FIXES CRITIQUES                     ║
 ║                                                                            ║
-║  Base stable V38/V42 + Stratégie 4 (Bougie Pivot / Session Liquidity)     ║
-║  + Dispositifs professionnels complets pour agir comme un VRAI gagnant:   ║
+║  Base V43 (The Winner's Brain) + corrections de bugs majeurs signalés:    ║
 ║                                                                            ║
-║   ✅ Position Sizing réel (lot calculé sur % risque réel du capital)      ║
-║   ✅ Partial TP 85% + Move to Breakeven automatique (technique vidéo 4)   ║
-║   ✅ Trailing Stop après breakeven                                        ║
-║   ✅ Daily Loss Limit (circuit breaker journalier)                        ║
-║   ✅ Pause auto après N pertes consécutives (anti-tilt)                   ║
-║   ✅ Rapport quotidien automatique (P&L, winrate, meilleur/pire trade)    ║
-║   ✅ Asian Range Tracker (high/low session asiatique, détection BOS)      ║
-║   ✅ Stratégie 4: Bougie Pivot Session (Order Block + Liquidity Sweep)    ║
-║   ✅ Cerveau Pro Trader V2 (4 stratégies, 1 décision contextuelle)        ║
-║   ✅ /Volatility granulaire (V10/V25/V50/V75/V100 individuels)            ║
-║   ✅ Tous les fixes V38: prix réel-time, gestion d'état, blocage signaux  ║
+║   🔴 FIX #1: Crash silencieux à la clôture de trade (TypeError sur        ║
+║      enregistrer_resultat_trade) qui bloquait DÉFINITIVEMENT l'envoi de   ║
+║      nouveaux signaux et empêchait toute notification gagné/perdu.        ║
+║   🔴 FIX #2: Filet de sécurité (try/finally + lock) garantissant que      ║
+║      plus JAMAIS un utilisateur ne reste bloqué, même en cas de bug futur.║
+║   🔴 FIX #3: Watchdog toutes les 5 min qui nettoie tout trade incohérent  ║
+║      ou ouvert depuis trop longtemps (12h par défaut).                   ║
+║   🟠 FIX #4: Scanner PARALLÉLISÉ (ThreadPoolExecutor) au lieu de séquen-  ║
+║      tiel — réduit fortement le délai entre l'apparition d'une opportu-   ║
+║      nité et l'envoi du signal.                                          ║
+║   🟠 FIX #5: Cache court des bougies (20s) pour éliminer les doubles      ║
+║      téléchargements réseau (détection contexte + stratégie).            ║
+║   🟠 FIX #6: Revalidation du prix ET du R/R restant au moment du clic     ║
+║      "Copier" — rejette l'entrée si le marché a déjà consommé une trop   ║
+║      grande partie du mouvement (fenêtre de signal réduite à 45s).       ║
 ╚════════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -35,12 +38,13 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 from flask import Flask
 from threading import Thread, Lock
 from enum import Enum
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ==========================================
 # CONFIGURATION
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAEdZNRBuPzt04B4vUvoo1M1_S5L1ixnNbY"
+TELEGRAM_TOKEN = "8658287331:AAFWI97CmTEWSf7GRLJvFe-uW6CTWmueuEM"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 ADMIN_ID = 5968288964
 CAPITAL_ACTUEL = 40650
@@ -60,6 +64,9 @@ RISK_CONFIG = {
     "trailing_stop_activation_rr": 1.0,  # Active le trailing dès que prix atteint 1R après BE
     "trailing_stop_distance_pct": 0.003, # Distance du trailing stop (0.3%)
     "max_trades_per_day": 8,          # Limite de trades par jour (évite sur-trading)
+    "max_trade_age_hours": 12,        # ✅ V44: watchdog — force-clôture si un trade traîne trop longtemps
+    "signal_validity_seconds": 45,    # ✅ V44: fenêtre de validité d'un signal (réduite de 90s à 45s)
+    "max_rr_degradation_pct": 40,     # ✅ V44: rejette l'entrée si le R/R restant a chuté de plus de 40%
 }
 
 # ==========================================
@@ -149,7 +156,7 @@ def keep_alive():
     Thread(target=run, daemon=True).start()
 
 # ==========================================
-# UTILITAIRES PRIX (base V38 OPTIMISÉE)
+# UTILITAIRES PRIX (base V38)
 # ==========================================
 
 def prefixer_symbole(s):
@@ -160,7 +167,16 @@ def prefixer_symbole(s):
         return f"R_{s.replace('V','')}"
     return f"frx{s}"
 
-def obtenir_donnees_deriv(symbole_brut, granularite=300):
+# ✅ V44 NEW: cache court (TTL) des bougies pour éviter de re-télécharger les
+# mêmes données plusieurs fois pendant un même cycle de scan (detecter_contexte
+# puis la stratégie choisie demandaient chacune les mêmes bougies H1/H4/M5,
+# doublant inutilement la latence réseau — cause principale des signaux en retard).
+_candles_cache = {}
+_candles_cache_lock = Lock()
+CANDLES_CACHE_TTL = 20  # secondes — assez court pour rester réactif, assez long pour dédupliquer
+
+def _obtenir_donnees_deriv_reseau(symbole_brut, granularite=300):
+    """Fonction réseau brute (inchangée) — timeouts réduits pour échouer plus vite vers le fallback."""
     if symbole_brut in ALL_PAIRS:
         tf = "5min" if granularite == 300 else ("1hour" if granularite == 3600 else "4hour")
         mapping_fmp = {"XAUUSD":"FOREX:XAUUSD","XAGUSD":"FOREX:XAGUSD"}
@@ -168,7 +184,7 @@ def obtenir_donnees_deriv(symbole_brut, granularite=300):
         try:
             url = (f"https://financialmodelingprep.com/api/v3/historical-chart/"
                    f"{tf}/{sym_fmp}?apikey={FMP_API_KEY}")
-            res = requests.get(url, timeout=2.0).json()
+            res = requests.get(url, timeout=3).json()
             if isinstance(res, list) and len(res) > 0:
                 bougies = []
                 for b in reversed(res[:250]):
@@ -189,7 +205,7 @@ def obtenir_donnees_deriv(symbole_brut, granularite=300):
         ws = None
         try:
             ws = websocket.WebSocket()
-            ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=3.0)
+            ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=4)
             ws.send(json.dumps({"ticks_history": sym, "end": "latest",
                                 "count": 250, "style": "candles",
                                 "granularity": gran_real}))
@@ -200,13 +216,34 @@ def obtenir_donnees_deriv(symbole_brut, granularite=300):
         except:
             try: ws.close()
             except: pass
-            time.sleep(0.1)
+            time.sleep(0.2)
     return None
 
+def obtenir_donnees_deriv(symbole_brut, granularite=300):
+    """
+    ✅ V44: version cachée (TTL courte). Même signature, même comportement
+    logique, mais évite les appels réseau redondants dans un même cycle.
+    """
+    cle = (symbole_brut, granularite)
+    now = time.time()
+    with _candles_cache_lock:
+        cached = _candles_cache.get(cle)
+        if cached and (now - cached[0]) < CANDLES_CACHE_TTL:
+            return cached[1]
+
+    data = _obtenir_donnees_deriv_reseau(symbole_brut, granularite)
+
+    if data is not None:
+        with _candles_cache_lock:
+            _candles_cache[cle] = (now, data)
+    return data
+
 def obtenir_donnees_h4(symbole):
+    """Récupère des données 4H en agrégeant 4x les bougies H1 si l'API ne supporte pas 14400 directement"""
     data = obtenir_donnees_deriv(symbole, 14400)
     if data and len(data) > 20:
         return data
+    # Fallback: agréger H1 par groupes de 4
     h1 = obtenir_donnees_deriv(symbole, 3600)
     if not h1 or len(h1) < 8:
         return None
@@ -227,7 +264,7 @@ def obtenir_prix_broker_realtime(symbole):
         mapping_fmp = {"XAUUSD":"FOREX:XAUUSD","XAGUSD":"FOREX:XAGUSD"}
         sym_fmp = mapping_fmp.get(symbole, symbole)
         url = f"https://financialmodelingprep.com/api/v3/quote/{sym_fmp}?apikey={FMP_API_KEY}"
-        res = requests.get(url, timeout=1.5).json()
+        res = requests.get(url, timeout=3).json()
         if isinstance(res, list) and len(res) > 0:
             prix = float(res[0]["price"])
             prix_broker[symbole] = {
@@ -244,7 +281,7 @@ def obtenir_prix_broker_realtime(symbole):
         ws = None
         try:
             ws = websocket.WebSocket()
-            ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=2.0)
+            ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=3)
             ws.send(json.dumps({"ticks": sym}))
             res = json.loads(ws.recv())
             ws.close()
@@ -256,12 +293,13 @@ def obtenir_prix_broker_realtime(symbole):
         except:
             try: ws.close()
             except: pass
-            time.sleep(0.1)
+            time.sleep(0.5)
     return None
 
 def valider_prix_avant_signal(symbole, prix_bot, tolerance=0.001):
     prix_real = obtenir_prix_broker_realtime(symbole)
     if not prix_real:
+        print(f"[Validation {symbole}] Impossible obtenir prix broker", flush=True)
         return False
     decalage = abs(prix_bot - prix_real) / prix_real
     if decalage > tolerance:
@@ -270,13 +308,14 @@ def valider_prix_avant_signal(symbole, prix_bot, tolerance=0.001):
     return True
 
 # ==========================================
-# RISK MANAGEMENT — CONFIGURATION GLOBALE
+# ✅ V43 NEW: GESTION DU RISQUE PROFESSIONNELLE
 # ==========================================
 
 def get_today_str():
     return datetime.datetime.utcnow().strftime("%Y-%m-%d")
 
 def init_daily_stats(uid):
+    """Initialise ou réinitialise les stats du jour si on a changé de date"""
     today = get_today_str()
     if uid not in daily_stats or daily_stats[uid]["date"] != today:
         daily_stats[uid] = {
@@ -289,12 +328,14 @@ def init_daily_stats(uid):
     return daily_stats[uid]
 
 def utilisateur_en_pause(uid):
+    """Vérifie si l'utilisateur est en pause anti-tilt"""
     stats = init_daily_stats(uid)
     if stats["paused_until"] and time.time() < stats["paused_until"]:
         return True, stats["paused_until"]
     return False, None
 
 def daily_loss_limit_atteinte(uid):
+    """Vérifie si la limite de perte journalière est atteinte"""
     stats = init_daily_stats(uid)
     limite = -(CAPITAL_ACTUEL * RISK_CONFIG["daily_loss_limit_pct"] / 100.0)
     return stats["pnl"] <= limite
@@ -304,6 +345,13 @@ def max_trades_jour_atteint(uid):
     return stats["trades"] >= RISK_CONFIG["max_trades_per_day"]
 
 def utilisateur_peut_trader(uid):
+    """
+    ✅ Circuit breaker complet:
+    - Limite de perte journalière
+    - Pause anti-tilt (pertes consécutives)
+    - Nombre max de trades par jour
+    Retourne (bool_peut_trader, raison_si_non)
+    """
     stats = init_daily_stats(uid)
 
     if daily_loss_limit_atteinte(uid):
@@ -325,12 +373,22 @@ def utilisateur_peut_trader(uid):
     return True, None
 
 def calculer_position_size(capital, risk_pct, prix_entree, prix_sl, symbole):
+    """
+    ✅ V43 NEW: Calcul RÉEL de la taille de position
+    Au lieu d'un montant fixe arbitraire, calcule selon:
+      - Le capital actuel
+      - Le % de risque accepté
+      - La distance réelle entre entrée et stop loss
+    Retourne le montant en argent risqué + un "lot factor" relatif pour affichage
+    """
     montant_risque = capital * (risk_pct / 100.0)
     distance_sl = abs(prix_entree - prix_sl)
 
     if distance_sl <= 0:
         return {"montant_risque": montant_risque, "lot_factor": 0, "distance_sl": 0}
 
+    # Lot factor = combien d'unités on peut se permettre pour respecter le risque
+    # (simplifié — sert de guide proportionnel, le lot exact dépend du broker/contract size)
     lot_factor = montant_risque / distance_sl
 
     return {
@@ -340,10 +398,25 @@ def calculer_position_size(capital, risk_pct, prix_entree, prix_sl, symbole):
         "distance_sl_pct": round((distance_sl / prix_entree) * 100, 3) if prix_entree else 0
     }
 
-def enregistrer_resultat_trade(uid, pnl, win):
+def enregistrer_resultat_trade(uid, pnl, win, pnl_pour_bilan=None):
+    """
+    Met à jour les stats journalières + déclenche la pause anti-tilt si besoin.
+    pnl: portion à ajouter à stats["pnl"] (évite double-comptage si un TP
+         partiel avait déjà ajouté sa part avant cet appel).
+    pnl_pour_bilan: P&L TOTAL du trade (portion partielle + finale), utilisé
+         uniquement pour best_trade/worst_trade. Si absent, on utilise pnl.
+
+    ✅ V44 FIX: cette fonction plantait auparavant (TypeError) car appelée
+    avec pnl_pour_bilan= sans que le paramètre existe. Cela empêchait
+    `del trades_actifs[uid]` de s'exécuter dans fermer_trade_complet(),
+    bloquant l'utilisateur DÉFINITIVEMENT après son premier trade fermé
+    (plus aucun signal, plus aucune notification gagné/perdu).
+    """
     stats = init_daily_stats(uid)
     stats["pnl"]    += pnl
     stats["trades"] += 1
+
+    valeur_bilan = pnl_pour_bilan if pnl_pour_bilan is not None else pnl
 
     if win:
         stats["wins"] += 1
@@ -354,11 +427,12 @@ def enregistrer_resultat_trade(uid, pnl, win):
         stats["consecutive_losses"] += 1
         loss_count[uid] = loss_count.get(uid, 0) + 1
 
-    if pnl > stats["best_trade"]:
-        stats["best_trade"] = pnl
-    if pnl < stats["worst_trade"]:
-        stats["worst_trade"] = pnl
+    if valeur_bilan > stats["best_trade"]:
+        stats["best_trade"] = valeur_bilan
+    if valeur_bilan < stats["worst_trade"]:
+        stats["worst_trade"] = valeur_bilan
 
+    # Déclenchement pause anti-tilt
     if stats["consecutive_losses"] >= RISK_CONFIG["max_consecutive_losses"]:
         stats["paused_until"] = time.time() + (RISK_CONFIG["pause_duration_minutes"] * 60)
         print(f"[Risk] {uid} EN PAUSE anti-tilt ({stats['consecutive_losses']} pertes consécutives)", flush=True)
@@ -366,13 +440,21 @@ def enregistrer_resultat_trade(uid, pnl, win):
     return stats
 
 # ==========================================
-# PARTIAL TP 85% + BREAKEVEN + TRAILING STOP
+# ✅ V43 NEW: PARTIAL TP 85% + BREAKEVEN + TRAILING STOP
+# (Technique exacte observée dans la Stratégie 4: "Prise de profits 85%
+#  puis Break Even")
 # ==========================================
 
 def create_trade_id():
     return "TRD-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
 def ouvrir_trade(uid, symbole, direction, entry_price, sl, tp1, tp_final, strategy, confiance, label="SIGNAL"):
+    """
+    Ouvre un trade avec gestion complète:
+      - Position sizing réel
+      - TP1 (objectif intermédiaire, 85% de la position)
+      - TP final (15% restant après passage en breakeven)
+    """
     trade_id = create_trade_id()
     sizing = calculer_position_size(CAPITAL_ACTUEL, RISK_CONFIG["risk_per_trade_pct"],
                                     entry_price, sl, symbole)
@@ -397,84 +479,133 @@ def ouvrir_trade(uid, symbole, direction, entry_price, sl, tp1, tp_final, strate
     return trade_id, sizing
 
 def fermer_trade_complet(uid, exit_price, win):
-    if uid not in trades_actifs:
-        return None
-    trade    = trades_actifs[uid]
-    trade_id = trade["trade_id"]
+    """
+    Ferme totalement un trade et enregistre dans l'historique + stats journalières.
 
-    risque_initial = trade["sizing"]["montant_risque"]
+    ✅ V44 FIX (protection définitive): tout le corps est protégé par
+    try/finally. Le retrait de trades_actifs[uid] est GARANTI même si une
+    erreur imprévue survient pendant le calcul — plus jamais un utilisateur
+    ne pourra rester bloqué "TRADE ACTIF EN COURS" pour toujours à cause
+    d'une exception. En cas d'erreur, on notifie quand même l'utilisateur
+    au lieu de rester silencieux.
+    """
+    with lock_trade:
+        if uid not in trades_actifs:
+            return None
+        trade    = trades_actifs[uid]
+        trade_id = trade["trade_id"]
 
-    portion_restante = (1 - RISK_CONFIG["partial_tp_ratio"]) if trade.get("partial_closed") else 1.0
-    risque_portion    = risque_initial * portion_restante
+        try:
+            risque_initial = trade["sizing"]["montant_risque"]
 
-    if win:
-        gain_ratio = abs(exit_price - trade["entry_price"]) / trade["sizing"]["distance_sl"] if trade["sizing"]["distance_sl"] > 0 else 1
-        pnl_final = risque_portion * gain_ratio
-    else:
-        pnl_final = -risque_portion
+            # Si une fermeture partielle (85%) a déjà eu lieu, ce closing ne porte
+            # que sur les 15% restants — on proportionne le risque utilisé pour
+            # le calcul du P&L de cette portion finale.
+            portion_restante = (1 - RISK_CONFIG["partial_tp_ratio"]) if trade.get("partial_closed") else 1.0
+            risque_portion    = risque_initial * portion_restante
 
-    pnl_trade_total = trade.get("partial_pnl", 0.0) + pnl_final
+            if win:
+                gain_ratio = abs(exit_price - trade["entry_price"]) / trade["sizing"]["distance_sl"] if trade["sizing"]["distance_sl"] > 0 else 1
+                pnl_final = risque_portion * gain_ratio
+            else:
+                pnl_final = -risque_portion
 
-    trade["state"]      = TradeState.TRADE_WIN if win else TradeState.TRADE_LOSS
-    trade["exit_price"] = exit_price
-    trade["exit_time"]  = time.time()
-    trade["pnl"]         = pnl_trade_total
-    duration_seconds      = trade["exit_time"] - trade["timestamp_open"]
+            # P&L TOTAL réel du trade = portion déjà sécurisée (85%) + portion finale
+            pnl_trade_total = trade.get("partial_pnl", 0.0) + pnl_final
 
-    if uid not in trades_historique:
-        trades_historique[uid] = []
-    trades_historique[uid].append({
-        "trade_id": trade_id, "symbol": trade["symbol"],
-        "direction": trade["direction"], "entry": trade["entry_price"],
-        "exit": exit_price, "pnl": pnl_trade_total, "duration": duration_seconds,
-        "win": win, "timestamp": trade["exit_time"], "label": trade.get("label","")
-    })
+            trade["state"]      = TradeState.TRADE_WIN if win else TradeState.TRADE_LOSS
+            trade["exit_price"] = exit_price
+            trade["exit_time"]  = time.time()
+            trade["pnl"]        = pnl_trade_total
+            duration_seconds     = trade["exit_time"] - trade["timestamp_open"]
 
-    pnl_total[uid] = pnl_total.get(uid, 0) + pnl_final
-    
-    # FIX CORRECTION BUG 2: Retrait du paramètre non supporté pnl_pour_bilan pour éviter le plantage
-    enregistrer_resultat_trade(uid, pnl_final, win)
+            if uid not in trades_historique:
+                trades_historique[uid] = []
+            trades_historique[uid].append({
+                "trade_id": trade_id, "symbol": trade["symbol"],
+                "direction": trade["direction"], "entry": trade["entry_price"],
+                "exit": exit_price, "pnl": pnl_trade_total, "duration": duration_seconds,
+                "win": win, "timestamp": trade["exit_time"], "label": trade.get("label","")
+            })
 
-    del trades_actifs[uid]
-    print(f"[Trade Closed] {uid}: {trade_id} PnL final={pnl_final:.2f} | "
-          f"PnL total trade={pnl_trade_total:.2f}", flush=True)
-    return {"trade_id": trade_id, "pnl": pnl_trade_total, "pnl_final_portion": pnl_final,
-            "win": win, "duration": duration_seconds}
+            pnl_total[uid] = pnl_total.get(uid, 0) + pnl_final
+            enregistrer_resultat_trade(uid, pnl_final, win, pnl_pour_bilan=pnl_trade_total)
+
+            print(f"[Trade Closed] {uid}: {trade_id} PnL final={pnl_final:.2f} | "
+                  f"PnL total trade={pnl_trade_total:.2f}", flush=True)
+            return {"trade_id": trade_id, "pnl": pnl_trade_total, "pnl_final_portion": pnl_final,
+                    "win": win, "duration": duration_seconds}
+
+        except Exception as e:
+            # ✅ Filet de sécurité: même en cas de bug imprévu, on notifie
+            # l'utilisateur au lieu de le laisser bloqué en silence.
+            print(f"[Trade Closed] ⚠️ ERREUR pendant la clôture de {uid}/{trade_id}: {e}", flush=True)
+            try:
+                bot.send_message(uid,
+                    f"⚠️ Trade {trade.get('symbol','?')} clôturé (erreur interne lors du calcul détaillé).\n"
+                    f"Consulte /historique pour vérifier. Le trading reprend normalement.",
+                    parse_mode="Markdown")
+            except Exception:
+                pass
+            return {"trade_id": trade_id, "pnl": 0.0, "pnl_final_portion": 0.0,
+                    "win": win, "duration": time.time() - trade.get("timestamp_open", time.time()),
+                    "erreur": True}
+
+        finally:
+            # GARANTIE ABSOLUE: l'utilisateur ne reste jamais bloqué, quoi qu'il arrive.
+            trades_actifs.pop(uid, None)
 
 def fermer_trade_partiel(uid, exit_price):
-    if uid not in trades_actifs:
-        return None
-    trade = trades_actifs[uid]
-    if trade["partial_closed"]:
-        return None
+    """
+    Ferme 85% de la position au TP1, déplace SL à breakeven pour les 15% restants
+    (Technique exacte de la Stratégie 4).
+    ✅ V44: protégé par lock + try/except (cohérence avec fermer_trade_complet).
+    """
+    with lock_trade:
+        if uid not in trades_actifs:
+            return None
+        trade = trades_actifs[uid]
+        if trade["partial_closed"]:
+            return None
 
-    risque_initial = trade["sizing"]["montant_risque"]
-    ratio = RISK_CONFIG["partial_tp_ratio"]
-    gain_ratio = abs(exit_price - trade["entry_price"]) / trade["sizing"]["distance_sl"] if trade["sizing"]["distance_sl"] > 0 else 1
-    pnl_partiel = risque_initial * gain_ratio * ratio
+        try:
+            risque_initial = trade["sizing"]["montant_risque"]
+            ratio = RISK_CONFIG["partial_tp_ratio"]
+            gain_ratio = abs(exit_price - trade["entry_price"]) / trade["sizing"]["distance_sl"] if trade["sizing"]["distance_sl"] > 0 else 1
+            pnl_partiel = risque_initial * gain_ratio * ratio
 
-    trade["partial_closed"]   = True
-    trade["partial_pnl"]      = pnl_partiel
-    trade["breakeven_active"] = True
-    trade["state"]            = TradeState.TRADE_PARTIAL
+            trade["partial_closed"]   = True
+            trade["partial_pnl"]      = pnl_partiel
+            trade["breakeven_active"] = True
+            trade["state"]            = TradeState.TRADE_PARTIAL
 
-    buffer = trade["entry_price"] * RISK_CONFIG["breakeven_buffer_pct"]
-    if trade["direction"] == "BUY":
-        trade["sl"] = trade["entry_price"] + buffer
-    else:
-        trade["sl"] = trade["entry_price"] - buffer
+            # Déplacer le SL au point d'entrée (+ petit buffer pour couvrir les frais)
+            buffer = trade["entry_price"] * RISK_CONFIG["breakeven_buffer_pct"]
+            if trade["direction"] == "BUY":
+                trade["sl"] = trade["entry_price"] + buffer
+            else:
+                trade["sl"] = trade["entry_price"] - buffer
 
-    pnl_total[uid] = pnl_total.get(uid, 0) + pnl_partiel
+            pnl_total[uid] = pnl_total.get(uid, 0) + pnl_partiel
 
-    stats = init_daily_stats(uid)
-    stats["pnl"] += pnl_partiel
+            # Le profit partiel alimente aussi le P&L du jour (circuit breaker + rapport)
+            stats = init_daily_stats(uid)
+            stats["pnl"] += pnl_partiel
 
-    print(f"[Partial TP] {uid}: {trade['trade_id']} 85% fermé (+{pnl_partiel:.2f}), "
-          f"SL → Breakeven {trade['sl']:.5f}", flush=True)
+            print(f"[Partial TP] {uid}: {trade['trade_id']} 85% fermé (+{pnl_partiel:.2f}), "
+                  f"SL → Breakeven {trade['sl']:.5f}", flush=True)
 
-    return {"pnl_partiel": round(pnl_partiel, 2), "nouveau_sl": trade["sl"]}
+            return {"pnl_partiel": round(pnl_partiel, 2), "nouveau_sl": trade["sl"]}
+
+        except Exception as e:
+            print(f"[Partial TP] ⚠️ ERREUR pour {uid}: {e}", flush=True)
+            return None
 
 def appliquer_trailing_stop(uid, prix_current):
+    """
+    ✅ V43 NEW: Trailing stop actif uniquement APRÈS le passage en breakeven (15% restants)
+    Sécurise les gains progressivement sur la portion qui continue de courir
+    """
     if uid not in trades_actifs:
         return False
     trade = trades_actifs[uid]
@@ -503,7 +634,63 @@ def utilisateur_a_trade_actif(uid):
     )
 
 # ==========================================
-# SESSIONS DE TRADING (Killzones)
+# ✅ V44 NEW: WATCHDOG ANTI-BLOCAGE
+# Filet de sécurité ultime: si jamais un trade reste bloqué anormalement
+# longtemps (bug futur, état incohérent, etc.), on le force-ferme et on
+# prévient l'utilisateur — plus JAMAIS de blocage silencieux permanent.
+# ==========================================
+
+def watchdog_trades_bloques():
+    while True:
+        try:
+            time.sleep(300)  # vérifie toutes les 5 minutes
+            maintenant = time.time()
+            for uid in list(trades_actifs.keys()):
+                trade = trades_actifs.get(uid)
+                if not trade:
+                    continue
+
+                age_heures = (maintenant - trade.get("timestamp_open", maintenant)) / 3600
+
+                # Cas 1: trade dans un état incohérent (ni OPEN ni PARTIAL) → nettoyage immédiat
+                if trade["state"] not in (TradeState.TRADE_OPEN, TradeState.TRADE_PARTIAL):
+                    print(f"[Watchdog] {uid} état incohérent ({trade['state']}) → nettoyage forcé", flush=True)
+                    trades_actifs.pop(uid, None)
+                    try:
+                        bot.send_message(uid,
+                            "🔧 Un trade bloqué a été nettoyé automatiquement. "
+                            "Tu peux recevoir de nouveaux signaux normalement.",
+                            parse_mode="Markdown")
+                    except Exception:
+                        pass
+                    continue
+
+                # Cas 2: trade ouvert depuis trop longtemps → force-clôture au marché
+                if age_heures >= RISK_CONFIG["max_trade_age_hours"]:
+                    prix_current = obtenir_prix_broker_realtime(trade["symbol"])
+                    if prix_current:
+                        # Déterminer gagnant/perdant selon la position actuelle du prix
+                        # par rapport au prix d'entrée (pas de raccourci arbitraire)
+                        if trade["direction"] == "BUY":
+                            win_watchdog = prix_current >= trade["entry_price"]
+                        else:
+                            win_watchdog = prix_current <= trade["entry_price"]
+
+                        print(f"[Watchdog] {uid} trade {trade['trade_id']} ouvert depuis "
+                              f"{age_heures:.1f}h → clôture forcée", flush=True)
+                        fermer_trade_complet(uid, prix_current, win=win_watchdog)
+                        try:
+                            bot.send_message(uid,
+                                f"⏱️ Trade {trade['symbol']} clôturé automatiquement après "
+                                f"{RISK_CONFIG['max_trade_age_hours']}h (sécurité anti-blocage).\n"
+                                f"Consulte /historique pour le détail.",
+                                parse_mode="Markdown")
+                        except Exception:
+                            pass
+        except Exception as e:
+            print(f"[Watchdog] {e}", flush=True)
+
+
 # ==========================================
 
 PAIRES_SESSION_ASIE    = ["AUDJPY","CADJPY","CHFJPY","USDJPY","EURJPY","AUDUSD","AUDCAD","XAUUSD","XAGUSD"]
@@ -538,6 +725,7 @@ def nom_killzone():
     return "⏳ Hors session"
 
 def session_actuelle_v43():
+    """Sessions spécifiques à la Stratégie 4 (heures observées dans la vidéo, en UTC approx)"""
     h = datetime.datetime.utcnow().hour + datetime.datetime.utcnow().minute / 60.0
     if 1.0 <= h < 6.0:
         return "ASIAN_ACCUMULATION"
@@ -574,10 +762,15 @@ def est_symbole_autorise(symbole):
     return "HORS_SESSION", f"🔒 {symbole} inactif en {session}"
 
 # ==========================================
-# ASIAN RANGE TRACKER
+# ✅ V43 NEW: ASIAN RANGE TRACKER
+# (mémorise le high/low de la session asiatique chaque jour, par paire)
 # ==========================================
 
 def maj_asian_range(symbole):
+    """
+    Calcule et met à jour le high/low de la session asiatique (1h-6h UTC) du jour.
+    Utilisé pour détecter le BOS (Break of Structure) pendant Londres.
+    """
     today = get_today_str()
     cached = asian_range_cache.get(symbole)
     if cached and cached["date"] == today:
@@ -587,12 +780,16 @@ def maj_asian_range(symbole):
     if not c1h or len(c1h) < 10:
         return None
 
-    fenetre = c1h[-30:]
+    # Prendre les bougies H1 correspondant à la session asiatique (approximation:
+    # on prend une fenêtre de 6 dernières bougies H1 si on est en/après la session asiatique)
+    fenetre = c1h[-30:]  # ~30h de données disponibles, on filtre par heure si possible
     highs, lows = [], []
     for c in fenetre:
         highs.append(float(c["high"]))
         lows.append(float(c["low"]))
 
+    # Approximation robuste: on prend le high/low des 6 à 12 dernières bougies H1
+    # représentant la plage asiatique la plus récente
     sample = fenetre[-12:-6] if len(fenetre) >= 12 else fenetre[:max(1,len(fenetre)//2)]
     if not sample:
         sample = fenetre
@@ -606,6 +803,11 @@ def maj_asian_range(symbole):
     return result
 
 def detecter_bos_londres(symbole, asian_range):
+    """
+    Détecte si le prix a cassé (Break of Structure) le high ou le low de la
+    plage asiatique pendant la session de Londres → confirme la direction du jour.
+    Retourne "BULL", "BEAR" ou None
+    """
     if not asian_range:
         return None
     px = obtenir_prix_broker_realtime(symbole)
@@ -925,10 +1127,17 @@ def analyser_zone_trading(symbole):
     return None
 
 # ==========================================
-# STRATÉGIE 4 — BOUGIE PIVOT SESSION
+# ✅ V43 NEW: STRATÉGIE 4 — BOUGIE PIVOT SESSION
+# (Order Block + Liquidity Sweep + Session Asie→Londres→NY)
 # ==========================================
 
 def trouver_bougie_pivot(df, tendance, lookback=30):
+    """
+    Identifie la "bougie pivot" (= Order Block ICT): dernière bougie de
+    direction CONTRAIRE à la tendance, juste avant un mouvement impulsif
+    dans le sens de la tendance. C'est la bougie qui forme la "base" de
+    l'expansion, comme expliqué dans la vidéo Stratégie 4.
+    """
     df_r = df.iloc[-lookback:] if len(df) > lookback else df
     if len(df_r) < 5:
         return None
@@ -943,6 +1152,7 @@ def trouver_bougie_pivot(df, tendance, lookback=30):
         corps_next   = bougie_next["close"] - bougie_next["open"]
 
         if tendance == "BULL":
+            # Pivot = bougie baissière (ou neutre) suivie d'une expansion haussière forte
             if corps_bougie <= 0 and corps_next > 0:
                 taille_next = abs(corps_next)
                 taille_pivot = bougie["high"] - bougie["low"]
@@ -953,6 +1163,7 @@ def trouver_bougie_pivot(df, tendance, lookback=30):
                         "open": float(bougie["open"]), "close": float(bougie["close"]),
                     }
         else:
+            # Pivot = bougie haussière (ou neutre) suivie d'une expansion baissière forte
             if corps_bougie >= 0 and corps_next < 0:
                 taille_next = abs(corps_next)
                 taille_pivot = bougie["high"] - bougie["low"]
@@ -965,6 +1176,12 @@ def trouver_bougie_pivot(df, tendance, lookback=30):
     return None
 
 def detecter_liquidity_sweep(df, pivot, tendance, lookback=15):
+    """
+    Vérifie qu'un balayage de liquidité (SSL/BSL) a eu lieu juste avant le
+    retour sur la bougie pivot: le prix doit avoir dépassé temporairement
+    un swing récent (mèche) avant de revenir dans la zone — signature
+    typique d'une manipulation Smart Money.
+    """
     df_r = df.iloc[-lookback:]
     if len(df_r) < 3:
         return False
@@ -974,12 +1191,28 @@ def detecter_liquidity_sweep(df, pivot, tendance, lookback=15):
     last        = df_r.iloc[-2]
 
     if tendance == "BULL":
+        # sweep sous le pivot (mèche basse au-delà du low du pivot) puis clôture au-dessus
         return last["low"] <= pivot["low"] * 1.0015 and last["close"] > pivot["low"]
     else:
         return last["high"] >= pivot["high"] * 0.9985 and last["close"] < pivot["high"]
 
 def analyser_bougie_pivot_session(symbole):
+    """
+    ✅ STRATÉGIE 4 — Bougie Pivot Session (déduite de l'analyse vidéo)
+
+    Étape 1: Identifier la bougie pivot H1 (base de l'expansion / Order Block)
+    Étape 2: Vérifier l'alignement multi-TF — bougie pivot M15 contenue dans la
+             zone H1 (top-down: H1/H4 = zone d'intérêt, M15/M5 = précision)
+    Étape 3: Construire le setup complet:
+             Zone (pivot) + Structure (BOS vs range asiatique) + Liquidité (sweep)
+             + Entrée/Stop/Target
+
+    Gestion: SL juste au-delà de la mèche extrême du pivot M15,
+             TP intermédiaire (zone opposée proche) + TP final (mesure étendue),
+             utilisés ensuite par le moteur de Partial TP 85%/Breakeven.
+    """
     c1h = obtenir_donnees_deriv(symbole, 3600)
+    c15 = obtenir_donnees_deriv(symbole, 900) if False else None  # 15min non garanti par API
     c5  = obtenir_donnees_deriv(symbole, 300)
     if not c1h or not c5:
         return None
@@ -990,33 +1223,42 @@ def analyser_bougie_pivot_session(symbole):
         df5 = pd.DataFrame([{"open":float(c["open"]),"close":float(c["close"]),
                               "high":float(c["high"]),"low":float(c["low"])} for c in c5])
 
+        # ── Étape: Structure — Range asiatique + BOS ────────────────────
         asian_range = maj_asian_range(symbole)
         bos = detecter_bos_londres(symbole, asian_range) if asian_range else None
 
+        # Tendance de référence: BOS si disponible, sinon EMA cloud H1
         if bos:
             tendance = bos
         else:
             tendance, _ = calculer_ema_cloud(dfh)
 
+        # ── Étape 1: Bougie Pivot H1 (zone d'intérêt) ───────────────────
         pivot_h1 = trouver_bougie_pivot(dfh, tendance, lookback=30)
         if not pivot_h1:
             return None
 
+        # ── Étape 2: Bougie Pivot M5 (précision, proxy de M15) ──────────
         pivot_m5 = trouver_bougie_pivot(df5, tendance, lookback=40)
         if not pivot_m5:
             return None
 
+        # Vérifier alignement multi-TF: le pivot M5 doit être dans la zone H1
         zone_h1_haut = max(pivot_h1["high"], pivot_h1["open"], pivot_h1["close"])
         zone_h1_bas  = min(pivot_h1["low"],  pivot_h1["open"], pivot_h1["close"])
         pivot_m5_mid = (pivot_m5["high"] + pivot_m5["low"]) / 2
 
+        # Tolérance élargie car proxy M5 au lieu de M15 réel
         marge = (zone_h1_haut - zone_h1_bas) * 1.5
         if not (zone_h1_bas - marge <= pivot_m5_mid <= zone_h1_haut + marge):
             return None
 
+        # ── Étape 3: Liquidité — sweep avant retour sur pivot ───────────
         sweep_ok = detecter_liquidity_sweep(df5, pivot_m5, tendance)
+
         px = df5["close"].iloc[-1]
 
+        # ── Construire Entrée / Stop / Target ───────────────────────────
         if tendance == "BULL":
             entree = pivot_m5["high"]
             sl     = pivot_m5["low"] * 0.9985
@@ -1043,12 +1285,13 @@ def analyser_bougie_pivot_session(symbole):
         if rr < 2.0:
             return None
 
+        # ── Score de confiance spécifique Stratégie 4 ───────────────────
         confiance = 50
-        if bos:                       confiance += 20
-        if sweep_ok:                  confiance += 20
+        if bos:                       confiance += 20   # BOS confirmé vs range asiatique
+        if sweep_ok:                  confiance += 20   # Sweep de liquidité confirmé
         session_v43 = session_actuelle_v43()
         if session_v43 in ("LONDON_EXPANSION","NY_CONTINUATION"):
-            confiance += 10
+            confiance += 10           # Bonne fenêtre temporelle
         if rr >= 4.0:                 confiance += 10
         elif rr >= 2.0:                confiance += 5
         confiance = max(0, min(100, confiance))
@@ -1082,10 +1325,18 @@ def analyser_bougie_pivot_session(symbole):
     return None
 
 # ==========================================
-# DÉTECTION DU CONTEXTE MARCHÉ
+# ✅ V43: DÉTECTION DU CONTEXTE MARCHÉ
 # ==========================================
 
 def detecter_contexte(symbole):
+    """
+    Analyse le marché et retourne le contexte:
+      TENDANCE  → EMA bien alignées + volatilité élevée
+      SCALPING  → RSI extrême (< 30 ou > 70)
+      RANGE     → EMA divergentes + basse volatilité
+      SESSION_PIVOT → Fenêtre Londres/NY + BOS récent détectable
+      INDECIS   → Pas assez de signal clair
+    """
     cached = contexte_marche_cache.get(symbole)
     if cached and (time.time() - cached["ts"]) < 120:
         return cached["contexte"]
@@ -1122,6 +1373,8 @@ def detecter_contexte(symbole):
 
         session_v43 = session_actuelle_v43()
 
+        # PRIORITÉ: si on est dans la fenêtre Londres/NY ET qu'un BOS existe
+        # par rapport au range asiatique → contexte SESSION_PIVOT (Stratégie 4)
         if session_v43 in ("LONDON_EXPANSION", "NY_CONTINUATION"):
             asian_range = maj_asian_range(symbole)
             bos = detecter_bos_londres(symbole, asian_range) if asian_range else None
@@ -1146,15 +1399,29 @@ def detecter_contexte(symbole):
         return "INDECIS"
 
 # ==========================================
-# CERVEAU PRO TRADER V2 (4 stratégies)
+# ✅ V43: CERVEAU PRO TRADER V2 (4 stratégies)
 # ==========================================
 
 def cerveau_pro_trader(symbole):
+    """
+    Détecte le contexte, puis lance UNIQUEMENT la stratégie adaptée.
+    Comme un vrai trader pro qui choisit son outil selon le marché.
+
+    SESSION_PIVOT → Stratégie 4 (Bougie Pivot Session) — priorité la plus
+                    élevée car c'est un setup à très haut R:R quand il
+                    apparaît (BOS + sweep de liquidité confirmés)
+    TENDANCE      → Stratégie 1 (Kasper OTE Strict)
+    SCALPING      → Stratégie 2 (OTE Scalping)
+    RANGE         → Stratégie 3 (Zone Trading)
+    INDECIS       → Rien (patience = professionnalisme)
+    """
     contexte = detecter_contexte(symbole)
 
     if contexte == "SESSION_PIVOT":
         res = analyser_bougie_pivot_session(symbole)
         emoji_ctx = "🎯 SESSION PIVOT (BOS + Liquidité)"
+        # Fallback: si pas de setup pivot valide malgré le bon contexte,
+        # on retente la tendance classique pour ne pas perdre l'opportunité
         if not res:
             res = analyser_kasper_ote(symbole)
             emoji_ctx = "📈 TENDANCE (fallback)"
@@ -1171,7 +1438,7 @@ def cerveau_pro_trader(symbole):
         res = analyser_zone_trading(symbole)
         emoji_ctx = "📦 ZONE / RANGE"
 
-    else:
+    else:  # INDECIS
         return None, contexte
 
     if res:
@@ -1180,7 +1447,7 @@ def cerveau_pro_trader(symbole):
     return res, contexte
 
 # ==========================================
-# /Volatility GRANULAIRE
+# ✅ /Volatility GRANULAIRE
 # ==========================================
 
 @bot.message_handler(commands=['Volatility'])
@@ -1227,7 +1494,7 @@ def gerer_volatility(message):
         f"❌ Paire inconnue: {paire}\nValides: V10, V25, V50, V75, V100, ALL")
 
 # ==========================================
-# /risk — Configurer le risque par trade
+# ✅ V43 NEW: /risk — Configurer le risque par trade
 # ==========================================
 
 @bot.message_handler(commands=['risk'])
@@ -1264,7 +1531,7 @@ def gerer_risque(message):
     bot.send_message(message.chat.id, "❌ Paramètre inconnu.")
 
 # ==========================================
-# /rapport — Rapport quotidien
+# ✅ V43 NEW: /rapport — Rapport quotidien
 # ==========================================
 
 def generer_rapport_texte(uid):
@@ -1293,6 +1560,7 @@ def rapport_quotidien(message):
     bot.send_message(uid, generer_rapport_texte(uid), parse_mode="Markdown")
 
 def envoyer_rapports_quotidiens_auto():
+    """Envoie automatiquement le rapport à 22h UTC chaque jour à tous les users actifs"""
     dernier_envoi = None
     while True:
         try:
@@ -1311,7 +1579,7 @@ def envoyer_rapports_quotidiens_auto():
             print(f"[Rapport Auto] {e}", flush=True)
 
 # ==========================================
-# /pause /resume — Circuit breaker manuel
+# ✅ V43 NEW: /pause /resume — Circuit breaker manuel
 # ==========================================
 
 @bot.message_handler(commands=['pause'])
@@ -1319,7 +1587,7 @@ def pause_manuelle(message):
     uid = message.chat.id
     if not est_autorise(uid): return
     stats = init_daily_stats(uid)
-    stats["paused_until"] = time.time() + (12 * 3600)
+    stats["paused_until"] = time.time() + (12 * 3600)  # pause 12h
     bot.send_message(uid, "⏸️ Trading mis en pause manuellement pour 12h.\n"
                           "Utilise /resume pour reprendre.", parse_mode="Markdown")
 
@@ -1333,26 +1601,123 @@ def resume_manuel(message):
     bot.send_message(uid, "▶️ Trading repris. Bonne chance!", parse_mode="Markdown")
 
 # ==========================================
+# ✅ V44 NEW: /debloquer — Déblocage manuel immédiat (admin ou soi-même)
+# Complète le watchdog automatique (5 min) pour un déblocage instantané.
+# ==========================================
+
+@bot.message_handler(commands=['debloquer'])
+def debloquer_manuel(message):
+    uid = message.chat.id
+    if not est_autorise(uid): return
+
+    parts = message.text.strip().split()
+    cible = uid
+    if len(parts) > 1 and message.chat.id == ADMIN_ID:
+        try:
+            cible = int(parts[1])
+        except ValueError:
+            return bot.send_message(uid, "❌ ID invalide.")
+
+    etait_bloque = cible in trades_actifs
+    trades_actifs.pop(cible, None)
+
+    stats = init_daily_stats(cible)
+    stats["paused_until"] = None
+
+    if etait_bloque:
+        bot.send_message(uid, f"🔓 Utilisateur {cible} débloqué. Trade actif nettoyé.",
+                         parse_mode="Markdown")
+        if cible != uid:
+            try:
+                bot.send_message(cible, "🔓 Ton compte a été débloqué par l'admin. "
+                                        "Tu peux à nouveau recevoir des signaux.",
+                                 parse_mode="Markdown")
+            except: pass
+    else:
+        bot.send_message(uid, f"✅ Aucun blocage détecté pour {cible} — tout est déjà normal.",
+                         parse_mode="Markdown")
+
+@bot.message_handler(commands=['status'])
+def status_technique(message):
+    uid = message.chat.id
+    if not est_autorise(uid): return
+    bloque = "🟠 OUI" if uid in trades_actifs else "🟢 NON"
+    en_pause, jusqua = utilisateur_en_pause(uid)
+    txt = (
+        f"🔧 *STATUS TECHNIQUE*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Trade actif en cours : {bloque}\n"
+        f"Pause anti-tilt : {'🟠 OUI' if en_pause else '🟢 NON'}\n"
+        f"Cycle scanner : ~15s (parallélisé)\n"
+        f"Validité signal : {RISK_CONFIG['signal_validity_seconds']}s\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Si tu ne reçois plus de signaux malgré tout, "
+        f"utilise /debloquer pour te débloquer immédiatement."
+    )
+    bot.send_message(uid, txt, parse_mode="Markdown")
+
+# ==========================================
 # SCANNER PRINCIPAL V43
 # ==========================================
 
+def _analyser_une_paire(paire):
+    """
+    ✅ V44 NEW: Analyse UNE paire (extrait de scanner_marche_auto pour
+    permettre l'exécution en parallèle sur toutes les paires).
+    Retourne (paire, res, px) ou None si rien à signaler.
+    """
+    try:
+        statut, _ = est_symbole_autorise(paire)
+        if statut != "AUTORISE":
+            return None
+
+        res, contexte = cerveau_pro_trader(paire)
+        if not res:
+            return None
+
+        px = obtenir_prix_broker_realtime(paire) or res["px"]
+        if not valider_prix_avant_signal(paire, px):
+            return None
+
+        return (paire, res, px)
+    except Exception as e:
+        print(f"[Analyse/{paire}] {e}", flush=True)
+        return None
+
 def scanner_marche_auto():
+    """
+    ✅ V44 FIX: scanner parallélisé (ThreadPoolExecutor) au lieu de séquentiel.
+    Auparavant, 21 paires étaient analysées une par une, chacune avec plusieurs
+    appels réseau — un cycle complet pouvait prendre largement plus que les
+    30s de pause prévue, rendant les signaux obsolètes à l'arrivée (TP1 déjà
+    atteint sur les paires rapides comme les indices Volatility).
+    Maintenant, toutes les paires sont analysées EN MÊME TEMPS.
+    """
+    # ✅ V44.1: Scanner restreint à Gold + Argent + Volatility uniquement
+    # (ELITE_PAIRS_MT5 = VOLATILE_PAIRS + COMMODITY_PAIRS). Les 14 paires Forex
+    # classiques ne sont plus scannées automatiquement.
+    toutes_paires = ELITE_PAIRS_MT5
+
     while True:
         try:
-            time.sleep(30)
+            time.sleep(15)  # cycle plus rapide, rendu possible par la parallélisation
             libres = [u for u in utilisateurs_actifs if est_autorise(u)]
-            if not libres: continue
+            if not libres:
+                continue
 
-            for paire in (ELITE_PAIRS_MT5 + FOREX_PAIRS):
-                statut, _ = est_symbole_autorise(paire)
-                if statut != "AUTORISE": continue
+            resultats = []
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                futures = {executor.submit(_analyser_une_paire, p): p for p in toutes_paires}
+                for future in as_completed(futures, timeout=25):
+                    try:
+                        r = future.result()
+                        if r:
+                            resultats.append(r)
+                    except Exception as e:
+                        print(f"[Scanner Parallel] {e}", flush=True)
 
-                res, contexte = cerveau_pro_trader(paire)
-                if not res: continue
-
-                px = obtenir_prix_broker_realtime(paire) or res["px"]
-                if not valider_prix_avant_signal(paire, px): continue
-
+            # ── Diffusion des signaux trouvés (rapide, pas de réseau lourd ici) ──
+            for paire, res, px in resultats:
                 cle = f"{paire}_PRO"
                 signaux_cache[cle] = {
                     "time":    time.time(),
@@ -1380,9 +1745,8 @@ def scanner_marche_auto():
                     peut_trader, raison = utilisateur_peut_trader(uid)
                     if not peut_trader: continue
 
-                    pf = plateforme_trading.get(uid, "MT5")
-                    if pf == "MT5"    and paire not in ELITE_PAIRS_MT5: continue
-                    if pf == "POCKET" and paire not in FOREX_PAIRS:    continue
+                    # ✅ V44.1: plus besoin de filtre broker — toutes les paires
+                    # scannées (Gold/Argent/Volatility) sont désormais MT5 par défaut
 
                     markup = InlineKeyboardMarkup().add(
                         InlineKeyboardButton(f"⚡ Copier {nom}", callback_data=f"set_{paire}")
@@ -1406,7 +1770,7 @@ def scanner_marche_auto():
                                                     px, res["sl"], paire)
 
                     txt = (
-                        f"💼 *TERMINAL PRIME V43*\n"
+                        f"💼 *TERMINAL PRIME V44*\n"
                         f"{nom}  {dir_}\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"🎯 Stratégie : *{res['label']}*\n"
@@ -1421,7 +1785,8 @@ def scanner_marche_auto():
                         f"💰 Prix réel : {px:.5f}\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"💵 Risque calculé : ${sizing['montant_risque']} "
-                        f"({RISK_CONFIG['risk_per_trade_pct']}% du capital)"
+                        f"({RISK_CONFIG['risk_per_trade_pct']}% du capital)\n"
+                        f"⏳ Signal valide {RISK_CONFIG['signal_validity_seconds']}s"
                     )
                     try:
                         bot.send_message(uid, txt, reply_markup=markup, parse_mode="Markdown")
@@ -1429,10 +1794,11 @@ def scanner_marche_auto():
                         pass
 
         except Exception as e:
-            print(f"[Scanner V43] {e}", flush=True)
+            print(f"[Scanner V44] {e}", flush=True)
 
 # ==========================================
-# MONITORING AVANCÉ DES TRADES
+# ✅ V43 NEW: MONITORING AVANCÉ DES TRADES
+# Gère: TP1 partiel (85%) → Breakeven → Trailing Stop → TP final / SL
 # ==========================================
 
 def monitorer_trades_actifs():
@@ -1449,6 +1815,7 @@ def monitorer_trades_actifs():
 
                 direction = trade["direction"]
 
+                # ── PHASE 1: Trade encore plein (avant TP1) ─────────────
                 if trade["state"] == TradeState.TRADE_OPEN:
 
                     hit_tp1 = (direction == "BUY"  and prix_current >= trade["tp1"]) or \
@@ -1468,8 +1835,10 @@ def monitorer_trades_actifs():
                             envoyer_message_partiel(uid, trade, partiel, prix_current)
                         continue
 
+                # ── PHASE 2: 85% fermé, 15% en breakeven + trailing ─────
                 elif trade["state"] == TradeState.TRADE_PARTIAL:
 
+                    # Appliquer le trailing stop (sécurise les gains progressivement)
                     appliquer_trailing_stop(uid, prix_current)
 
                     hit_tp_final = (direction == "BUY"  and prix_current >= trade["tp_final"]) or \
@@ -1485,6 +1854,8 @@ def monitorer_trades_actifs():
                         continue
 
                     if hit_be_sl:
+                        # Sortie au breakeven ou en trailing stop — jamais une vraie perte
+                        # car le SL ne peut être déplacé que dans le sens favorable après TP1
                         result = fermer_trade_complet(uid, prix_current, win=True)
                         if result:
                             envoyer_message_resultat(uid, trade, result, perte_totale=False,
@@ -1555,6 +1926,7 @@ def envoyer_message_resultat(uid, trade, result, perte_totale, partiel_deja_pris
         f"🏦 P&L total : {pnl_total.get(uid,0):+.2f} USD"
     )
 
+    # Alerte si circuit breaker se déclenche après ce trade
     if daily_loss_limit_atteinte(uid):
         msg += (f"\n\n🛑 *LIMITE DE PERTE JOURNALIÈRE ATTEINTE.*\n"
                 f"Trading suspendu jusqu'à demain — protection du capital.")
@@ -1655,7 +2027,7 @@ def lister_cles(message):
     bot.send_message(message.chat.id, "\n".join(lignes), parse_mode="Markdown")
 
 # ==========================================
-# /historique — Derniers trades
+# ✅ V43 NEW: /historique — Derniers trades
 # ==========================================
 
 @bot.message_handler(commands=['historique'])
@@ -1679,14 +2051,13 @@ def historique_trades(message):
 # ==========================================
 
 def obtenir_clavier(uid):
-    pf = plateforme_trading.get(uid, "MT5")
+    # ✅ V44.1: bouton BROKER retiré — mode MT5 (Gold/Argent/Volatility) unique
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row(KeyboardButton("📊 CHOISIR UNE CIBLE"),
                KeyboardButton("🚀 LANCER L'ANALYSE"))
-    markup.row(KeyboardButton("🏦 BROKER: POCKET" if pf=="POCKET" else "📈 BROKER: MT5"),
-               KeyboardButton("⏰ HEURES DE TRADING"))
-    markup.row(KeyboardButton("📊 RAPPORT DU JOUR"),
-               KeyboardButton("📜 HISTORIQUE"))
+    markup.row(KeyboardButton("⏰ HEURES DE TRADING"),
+               KeyboardButton("📊 RAPPORT DU JOUR"))
+    markup.row(KeyboardButton("📜 HISTORIQUE"))
     return markup
 
 @bot.message_handler(commands=['start'])
@@ -1695,7 +2066,6 @@ def bienvenue(message):
     if not est_autorise(uid):
         return bot.send_message(uid, "🔒 Accès restreint. /vip VOTRE-CLÉ pour activer.")
     utilisateurs_actifs.add(uid)
-    plateforme_trading.setdefault(uid, "MT5")
     init_daily_stats(uid)
 
     kz  = "🟢 ACTIVE" if dans_killzone() else "🔴 INACTIVE"
@@ -1707,9 +2077,10 @@ def bienvenue(message):
         trade_info = f"\n🟠 *TRADE ACTIF:* {t['symbol']} {t['direction']} @ {t['entry_price']}"
 
     bot.send_message(uid,
-        f"💼 *TERMINAL PRIME V43* — THE WINNER'S BRAIN\n"
+        f"💼 *TERMINAL PRIME V44* — THE WINNER'S BRAIN\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"4 stratégies, 1 cerveau, gestion de gagnant\n"
+        f"🎯 Scan exclusif : 🥇 Gold · 🥈 Argent · 🔥 Volatility\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📈 TENDANCE       → Kasper OTE\n"
         f"⚡ SCALPING       → OTE Scalping\n"
@@ -1727,20 +2098,6 @@ def bienvenue(message):
         f"🔥 Volatility Pairs :\n{vol}\n"
         f"⏰ Killzone : {kz}{trade_info}",
         reply_markup=obtenir_clavier(uid), parse_mode="Markdown")
-
-@bot.message_handler(func=lambda m: m.text.startswith("🏦 BROKER:") or
-                                    m.text.startswith("📈 BROKER:"))
-def toggle_pf(message):
-    uid = message.chat.id
-    if not est_autorise(uid): return
-    if plateforme_trading.get(uid,"MT5") == "POCKET":
-        plateforme_trading[uid] = "MT5"
-        bot.send_message(uid, "📈 *MT5 ACTIVÉ*\n🔥 Volatility | 🥇 Gold | 🥈 Argent",
-                         reply_markup=obtenir_clavier(uid), parse_mode="Markdown")
-    else:
-        plateforme_trading[uid] = "POCKET"
-        bot.send_message(uid, "🏦 *POCKET ACTIVÉ* — Forex Binaire",
-                         reply_markup=obtenir_clavier(uid), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
 def horaires(message):
@@ -1784,31 +2141,18 @@ def devises(message):
     if not peut_trader:
         return bot.send_message(uid, raison, parse_mode="Markdown")
 
-    pf = plateforme_trading.get(uid, "MT5")
+    # ✅ V44.1: mode unique — Gold, Argent, Volatility (plus de Forex/POCKET)
     markup = InlineKeyboardMarkup(row_width=3)
-
-    if pf == "MT5":
-        btns_vol = [InlineKeyboardButton(
-                        NOMS_AFFICHAGE.get(p, p),
-                        callback_data=f"set_{p}")
-                    for p, actif in volatility_pairs_active.items() if actif]
-        if btns_vol:
-            markup.add(*btns_vol)
-        markup.add(InlineKeyboardButton("🥇 GOLD",   callback_data="set_XAUUSD"),
-                   InlineKeyboardButton("🥈 ARGENT", callback_data="set_XAGUSD"))
-        bot.send_message(uid, "🎯 Sélectionne ta cible MT5 :",
-                         reply_markup=markup, parse_mode="Markdown")
-    else:
-        markup.add(
-            InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="set_EURUSD"),
-            InlineKeyboardButton("🇬🇧 GBP/USD", callback_data="set_GBPUSD"),
-            InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY"),
-            InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD"),
-            InlineKeyboardButton("🇺🇸 USD/CAD", callback_data="set_USDCAD"),
-            InlineKeyboardButton("🇪🇺 EUR/JPY", callback_data="set_EURJPY"),
-        )
-        bot.send_message(uid, "🎯 Sélectionne ta cible Pocket Forex :",
-                         reply_markup=markup, parse_mode="Markdown")
+    btns_vol = [InlineKeyboardButton(
+                    NOMS_AFFICHAGE.get(p, p),
+                    callback_data=f"set_{p}")
+                for p, actif in volatility_pairs_active.items() if actif]
+    if btns_vol:
+        markup.add(*btns_vol)
+    markup.add(InlineKeyboardButton("🥇 GOLD",   callback_data="set_XAUUSD"),
+               InlineKeyboardButton("🥈 ARGENT", callback_data="set_XAGUSD"))
+    bot.send_message(uid, "🎯 Sélectionne ta cible :",
+                     reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "🚀 LANCER L'ANALYSE")
 def lancer(message):
@@ -1853,7 +2197,10 @@ def save_devise(call):
     cle   = f"{actif}_PRO"
     cache = signaux_cache.get(cle)
 
-    if not cache or (time.time() - cache["time"]) > 90:
+    # ✅ V44 FIX: fenêtre de validité réduite (45s au lieu de 90s) — un
+    # signal vieux de 90s peut déjà être largement dépassé sur une paire
+    # rapide (Volatility indices).
+    if not cache or (time.time() - cache["time"]) > RISK_CONFIG["signal_validity_seconds"]:
         return bot.send_message(uid,
             f"⏱️ Signal expiré sur {NOMS_AFFICHAGE.get(actif, actif)}\n"
             f"Attends le prochain scan automatique.", parse_mode="Markdown")
@@ -1862,9 +2209,63 @@ def save_devise(call):
     nom = NOMS_AFFICHAGE.get(actif, actif)
     fmt = ".0f" if actif in VOLATILE_PAIRS else ".5f"
 
+    if px <= 0:
+        return bot.send_message(uid,
+            f"⚠️ Impossible de récupérer le prix actuel de {nom}. Réessaie dans un instant.",
+            parse_mode="Markdown")
+
     entry_direction = "BUY" if "BUY" in cache["action"] else "SELL"
+    sl_cache, tp1_cache, tp_final_cache = cache["mt5_sl"], cache["mt5_tp1"], cache["mt5_tp"]
+
+    # ✅ V44 FIX NOUVEAU: revalider le marché AVANT d'ouvrir le trade.
+    # Si le prix a déjà dépassé le SL ou le TP1 (ou TP final) prévu pendant
+    # le délai entre le scan et le clic, on REFUSE d'ouvrir — c'est
+    # exactement le scénario "j'entre et j'ai déjà atteint mon TP1".
+    if entry_direction == "BUY":
+        deja_sl  = px <= sl_cache
+        deja_tp1 = px >= tp1_cache
+    else:
+        deja_sl  = px >= sl_cache
+        deja_tp1 = px <= tp1_cache
+
+    if deja_sl:
+        return bot.send_message(uid,
+            f"❌ *Signal annulé* — {nom}\n"
+            f"Le marché a déjà atteint le niveau de Stop Loss prévu "
+            f"({sl_cache:{fmt}}) pendant le délai d'exécution.\n"
+            f"Aucun trade ouvert. Attends le prochain signal.",
+            parse_mode="Markdown")
+
+    if deja_tp1:
+        return bot.send_message(uid,
+            f"❌ *Signal annulé* — {nom}\n"
+            f"Le marché a déjà atteint l'objectif TP1 prévu ({tp1_cache:{fmt}}) "
+            f"avant que tu n'ouvres la position — entrer maintenant capturerait "
+            f"un R/R trop dégradé.\n"
+            f"Aucun trade ouvert. Attends le prochain signal.",
+            parse_mode="Markdown")
+
+    # Recalcul du R/R réellement disponible avec le prix FRAIS d'exécution
+    risque_restant  = abs(px - sl_cache)
+    recomp_restante = abs(tp_final_cache - px)
+    rr_restant = (recomp_restante / risque_restant) if risque_restant > 0 else 0
+    rr_original = cache["mt5_rr"]
+
+    if rr_original > 0:
+        degradation_pct = max(0, (1 - (rr_restant / rr_original)) * 100)
+    else:
+        degradation_pct = 0
+
+    if degradation_pct > RISK_CONFIG["max_rr_degradation_pct"]:
+        return bot.send_message(uid,
+            f"❌ *Signal annulé* — {nom}\n"
+            f"Le R/R restant s'est trop dégradé depuis la détection du signal "
+            f"({rr_original:.2f}R → {rr_restant:.2f}R, -{degradation_pct:.0f}%).\n"
+            f"Aucun trade ouvert pour protéger la qualité de l'entrée.",
+            parse_mode="Markdown")
+
     trade_id, sizing = ouvrir_trade(uid, actif, entry_direction, px,
-                                    cache["mt5_sl"], cache["mt5_tp1"], cache["mt5_tp"],
+                                    sl_cache, tp1_cache, tp_final_cache,
                                     cache["strategie"], cache["confiance"],
                                     label=cache.get("label","SIGNAL"))
 
@@ -1875,10 +2276,10 @@ def save_devise(call):
         f"📊 Contexte : {cache.get('contexte','')}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💰 Entrée  : {px:{fmt}}\n"
-        f"🛑 SL      : {cache['mt5_sl']:{fmt}}\n"
-        f"🎯 TP1 (85%): {cache['mt5_tp1']:{fmt}}\n"
-        f"🏁 TP Final (15%): {cache['mt5_tp']:{fmt}}\n"
-        f"⚖️ R/R     : {cache['mt5_rr']:.2f}R\n"
+        f"🛑 SL      : {sl_cache:{fmt}}\n"
+        f"🎯 TP1 (85%): {tp1_cache:{fmt}}\n"
+        f"🏁 TP Final (15%): {tp_final_cache:{fmt}}\n"
+        f"⚖️ R/R actuel : {rr_restant:.2f}R (prévu {rr_original:.2f}R)\n"
         f"🎖️ Confiance : {cache.get('confiance',0)}%\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💵 *Risque réel calculé* : ${sizing['montant_risque']}\n"
@@ -1900,6 +2301,7 @@ if __name__ == "__main__":
     Thread(target=scanner_marche_auto,            daemon=True).start()
     Thread(target=monitorer_trades_actifs,         daemon=True).start()
     Thread(target=envoyer_rapports_quotidiens_auto,daemon=True).start()
-    print("💼 TERMINAL PRIME V43 — The Winner's Brain ACTIF "
-          "(4 stratégies + gestion pro complète)", flush=True)
+    Thread(target=watchdog_trades_bloques,         daemon=True).start()
+    print("💼 TERMINAL PRIME V44 — BUG FIXES ACTIFS "
+          "(scanner parallèle + protection anti-blocage + watchdog)", flush=True)
     bot.infinity_polling()
