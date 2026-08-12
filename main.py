@@ -65,7 +65,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # CONFIGURATION
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAFGW1gnfIdqMDwiUxMwYpBfUnNrIJ_3Ons"
+TELEGRAM_TOKEN = "8658287331:AAG5Qai3B_d53VwVwTObR6TBy8mQ15-y6Bc"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 ADMIN_ID = 5968288964
 CAPITAL_ACTUEL = 40650
