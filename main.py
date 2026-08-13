@@ -1,8 +1,16 @@
 """
 ╔════════════════════════════════════════════════════════════════════════════╗
-║   TERMINAL PRIME V50 — MULTI-MODULES IA + GROQ (ANALYSTE EXPERT)          ║
+║   TERMINAL PRIME V51 — GROQ (MODÈLE CORRIGÉ) + SEUILS DESSERRÉS           ║
 ║                                                                            ║
-║  Base V49 (calcul déterministe + Groq) + NOUVEAUX MODULES INDÉPENDANTS: ║
+║  Base V50 (Groq: llama-3.1-70b-versatile → llama-3.1-8b-instant, seul    ║
+║  modèle confirmé fonctionnel via /testgroq) + AJUSTEMENTS V51:            ║
+║                                                                            ║
+║   • Seuil d'acceptation calcul déterministe : 85% → 78%                  ║
+║   • Seuil de veto Groq : 40% → 32%                                       ║
+║   • R:R minimum CPR Pullback & Rejection : 1.5 → 1.3                     ║
+║   Objectif: augmenter le volume de signaux quotidiens sans changer        ║
+║   l'architecture ni la logique interne des stratégies. Tous ces seuils   ║
+║   restent ajustables en direct via /iaconfig et sans redéploiement.      ║
 ║                                                                            ║
 ║  🤖 PRINCIPE STRICT RESPECTÉ (inchangé depuis V48):                       ║
 ║   • Les stratégies (CPR/Open Drive/RSI) restent LA fondation du bot,      ║
@@ -65,7 +73,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # CONFIGURATION
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAG7IEb3c8yDJp3P-tSbuoKZceFSSlgqB6k"
+TELEGRAM_TOKEN = "8658287331:AAHvGF1wOsNavN3u3xOcHNaR7u3CqBXGQAk"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 ADMIN_ID = 5968288964
 CAPITAL_ACTUEL = 40650
@@ -1009,7 +1017,7 @@ def analyser_cpr_rejection(symbole):
 
         risque = abs(px - sl)
         rr = abs(tp_final - px) / risque if risque > 0 else 0
-        if rr < 1.5:
+        if rr < 1.3:  # ✅ V51: 1.5→1.3 — légèrement assoupli pour plus d'opportunités détectées
             return None
 
         return {
@@ -1199,9 +1207,12 @@ def detecter_contexte_pdf(symbole):
 #      seul (aucune dépendance dure à Groq).
 
 IA_CONFIG = {
-    "seuil_acceptation": 85,   # % minimum (calcul déterministe) pour qu'un signal soit accepté
+    "seuil_acceptation": 78,   # ✅ V51: 85→78% — desserré pour augmenter le volume de signaux
+                                # (calcul déterministe) tout en gardant un filtre sérieux.
+                                # Ajustable en direct via /iaconfig seuil_acceptation <valeur>
     "groq_active": True,       # bascule ON/OFF du second avis Groq
-    "groq_seuil_veto": 40,     # si Groq donne un score < ce seuil, il peut opposer un veto
+    "groq_seuil_veto": 32,     # ✅ V51: 40→32% — Groq ne pose veto que sur les cas vraiment
+                                # douteux, pour ne pas sur-filtrer des signaux déjà validés.
     "poids": {                 # Poids relatif de chaque critère dans le score final
         "tendance_h1":        12,
         "adx":                10,
@@ -2631,7 +2642,7 @@ def scanner_marche_auto():
                     ligne_risque_ia = f"🛡️ {gr.get('note','')}\n" if gr.get("note") else ""
 
                     txt = (
-                        f"💼 *TERMINAL PRIME V50*\n"
+                        f"💼 *TERMINAL PRIME V51*\n"
                         f"{nom}  {dir_}\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"🎯 Stratégie : *{res['label']}*\n"
@@ -2944,7 +2955,7 @@ def bienvenue(message):
         trade_info = f"\n🟠 *TRADE ACTIF:* {t['symbol']} {t['direction']} @ {t['entry_price']}"
 
     bot.send_message(uid,
-        f"💼 *TERMINAL PRIME V50* — ANALYSTE IA MULTI-MODULES (GROQ)\n"
+        f"💼 *TERMINAL PRIME V51* — ANALYSTE IA MULTI-MODULES (GROQ)\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"3 stratégies indépendantes, chacune validée par IA\n"
         f"🎯 Scan exclusif : 🥇 Gold · 🥈 Argent · 🔥 Volatility\n"
@@ -3200,6 +3211,6 @@ if __name__ == "__main__":
     Thread(target=monitorer_trades_actifs,         daemon=True).start()
     Thread(target=envoyer_rapports_quotidiens_auto,daemon=True).start()
     Thread(target=watchdog_trades_bloques,         daemon=True).start()
-    print("💼 TERMINAL PRIME V50 — ANALYSTE IA MULTI-MODULES (GROQ) ACTIF "
+    print("💼 TERMINAL PRIME V51 — ANALYSTE IA MULTI-MODULES (GROQ) ACTIF "
           "(3 stratégies indépendantes, contexte/faux-signaux/multi-TF/risque, Groq, scanner parallèle, watchdog)", flush=True)
     bot.infinity_polling()
