@@ -1,9 +1,10 @@
 """
 ╔════════════════════════════════════════════════════════════════════════════╗
-║   SMART MONEY PRIME V51 — DÉTECTION DE LIQUIDITÉ + IA GROQ                 ║
+║   SMART MONEY PRIME V51.1 — TRADER AUTONOME + COMMANDE /testgroq           ║
 ║                                                                            ║
-║  Base ultra-robuste V50 avec Moteur IA + Gestion du risque institutionnelle║
-║  Nouvelle Stratégie : Détection des Prises de Liquidité (SMC)              ║
+║  - Python calcule les indicateurs (ADX, ATR, MACD, Contexte)             ║
+║  - Groq (Llama 3.1) prend la décision de A à Z (JSON strict)               ║
+║  - Python applique les filets de sécurité et le gestionnaire de risque   ║
 ╚════════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -29,7 +30,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # CONFIGURATION
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAG5Qai3B_d53VwVwTObR6TBy8mQ15-y6Bc"
+TELEGRAM_TOKEN = "8658287331:AAEBSSRv5hDtqT6h_JIeKd2djnH4mGLS28E"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 ADMIN_ID = 5968288964
 CAPITAL_ACTUEL = 40650
@@ -122,7 +123,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Smart Money Prime V51 — Bot de Liquidité Actif"
+    return "Smart Money Prime V51.1 — Trader Autonome Actif"
 
 def run():
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
@@ -415,17 +416,6 @@ def fermer_trade_complet(uid, exit_price, win):
 
             pnl_total[uid] = pnl_total.get(uid, 0) + pnl_final
             enregistrer_resultat_trade(uid, pnl_final, win, pnl_pour_bilan=pnl_trade_total)
-
-            try:
-                ia_enregistrer_resultat(
-                    symbol=trade["symbol"], strategie_nom=trade.get("strategie_nom_ia", "?"),
-                    score=trade.get("ia_score") if trade.get("ia_score") is not None else trade.get("confiance", 0),
-                    timeframe="H1", win=win, tp_atteint=win, sl_atteint=(not win), drawdown_pct=0,
-                    avis_ia_score=trade.get("ia_score"), gemini_score=trade.get("gemini_score"),
-                    sl=trade.get("sl_original"), tp=trade.get("tp_final"), duree_secondes=duration_seconds,
-                    contexte_marche=trade.get("contexte_marche"),
-                )
-            except: pass
             return {"trade_id": trade_id, "pnl": pnl_trade_total, "pnl_final_portion": pnl_final, "win": win, "duration": duration_seconds}
         except: return {"trade_id": trade_id, "pnl": 0.0, "pnl_final_portion": 0.0, "win": win, "duration": 0, "erreur": True}
         finally: trades_actifs.pop(uid, None)
@@ -534,80 +524,17 @@ def est_symbole_autorise(symbole):
     return "HORS_SESSION", f"🔒 {symbole} inactif"
 
 # ==========================================
-# 💧 STRATÉGIE SMART MONEY (PRISE DE LIQUIDITÉ)
-# ==========================================
-
-def analyser_prise_liquidite(symbole):
-    c1h = obtenir_donnees_deriv(symbole, 3600)
-    c15 = obtenir_donnees_deriv(symbole, 900)
-    
-    if not c1h or not c15 or len(c1h) < 24 or len(c15) < 5:
-        return None
-
-    try:
-        df1h = pd.DataFrame([{"open": float(c["open"]), "high": float(c["high"]), "low": float(c["low"]), "close": float(c["close"])} for c in c1h])
-        df15 = pd.DataFrame([{"open": float(c["open"]), "high": float(c["high"]), "low": float(c["low"]), "close": float(c["close"])} for c in c15])
-        
-        px = float(df15['close'].iloc[-1])
-        recent_high = df1h['high'].iloc[-24:-2].max()
-        recent_low = df1h['low'].iloc[-24:-2].min()
-
-        signal, sl, tp_final, phase = None, 0.0, 0.0, ""
-
-        if float(df15['high'].iloc[-2]) > recent_high and float(df15['close'].iloc[-2]) < recent_high:
-            signal = "SELL"
-            phase = "Distribution & Prise de Liquidité (Haut)"
-            sl = float(df15['high'].iloc[-2]) * 1.002
-            dist = sl - px
-            if dist > 0: tp_final = px - (dist * 3.0)
-
-        elif float(df15['low'].iloc[-2]) < recent_low and float(df15['close'].iloc[-2]) > recent_low:
-            signal = "BUY"
-            phase = "Accumulation & Prise de Liquidité (Bas)"
-            sl = float(df15['low'].iloc[-2]) * 0.998
-            dist = px - sl
-            if dist > 0: tp_final = px + (dist * 3.0)
-
-        if not signal or tp_final == 0: return None
-
-        risque = abs(px - sl)
-        tp1 = px + (risque * 1.5) if signal == "BUY" else px - (risque * 1.5)
-
-        return {
-            "action": "🟢 ACHAT (BUY)" if signal == "BUY" else "🔴 VENTE (SELL)",
-            "tendance": "BULL" if signal == "BUY" else "BEAR", 
-            "force": phase,
-            "msg": f"Manipulation détectée : chasse aux stops, réintégration confirmée.",
-            "sl": round(sl, 5), "tp1": round(tp1, 5), "tp": round(tp_final, 5),
-            "rr": 3.0, "px": round(px, 5),
-            "strategie": 4, "confiance": 88,
-            "label": "SMART MONEY LIQUIDITY",
-            "strategie_nom_ia": "SMART_MONEY",
-            "niveau_casse": round(recent_high if signal == "SELL" else recent_low, 5),
-        }
-    except Exception as e:
-        print(f"[SMC/{symbole}] {e}", flush=True)
-        return None
-
-# ==========================================
-# MODULES IA ET VALIDATION
+# MODULES TECHNIQUES POUR L'IA (LES YEUX)
 # ==========================================
 
 IA_CONFIG = {
     "seuil_acceptation": 80,   
     "groq_active": True,       
-    "groq_seuil_veto": 40,     
-    "poids": {"tendance_h1": 12, "adx": 10, "rsi_coherence": 10, "macd_coherence": 8, "ema_alignement": 8, "atr_volatilite": 8, "structure_marche": 10, "distance_sr": 8, "qualite_cassure": 10, "spread": 6, "multi_tf_coherence": 10},
-    "poids_contexte": {"tendance_forte": 1.10, "range": 0.90, "tres_volatil": 0.80, "peu_volatil": 0.95, "consolidation": 0.90, "proche_cassure": 1.05},
-    "seuil_multi_tf_penalite": 30,  
 }
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 GROQ_MODEL   = "llama-3.1-70b-versatile"
 GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions"
-
-ia_historique = []      
-ia_poids_ajustes = {}   
 
 def calculer_adx(df, period=14):
     try:
@@ -664,107 +591,170 @@ def analyser_contexte_marche(symbole, df1h, df4h):
         return {"tendance": tendance, "volatilite": volatilite, "consolidation": consolidation, "proche_cassure": proche_cassure, "adx": round(adx, 1), "atr_pct": round(atr_pct, 3), "position_dans_range": round(position_dans_range, 2)}
     except: return {"tendance": "INDECIS", "volatilite": "NORMALE", "consolidation": False, "proche_cassure": False, "adx": 20.0, "atr_pct": 0.3, "position_dans_range": 0.5}
 
-def detecter_faux_signal(df1h, df5, signal, contexte):
-    raisons = []
-    penalite = 0
-    try:
-        if contexte["volatilite"] == "TRES_VOLATIL":
-            penalite += 5; raisons.append("Volatilité excessive")
-    except: pass
-    return (penalite > 0), min(penalite, 35), raisons
-
-def moteur_ia_valider_signal(symbole, signal, strategie_nom):
-    try:
-        c1h = obtenir_donnees_deriv(symbole, 3600)
-        c5  = obtenir_donnees_deriv(symbole, 300)
-        c4h = obtenir_donnees_h4(symbole)
-        if not c1h or not c5: return {"accepte": False, "score": 0, "justification": ["Données insuffisantes"], "details": {}}
-        
-        df1h = pd.DataFrame([{"open":float(c["open"]),"high":float(c["high"]),"low":float(c["low"]),"close":float(c["close"])} for c in c1h])
-        df5  = pd.DataFrame([{"open":float(c["open"]),"high":float(c["high"]),"low":float(c["low"]),"close":float(c["close"])} for c in c5])
-        df4h = pd.DataFrame([{"open":float(c["open"]),"high":float(c["high"]),"low":float(c["low"]),"close":float(c["close"])} for c in c4h]) if c4h else df1h
-
-        direction = signal["tendance"]
-        contexte = analyser_contexte_marche(symbole, df1h, df4h)
-        
-        # Validation simplifiée IA pour ce script
-        score_base = 85.0 if direction == "BULL" and contexte["tendance"] != "BAISSIERE" else (85.0 if direction == "BEAR" and contexte["tendance"] != "HAUSSIERE" else 60.0)
-        accepte = score_base >= IA_CONFIG["seuil_acceptation"]
-
-        return {
-            "accepte": accepte,
-            "score": score_base,
-            "score_base": score_base,
-            "justification": ["SMC Aligné avec la tendance H1"] if accepte else ["SMC Contre tendance stricte"],
-            "details": {}, "rsi_val": 50.0, "adx_val": contexte["adx"],
-            "contexte_marche": contexte, "risque_faux_signal": False, "penalite_faux_signal": 0, "raisons_faux_signal": [],
-            "multi_tf": {"score": 100, "penalite": 0, "raisons": []},
-            "gestion_risque": {"sl_optimise": signal["sl"], "tp_optimise": signal["tp"], "rr_optimise": signal["rr"]}
-        }
-    except Exception as e:
-        return {"accepte": False, "score": 0, "justification": ["Erreur IA"], "details": {}}
-
-def groq_second_avis(symbole, signal, strategie_nom, verdict_calcul):
-    if not IA_CONFIG["groq_active"] or not GROQ_API_KEY:
-        return {"disponible": False, "score": None, "veto": False, "avis": "Groq désactivé"}
-    try:
-        prompt = (
-            f"Analyse une prise de liquidité sur {symbole}. Direction: {signal.get('action')}. "
-            f"Réponds UNIQUEMENT ce JSON: "
-            '{"score": 90, "avis": "Liquidation institutionnelle validée."}'
-        )
-        payload = {"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "max_tokens": 100}
-        resp = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {GROQ_API_KEY}"}, json=payload, timeout=8)
-        if resp.status_code != 200: return {"disponible": False, "score": None, "veto": False, "avis": "Erreur HTTP"}
-        texte = resp.json()["choices"][0]["message"]["content"].replace("```json", "").replace("```", "").strip()
-        parsed = json.loads(texte)
-        score_groq = float(parsed.get("score", 85))
-        return {"disponible": True, "score": score_groq, "veto": score_groq < IA_CONFIG["groq_seuil_veto"], "avis": parsed.get("avis", "Validé")}
-    except Exception as e:
-        return {"disponible": False, "score": None, "veto": False, "avis": "Erreur API"}
-
-def ia_enregistrer_resultat(symbol, strategie_nom, score, timeframe, win, tp_atteint, sl_atteint, drawdown_pct=0, avis_ia_score=None, sl=None, tp=None, duree_secondes=None, gemini_score=None, contexte_marche=None):
-    maintenant = datetime.datetime.utcnow()
-    ia_historique.append({
-        "symbol": symbol, "strategie": strategie_nom, "score": score, "win": win,
-        "ts": time.time(), "heure_utc": maintenant.hour, "date": maintenant.strftime("%Y-%m-%d"),
-        "gemini_score": gemini_score
-    })
-
 # ==========================================
-# LE CERVEAU S.M.C
+# 🧠 LE CERVEAU IA (TRADER AUTONOME)
 # ==========================================
 
 def cerveau_pro_trader(symbole):
-    signaux_valides = []
-    
-    for fn, nom_strategie, emoji_ctx in (
-        (analyser_prise_liquidite, "SMART_MONEY", "💧 SMC LIQUIDITY GRAB"),
-    ):
-        signal_brut = fn(symbole)
-        if not signal_brut: continue
+    """
+    Le bot n'utilise plus de stratégies rigides. Python calcule le contexte de marché
+    et envoie le rapport à l'IA (Groq) pour qu'elle prenne la décision finale.
+    """
+    if not IA_CONFIG.get("groq_active", True) or not GROQ_API_KEY:
+        return []
 
-        verdict = moteur_ia_valider_signal(symbole, signal_brut, nom_strategie)
-        if not verdict["accepte"]: continue
-
-        avis_groq = groq_second_avis(symbole, signal_brut, nom_strategie, verdict)
-        if avis_groq["veto"]: continue
-
-        signal_brut["contexte_detecte"]  = emoji_ctx
-        signal_brut["ia_score"]          = verdict["score"]
-        signal_brut["ia_justification"]  = verdict["justification"]
-        signal_brut["gemini_score"]      = avis_groq["score"]
-        signal_brut["gemini_avis"]       = avis_groq["avis"]
-        signal_brut["gemini_disponible"] = avis_groq["disponible"]
-        signal_brut["contexte_marche"]   = verdict.get("contexte_marche", {})
+    try:
+        c1h = obtenir_donnees_deriv(symbole, 3600)
+        c4h = obtenir_donnees_h4(symbole)
         
-        signaux_valides.append(signal_brut)
+        if not c1h or len(c1h) < 30:
+            return []
+            
+        df1h = pd.DataFrame([{"open":float(c["open"]),"high":float(c["high"]),"low":float(c["low"]),"close":float(c["close"])} for c in c1h])
+        df4h = pd.DataFrame([{"open":float(c["open"]),"high":float(c["high"]),"low":float(c["low"]),"close":float(c["close"])} for c in c4h]) if c4h else df1h
+        
+        px = float(df1h['close'].iloc[-1])
 
-    return signaux_valides
+        contexte = analyser_contexte_marche(symbole, df1h, df4h)
+        adx = calculer_adx(df1h)
+        atr = calculer_atr(df1h)
+        macd_line, signal_line, hist = calculer_macd_signal(df1h)
+        
+        prompt = (
+            f"Tu es un algorithme de trading institutionnel. Analyse ce flux de données sur l'actif {symbole}.\n"
+            f"- Prix actuel : {px:.5f}\n"
+            f"- Tendance H1 : {contexte['tendance']} | Volatilité : {contexte['volatilite']}\n"
+            f"- ADX (Force de la tendance) : {adx:.1f}\n"
+            f"- ATR (Volatilité actuelle) : {atr:.5f}\n"
+            f"- MACD Histogramme : {hist:.5f}\n"
+            f"- Marché en consolidation : {contexte['consolidation']}\n"
+            f"- Prix proche d'une cassure : {contexte['proche_cassure']}\n\n"
+            "Prends une décision de trading. Si les conditions sont mauvaises ou incertaines, réponds 'WAIT'. "
+            "Réponds UNIQUEMENT et STRICTEMENT avec ce format JSON (sans markdown ni texte avant/après) :\n"
+            "{"
+            '"action": "BUY" ou "SELL" ou "WAIT", '
+            '"confiance": un entier entre 0 et 100, '
+            '"strategie_choisie": "Nom court du setup que tu as identifié", '
+            '"justification": "Une phrase expliquant ta décision techniquement", '
+            '"distance_sl_pct": pourcentage décimal (ex: 0.005 pour 0.5%), '
+            '"distance_tp_pct": pourcentage décimal (ex: 0.015 pour 1.5%)'
+            "}"
+        )
+
+        payload = {
+            "model": GROQ_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
+            "max_tokens": 150,
+        }
+        resp = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {GROQ_API_KEY}"}, json=payload, timeout=8)
+        
+        if resp.status_code != 200:
+            return []
+            
+        texte = resp.json()["choices"][0]["message"]["content"].strip()
+        texte = texte.replace("```json", "").replace("```", "").strip()
+        ia_decision = json.loads(texte)
+
+        action = ia_decision.get("action", "WAIT")
+        confiance = float(ia_decision.get("confiance", 0))
+        
+        if action not in ["BUY", "SELL"] or confiance < IA_CONFIG.get("seuil_acceptation", 80):
+            return []
+
+        dist_sl = min(float(ia_decision.get("distance_sl_pct", 0.005)), 0.015)
+        dist_tp = float(ia_decision.get("distance_tp_pct", 0.015))
+        
+        sl = px * (1 - dist_sl) if action == "BUY" else px * (1 + dist_sl)
+        tp_final = px * (1 + dist_tp) if action == "BUY" else px * (1 - dist_tp)
+        
+        risque = abs(px - sl)
+        if risque <= 0:
+            return []
+            
+        tp1 = px + (risque * 1.5) if action == "BUY" else px - (risque * 1.5)
+        rr = abs(tp_final - px) / risque
+
+        signal_formate = {
+            "action": "🟢 ACHAT (BUY)" if action == "BUY" else "🔴 VENTE (SELL)",
+            "tendance": "BULL" if action == "BUY" else "BEAR",
+            "force": str(ia_decision.get("strategie_choisie", "Analyse Autonome")).upper()[:25],
+            "msg": ia_decision.get("justification", "Décision IA"),
+            "sl": round(sl, 5),
+            "tp1": round(tp1, 5),
+            "tp": round(tp_final, 5),
+            "rr": round(rr, 2),
+            "px": round(px, 5),
+            "strategie": 99,
+            "confiance": confiance,
+            "label": "🧠 TRADER AUTONOME",
+            "strategie_nom_ia": "PURE_IA",
+            "ia_score": confiance,
+            "ia_justification": [ia_decision.get("justification", "")],
+            "gemini_score": confiance,
+            "gemini_avis": "Processus 100% autonome",
+            "gemini_disponible": True,
+            "contexte_detecte": f"🤖 {ia_decision.get('strategie_choisie', 'IA')}",
+            "contexte_marche": contexte
+        }
+        
+        return [signal_formate]
+
+    except Exception as e:
+        print(f"[Cerveau IA Autonome/{symbole}] Erreur: {e}", flush=True)
+        return []
 
 # ==========================================
 # COMMANDES TELEGRAM & SCANNER
 # ==========================================
+
+@bot.message_handler(commands=['testgroq'])
+def test_groq_reel(message):
+    """
+    Commande pour vérifier instantanément la santé de l'API Groq.
+    """
+    uid = message.chat.id
+    if not est_autorise(uid): return
+
+    if not GROQ_API_KEY:
+        return bot.send_message(uid, "❌ *Erreur* : Aucune clé GROQ_API_KEY détectée dans l'environnement.", parse_mode="Markdown")
+
+    bot.send_message(uid, "🔄 *Test de connexion Groq en cours...*", parse_mode="Markdown")
+    
+    try:
+        debut = time.time()
+        payload = {
+            "model": GROQ_MODEL,
+            "messages": [{"role": "user", "content": "Réponds uniquement 'OK' formaté en JSON strict: {\"status\": \"OK\"}"}],
+            "temperature": 0.1,
+            "max_tokens": 20
+        }
+        resp = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {GROQ_API_KEY}"}, json=payload, timeout=10)
+        duree = round(time.time() - debut, 2)
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            texte_recu = data["choices"][0]["message"]["content"].strip()
+            bot.send_message(uid, 
+                f"✅ *API GROQ OPÉRATIONNELLE*\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"⚡ Latence : `{duree}s`\n"
+                f"🧠 Modèle : `{GROQ_MODEL}`\n"
+                f"💬 Réponse brute : `{texte_recu}`\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Le moteur IA est prêt à analyser les marchés.", 
+                parse_mode="Markdown")
+        else:
+            bot.send_message(uid, 
+                f"❌ *ÉCHEC DE L'API*\n"
+                f"Code HTTP : {resp.status_code}\n"
+                f"Détails : `{resp.text[:200]}`", 
+                parse_mode="Markdown")
+                
+    except requests.exceptions.Timeout:
+        bot.send_message(uid, "❌ *Timeout* : L'API Groq a mis plus de 10 secondes à répondre.", parse_mode="Markdown")
+    except Exception as e:
+        bot.send_message(uid, f"❌ *Erreur interne* : `{e}`", parse_mode="Markdown")
 
 @bot.message_handler(commands=['start'])
 def bienvenue(message):
@@ -775,7 +765,7 @@ def bienvenue(message):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row(KeyboardButton("📊 CHOISIR UNE CIBLE"), KeyboardButton("🚀 LANCER L'ANALYSE"))
     markup.row(KeyboardButton("📜 HISTORIQUE"))
-    bot.send_message(uid, "💼 *SMART MONEY PRIME V51*\nLe moteur de Liquidité est actif.", reply_markup=markup, parse_mode="Markdown")
+    bot.send_message(uid, "💼 *SMART MONEY PRIME V51.1*\nTrader Autonome IA + Commande /testgroq active.", reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "📜 HISTORIQUE")
 def historique_bouton(message):
@@ -873,13 +863,12 @@ def scanner_marche_auto():
                     markup = InlineKeyboardMarkup().add(InlineKeyboardButton(f"⚡ Copier {paire}", callback_data=f"set_{cle}"))
                     
                     txt = (
-                        f"💼 *SMART MONEY PRIME*\n"
+                        f"💼 *TRADER AUTONOME IA*\n"
                         f"{paire}  {res['action']}\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"☁️ Structure : {res['force']}\n"
+                        f"🧠 Setup : {res['force']}\n"
                         f"📍 {res['msg']}\n"
-                        f"🤖 Score IA : {res.get('ia_score','?')}%\n"
-                        f"🔮 Groq : {res.get('gemini_score','?')}%\n"
+                        f"🤖 Confiance IA : {res.get('ia_score','?')}%\n"
                         f"⚖️ R/R : {res['rr']}R\n"
                         f"💰 Prix actuel : {px:.5f}\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━"
@@ -961,5 +950,5 @@ if __name__ == "__main__":
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=monitorer_trades_actifs, daemon=True).start()
     Thread(target=watchdog_trades_bloques, daemon=True).start()
-    print("💼 SMART MONEY PRIME V51 (SMC + GROQ) ACTIF", flush=True)
+    print("💼 SMART MONEY PRIME V51.1 (TRADER AUTONOME + /testgroq) ACTIF", flush=True)
     bot.infinity_polling()
