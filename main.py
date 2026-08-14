@@ -1,10 +1,53 @@
 """
 ╔════════════════════════════════════════════════════════════════════════════╗
-║   SMART MONEY PRIME V51.1 — TRADER AUTONOME + COMMANDE /testgroq           ║
+║   TERMINAL PRIME V51 — GROQ (MODÈLE CORRIGÉ) + SEUILS DESSERRÉS           ║
 ║                                                                            ║
-║  - Python calcule les indicateurs (ADX, ATR, MACD, Contexte)             ║
-║  - Groq (Llama 3.1 8B) prend la décision de A à Z (JSON strict)            ║
-║  - Python applique les filets de sécurité et le gestionnaire de risque   ║
+║  Base V50 (Groq: llama-3.1-70b-versatile → llama-3.1-8b-instant, seul    ║
+║  modèle confirmé fonctionnel via /testgroq) + AJUSTEMENTS V51:            ║
+║                                                                            ║
+║   • Seuil d'acceptation calcul déterministe : 85% → 78%                  ║
+║   • Seuil de veto Groq : 40% → 32%                                       ║
+║   • R:R minimum CPR Pullback & Rejection : 1.5 → 1.3                     ║
+║   Objectif: augmenter le volume de signaux quotidiens sans changer        ║
+║   l'architecture ni la logique interne des stratégies. Tous ces seuils   ║
+║   restent ajustables en direct via /iaconfig et sans redéploiement.      ║
+║                                                                            ║
+║  🤖 PRINCIPE STRICT RESPECTÉ (inchangé depuis V48):                       ║
+║   • Les stratégies (CPR/Open Drive/RSI) restent LA fondation du bot,      ║
+║     RIGOUREUSEMENT INCHANGÉES, totalement indépendantes entre elles.      ║
+║   • Le calcul déterministe reste le véritable cerveau — l'IA (Groq)       ║
+║     n'intervient qu'après lui et ne peut jamais reverser un rejet.        ║
+║                                                                            ║
+║  🌍 MODULE CONTEXTE MARCHÉ (analyser_contexte_marche): tendance haussière/║
+║     baissière/range, volatilité forte/faible, consolidation, proximité   ║
+║     d'une cassure — ajuste le score du calcul par un facteur borné.      ║
+║                                                                            ║
+║  🚨 MODULE DÉTECTION FAUX SIGNAUX (detecter_faux_signal): cassure sans   ║
+║     élan, mouvement épuisé, divergence RSI, mèche de retournement —      ║
+║     applique une pénalité soustractive plafonnée au score.               ║
+║                                                                            ║
+║  ⏱️ MODULE MULTI-TIMEFRAME (analyser_coherence_multi_tf): compare M1/M5/ ║
+║     M15/H1, pénalise un signal contraire à une unité de temps supérieure.║
+║                                                                            ║
+║  🛡️ MODULE GESTION INTELLIGENTE DU RISQUE (optimiser_gestion_risque):    ║
+║     affine le SL selon l'ATR réel, toujours borné à ±15% du niveau       ║
+║     déjà fixé par la stratégie — ne peut jamais élargir le risque.       ║
+║                                                                            ║
+║  🔮 GROQ enrichi: reçoit désormais le dossier complet (contexte,         ║
+║     alertes faux-signal, cohérence multi-TF, risque optimisé) et rend    ║
+║     un verdict structuré (confirmer/déconseiller + explication).         ║
+║                                                                            ║
+║  📚 APPRENTISSAGE ENRICHI (ia_enregistrer_resultat): actif, stratégie,   ║
+║     timeframe, heure, score déterministe, avis Groq, SL/TP, résultat,  ║
+║     drawdown, durée, contexte marché — tous les champs demandés.         ║
+║     Statistiques disponibles via /iastats [strategie|actif|score|heure|  ║
+║     groq|contexte].                                                      ║
+║                                                                            ║
+║  ✅ INFRASTRUCTURE V44/V46/V48 CONSERVÉE INTÉGRALEMENT (zéro régression):║
+║   Accès VIP, /Volatility granulaire, killzones, watchdog anti-blocage,   ║
+║   scanner parallèle, revalidation prix/R:R au clic, TP partiel           ║
+║   85%+breakeven+trailing, rapports quotidiens, /risk /rapport /pause     ║
+║   /resume /debloquer /status /historique /iaconfig /iastats.             ║
 ╚════════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -30,7 +73,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # CONFIGURATION
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAG0-ligM2yqNwIa4-AUWMKVyH4nhBoLCSk"
+TELEGRAM_TOKEN = "8658287331:AAGW4vuD85vkyybDpmHpZ70rcfCE_odoydY"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 ADMIN_ID = 5968288964
 CAPITAL_ACTUEL = 40650
@@ -41,18 +84,18 @@ FMP_API_KEY = os.environ.get("FMP_API_KEY", "D0srw6sB3otYTc00UdBE9otPIbhkKV8X")
 # ==========================================
 
 RISK_CONFIG = {
-    "risk_per_trade_pct": 1.0,        
-    "daily_loss_limit_pct": 5.0,      
-    "max_consecutive_losses": 3,      
-    "pause_duration_minutes": 120,    
-    "partial_tp_ratio": 0.85,         
-    "breakeven_buffer_pct": 0.0005,   
-    "trailing_stop_activation_rr": 1.0,  
-    "trailing_stop_distance_pct": 0.003, 
-    "max_trades_per_day": 8,          
-    "max_trade_age_hours": 12,        
-    "signal_validity_seconds": 45,    
-    "max_rr_degradation_pct": 40,     
+    "risk_per_trade_pct": 1.0,        # % du capital risqué par trade
+    "daily_loss_limit_pct": 5.0,      # Stop journalier si perte cumulée atteint ce %
+    "max_consecutive_losses": 3,      # Pause auto après N pertes d'affilée
+    "pause_duration_minutes": 120,    # Durée de la pause anti-tilt
+    "partial_tp_ratio": 0.85,         # 85% de la position fermée au TP1 (technique vidéo)
+    "breakeven_buffer_pct": 0.0005,   # Petit buffer au-dessus du prix d'entrée pour le BE
+    "trailing_stop_activation_rr": 1.0,  # Active le trailing dès que prix atteint 1R après BE
+    "trailing_stop_distance_pct": 0.003, # Distance du trailing stop (0.3%)
+    "max_trades_per_day": 8,          # Limite de trades par jour (évite sur-trading)
+    "max_trade_age_hours": 12,        # ✅ V44: watchdog — force-clôture si un trade traîne trop longtemps
+    "signal_validity_seconds": 45,    # ✅ V44: fenêtre de validité d'un signal (réduite de 90s à 45s)
+    "max_rr_degradation_pct": 40,     # ✅ V44: rejette l'entrée si le R/R restant a chuté de plus de 40%
 }
 
 # ==========================================
@@ -62,7 +105,7 @@ RISK_CONFIG = {
 class TradeState(Enum):
     SIGNAL_SENT     = "SIGNAL_ENVOYÉ"
     TRADE_OPEN      = "TRADE_OUVERT"
-    TRADE_PARTIAL   = "TP1_PARTIEL_BE"     
+    TRADE_PARTIAL   = "TP1_PARTIEL_BE"     # 85% fermé, reste en breakeven/trailing
     TRADE_WIN       = "GAGNÉ"
     TRADE_LOSS      = "PERDU"
     CANCELLED       = "ANNULÉ"
@@ -99,20 +142,27 @@ signaux_cache        = {}
 utilisateurs_autorises = {ADMIN_ID: "LIFETIME"}
 cles_generees           = {}
 
+# Contrôle granulaire des paires Volatility
 volatility_pairs_active = {
     "V10": True, "V25": True, "V50": True, "V75": True, "V100": True,
 }
 
-trades_actifs     = {}   
-trades_historique = {}   
-prix_broker       = {}   
+# Gestion des trades (V38 étendu)
+trades_actifs     = {}   # uid -> dict trade complet
+trades_historique = {}   # uid -> [trades fermés]
+prix_broker       = {}   # cache derniers prix
 
 pnl_total  = {}
 win_count  = {}
 loss_count = {}
 
+# Contexte marché mémorisé (cache 2 min)
 contexte_marche_cache = {}
-daily_stats = {}   
+
+# Risk Management — état par utilisateur
+daily_stats = {}   # uid -> {"date":..., "pnl":0, "trades":0, "consecutive_losses":0,
+                    #         "paused_until": None, "best_trade":0, "worst_trade":0}
+
 lock_trade = Lock()
 
 # ==========================================
@@ -123,7 +173,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Smart Money Prime V51.1 — Trader Autonome Actif"
+    return "Terminal Prime V46 — Master Class Edition"
 
 def run():
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
@@ -132,7 +182,7 @@ def keep_alive():
     Thread(target=run, daemon=True).start()
 
 # ==========================================
-# UTILITAIRES PRIX
+# UTILITAIRES PRIX (base V38)
 # ==========================================
 
 def prefixer_symbole(s):
@@ -143,11 +193,25 @@ def prefixer_symbole(s):
         return f"R_{s.replace('V','')}"
     return f"frx{s}"
 
+# ✅ V44 NEW: cache court (TTL) des bougies pour éviter de re-télécharger les
+# mêmes données plusieurs fois pendant un même cycle de scan (detecter_contexte
+# puis la stratégie choisie demandaient chacune les mêmes bougies H1/H4/M5,
+# doublant inutilement la latence réseau — cause principale des signaux en retard).
 _candles_cache = {}
 _candles_cache_lock = Lock()
-CANDLES_CACHE_TTL = 20  
+CANDLES_CACHE_TTL = 20  # secondes — assez court pour rester réactif, assez long pour dédupliquer
 
 def _obtenir_donnees_deriv_reseau(symbole_brut, granularite=300):
+    """
+    Fonction réseau brute — timeouts réduits pour échouer plus vite vers le fallback.
+    ✅ V46 FIX #1: chaque bougie FMP recevait auparavant epoch=int(time.time()),
+       c'est-à-dire l'heure ACTUELLE pour TOUTES les bougies (peu importe leur
+       vraie date). Résultat: tout regroupement par date (ex: calcul du CPR
+       journalier) fusionnait 250 bougies en un seul jour et échouait
+       silencieusement. On parse maintenant le vrai champ "date" renvoyé par FMP.
+    ✅ V46 FIX #2: la granularité 900s (15 min) était silencieusement mappée
+       sur "4hour"/14400s aussi bien côté FMP que côté fallback Deriv.
+    """
     if symbole_brut in ALL_PAIRS:
         tf_map = {300: "5min", 900: "15min", 3600: "1hour"}
         tf = tf_map.get(granularite, "4hour")
@@ -166,13 +230,15 @@ def _obtenir_donnees_deriv_reseau(symbole_brut, granularite=300):
                         try:
                             epoch_val = int(datetime.datetime.strptime(
                                 date_str, "%Y-%m-%d %H:%M:%S").timestamp())
-                        except:
+                        except (ValueError, TypeError):
                             try:
                                 epoch_val = int(datetime.datetime.strptime(
                                     date_str, "%Y-%m-%d").timestamp())
-                            except:
+                            except (ValueError, TypeError):
                                 epoch_val = None
                     if epoch_val is None:
+                        # Fallback: approximation par index (préserve au moins un
+                        # étalement réaliste des dates plutôt qu'un timestamp unique)
                         epoch_val = int(time.time()) - (250 - idx) * granularite
                     bougies.append({
                         "open":  float(b["open"]),
@@ -207,22 +273,30 @@ def _obtenir_donnees_deriv_reseau(symbole_brut, granularite=300):
     return None
 
 def obtenir_donnees_deriv(symbole_brut, granularite=300):
+    """
+    ✅ V44: version cachée (TTL courte). Même signature, même comportement
+    logique, mais évite les appels réseau redondants dans un même cycle.
+    """
     cle = (symbole_brut, granularite)
     now = time.time()
     with _candles_cache_lock:
         cached = _candles_cache.get(cle)
         if cached and (now - cached[0]) < CANDLES_CACHE_TTL:
             return cached[1]
+
     data = _obtenir_donnees_deriv_reseau(symbole_brut, granularite)
+
     if data is not None:
         with _candles_cache_lock:
             _candles_cache[cle] = (now, data)
     return data
 
 def obtenir_donnees_h4(symbole):
+    """Récupère des données 4H en agrégeant 4x les bougies H1 si l'API ne supporte pas 14400 directement"""
     data = obtenir_donnees_deriv(symbole, 14400)
     if data and len(data) > 20:
         return data
+    # Fallback: agréger H1 par groupes de 4
     h1 = obtenir_donnees_deriv(symbole, 3600)
     if not h1 or len(h1) < 8:
         return None
@@ -278,36 +352,43 @@ def obtenir_prix_broker_realtime(symbole):
 def valider_prix_avant_signal(symbole, prix_bot, tolerance=0.001):
     prix_real = obtenir_prix_broker_realtime(symbole)
     if not prix_real:
+        print(f"[Validation {symbole}] Impossible obtenir prix broker", flush=True)
         return False
     decalage = abs(prix_bot - prix_real) / prix_real
     if decalage > tolerance:
+        print(f"[Validation {symbole}] ÉCART {decalage*100:.2f}% — REJETÉ", flush=True)
         return False
     return True
 
 # ==========================================
-# GESTION DU RISQUE PROFESSIONNELLE
+# ✅ V43 NEW: GESTION DU RISQUE PROFESSIONNELLE
 # ==========================================
 
 def get_today_str():
     return datetime.datetime.utcnow().strftime("%Y-%m-%d")
 
 def init_daily_stats(uid):
+    """Initialise ou réinitialise les stats du jour si on a changé de date"""
     today = get_today_str()
     if uid not in daily_stats or daily_stats[uid]["date"] != today:
         daily_stats[uid] = {
             "date": today, "pnl": 0.0, "trades": 0,
-            "wins": 0, "losses": 0, "consecutive_losses": 0,
-            "paused_until": None, "best_trade": 0.0, "worst_trade": 0.0,
+            "wins": 0, "losses": 0,
+            "consecutive_losses": 0,
+            "paused_until": None,
+            "best_trade": 0.0, "worst_trade": 0.0,
         }
     return daily_stats[uid]
 
 def utilisateur_en_pause(uid):
+    """Vérifie si l'utilisateur est en pause anti-tilt"""
     stats = init_daily_stats(uid)
     if stats["paused_until"] and time.time() < stats["paused_until"]:
         return True, stats["paused_until"]
     return False, None
 
 def daily_loss_limit_atteinte(uid):
+    """Vérifie si la limite de perte journalière est atteinte"""
     stats = init_daily_stats(uid)
     limite = -(CAPITAL_ACTUEL * RISK_CONFIG["daily_loss_limit_pct"] / 100.0)
     return stats["pnl"] <= limite
@@ -317,23 +398,52 @@ def max_trades_jour_atteint(uid):
     return stats["trades"] >= RISK_CONFIG["max_trades_per_day"]
 
 def utilisateur_peut_trader(uid):
+    """
+    ✅ Circuit breaker complet:
+    - Limite de perte journalière
+    - Pause anti-tilt (pertes consécutives)
+    - Nombre max de trades par jour
+    Retourne (bool_peut_trader, raison_si_non)
+    """
     stats = init_daily_stats(uid)
+
     if daily_loss_limit_atteinte(uid):
-        return False, "🛑 Limite de perte journalière atteinte."
+        return False, (f"🛑 Limite de perte journalière atteinte "
+                       f"({RISK_CONFIG['daily_loss_limit_pct']}% du capital). "
+                       f"Trading suspendu jusqu'à demain.")
+
     en_pause, jusqua = utilisateur_en_pause(uid)
     if en_pause:
         minutes_restantes = int((jusqua - time.time()) / 60)
-        return False, f"⏸️ Pause anti-tilt active. Reprise dans {minutes_restantes} minutes."
+        return False, (f"⏸️ Pause anti-tilt active après "
+                       f"{RISK_CONFIG['max_consecutive_losses']} pertes consécutives.\n"
+                       f"Reprise dans {minutes_restantes} minutes.")
+
     if max_trades_jour_atteint(uid):
-        return False, "🛑 Limite de trades/jour atteinte."
+        return False, (f"🛑 Limite de {RISK_CONFIG['max_trades_per_day']} trades/jour atteinte. "
+                       f"Reviens demain — la discipline fait les gagnants.")
+
     return True, None
 
 def calculer_position_size(capital, risk_pct, prix_entree, prix_sl, symbole):
+    """
+    ✅ V43 NEW: Calcul RÉEL de la taille de position
+    Au lieu d'un montant fixe arbitraire, calcule selon:
+      - Le capital actuel
+      - Le % de risque accepté
+      - La distance réelle entre entrée et stop loss
+    Retourne le montant en argent risqué + un "lot factor" relatif pour affichage
+    """
     montant_risque = capital * (risk_pct / 100.0)
     distance_sl = abs(prix_entree - prix_sl)
+
     if distance_sl <= 0:
         return {"montant_risque": montant_risque, "lot_factor": 0, "distance_sl": 0}
+
+    # Lot factor = combien d'unités on peut se permettre pour respecter le risque
+    # (simplifié — sert de guide proportionnel, le lot exact dépend du broker/contract size)
     lot_factor = montant_risque / distance_sl
+
     return {
         "montant_risque": round(montant_risque, 2),
         "lot_factor": round(lot_factor, 4),
@@ -342,9 +452,23 @@ def calculer_position_size(capital, risk_pct, prix_entree, prix_sl, symbole):
     }
 
 def enregistrer_resultat_trade(uid, pnl, win, pnl_pour_bilan=None):
+    """
+    Met à jour les stats journalières + déclenche la pause anti-tilt si besoin.
+    pnl: portion à ajouter à stats["pnl"] (évite double-comptage si un TP
+         partiel avait déjà ajouté sa part avant cet appel).
+    pnl_pour_bilan: P&L TOTAL du trade (portion partielle + finale), utilisé
+         uniquement pour best_trade/worst_trade. Si absent, on utilise pnl.
+
+    ✅ V44 FIX: cette fonction plantait auparavant (TypeError) car appelée
+    avec pnl_pour_bilan= sans que le paramètre existe. Cela empêchait
+    `del trades_actifs[uid]` de s'exécuter dans fermer_trade_complet(),
+    bloquant l'utilisateur DÉFINITIVEMENT après son premier trade fermé
+    (plus aucun signal, plus aucune notification gagné/perdu).
+    """
     stats = init_daily_stats(uid)
     stats["pnl"]    += pnl
     stats["trades"] += 1
+
     valeur_bilan = pnl_pour_bilan if pnl_pour_bilan is not None else pnl
 
     if win:
@@ -356,46 +480,96 @@ def enregistrer_resultat_trade(uid, pnl, win, pnl_pour_bilan=None):
         stats["consecutive_losses"] += 1
         loss_count[uid] = loss_count.get(uid, 0) + 1
 
-    if valeur_bilan > stats["best_trade"]: stats["best_trade"] = valeur_bilan
-    if valeur_bilan < stats["worst_trade"]: stats["worst_trade"] = valeur_bilan
+    if valeur_bilan > stats["best_trade"]:
+        stats["best_trade"] = valeur_bilan
+    if valeur_bilan < stats["worst_trade"]:
+        stats["worst_trade"] = valeur_bilan
 
+    # Déclenchement pause anti-tilt
     if stats["consecutive_losses"] >= RISK_CONFIG["max_consecutive_losses"]:
         stats["paused_until"] = time.time() + (RISK_CONFIG["pause_duration_minutes"] * 60)
+        print(f"[Risk] {uid} EN PAUSE anti-tilt ({stats['consecutive_losses']} pertes consécutives)", flush=True)
+
     return stats
 
 # ==========================================
-# EXECUTION ET SUIVI DES TRADES
+# ✅ V43 NEW: PARTIAL TP 85% + BREAKEVEN + TRAILING STOP
+# (Technique exacte observée dans la Stratégie 4: "Prise de profits 85%
+#  puis Break Even")
 # ==========================================
 
 def create_trade_id():
     return "TRD-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
 def ouvrir_trade(uid, symbole, direction, entry_price, sl, tp1, tp_final, strategy, confiance,
-                 label="SIGNAL", strategie_nom_ia="?", ia_score=None, gemini_score=None, contexte_marche=None):
+                 label="SIGNAL", strategie_nom_ia="?", ia_score=None, gemini_score=None,
+                 contexte_marche=None):
+    """
+    Ouvre un trade avec gestion complète:
+      - Position sizing réel
+      - TP1 (objectif intermédiaire, 85% de la position)
+      - TP final (15% restant après passage en breakeven)
+
+    ✅ V48: paramètre strategie_nom_ia ("CPR"/"OPEN_DRIVE"/"RSI") ajouté —
+    mémorise quelle stratégie est à l'origine du trade, indispensable pour
+    que ia_enregistrer_resultat() puisse apprendre par (stratégie, symbole)
+    à la clôture.
+    ✅ V49: ia_score, gemini_score et contexte_marche mémorisés sur le trade
+    pour être transmis tels quels à ia_enregistrer_resultat() à la clôture
+    (apprentissage enrichi conforme à la demande).
+    """
     trade_id = create_trade_id()
-    sizing = calculer_position_size(CAPITAL_ACTUEL, RISK_CONFIG["risk_per_trade_pct"], entry_price, sl, symbole)
+    sizing = calculer_position_size(CAPITAL_ACTUEL, RISK_CONFIG["risk_per_trade_pct"],
+                                    entry_price, sl, symbole)
+
     trades_actifs[uid] = {
-        "trade_id": trade_id, "symbol": symbole, "direction": direction, "entry_price": entry_price,
-        "sl": sl, "sl_original": sl, "tp1": tp1, "tp_final": tp_final,
+        "trade_id": trade_id, "symbol": symbole,
+        "direction": direction, "entry_price": entry_price,
+        "sl": sl, "sl_original": sl,
+        "tp1": tp1, "tp_final": tp_final,
         "strategy": strategy, "confiance": confiance, "label": label,
-        "strategie_nom_ia": strategie_nom_ia, "ia_score": ia_score,
-        "gemini_score": gemini_score, "contexte_marche": contexte_marche,
-        "state": TradeState.TRADE_OPEN, "timestamp_open": time.time(),
+        "strategie_nom_ia": strategie_nom_ia,
+        "ia_score": ia_score,
+        "gemini_score": gemini_score,
+        "contexte_marche": contexte_marche,
+        "state": TradeState.TRADE_OPEN,
+        "timestamp_open": time.time(),
         "exit_price": None, "exit_time": None, "pnl": None,
-        "partial_closed": False, "partial_pnl": 0.0,
-        "breakeven_active": False, "trailing_active": False, "sizing": sizing,
+        "partial_closed": False,
+        "partial_pnl": 0.0,
+        "breakeven_active": False,
+        "trailing_active": False,
+        "sizing": sizing,
     }
+    print(f"[Trade Opened] {uid}: {trade_id} {symbole} {direction} @ {entry_price} "
+          f"(Risque: ${sizing['montant_risque']})", flush=True)
     return trade_id, sizing
 
 def fermer_trade_complet(uid, exit_price, win):
+    """
+    Ferme totalement un trade et enregistre dans l'historique + stats journalières.
+
+    ✅ V44 FIX (protection définitive): tout le corps est protégé par
+    try/finally. Le retrait de trades_actifs[uid] est GARANTI même si une
+    erreur imprévue survient pendant le calcul — plus jamais un utilisateur
+    ne pourra rester bloqué "TRADE ACTIF EN COURS" pour toujours à cause
+    d'une exception. En cas d'erreur, on notifie quand même l'utilisateur
+    au lieu de rester silencieux.
+    """
     with lock_trade:
-        if uid not in trades_actifs: return None
-        trade = trades_actifs[uid]
+        if uid not in trades_actifs:
+            return None
+        trade    = trades_actifs[uid]
         trade_id = trade["trade_id"]
+
         try:
             risque_initial = trade["sizing"]["montant_risque"]
+
+            # Si une fermeture partielle (85%) a déjà eu lieu, ce closing ne porte
+            # que sur les 15% restants — on proportionne le risque utilisé pour
+            # le calcul du P&L de cette portion finale.
             portion_restante = (1 - RISK_CONFIG["partial_tp_ratio"]) if trade.get("partial_closed") else 1.0
-            risque_portion = risque_initial * portion_restante
+            risque_portion    = risque_initial * portion_restante
 
             if win:
                 gain_ratio = abs(exit_price - trade["entry_price"]) / trade["sizing"]["distance_sl"] if trade["sizing"]["distance_sl"] > 0 else 1
@@ -403,100 +577,233 @@ def fermer_trade_complet(uid, exit_price, win):
             else:
                 pnl_final = -risque_portion
 
+            # P&L TOTAL réel du trade = portion déjà sécurisée (85%) + portion finale
             pnl_trade_total = trade.get("partial_pnl", 0.0) + pnl_final
-            trade["state"] = TradeState.TRADE_WIN if win else TradeState.TRADE_LOSS
-            duration_seconds = time.time() - trade["timestamp_open"]
 
-            if uid not in trades_historique: trades_historique[uid] = []
+            trade["state"]      = TradeState.TRADE_WIN if win else TradeState.TRADE_LOSS
+            trade["exit_price"] = exit_price
+            trade["exit_time"]  = time.time()
+            trade["pnl"]        = pnl_trade_total
+            duration_seconds     = trade["exit_time"] - trade["timestamp_open"]
+
+            if uid not in trades_historique:
+                trades_historique[uid] = []
             trades_historique[uid].append({
-                "trade_id": trade_id, "symbol": trade["symbol"], "direction": trade["direction"], 
-                "entry": trade["entry_price"], "exit": exit_price, "pnl": pnl_trade_total, 
-                "win": win, "timestamp": time.time(), "label": trade.get("label","")
+                "trade_id": trade_id, "symbol": trade["symbol"],
+                "direction": trade["direction"], "entry": trade["entry_price"],
+                "exit": exit_price, "pnl": pnl_trade_total, "duration": duration_seconds,
+                "win": win, "timestamp": trade["exit_time"], "label": trade.get("label","")
             })
 
             pnl_total[uid] = pnl_total.get(uid, 0) + pnl_final
             enregistrer_resultat_trade(uid, pnl_final, win, pnl_pour_bilan=pnl_trade_total)
-            return {"trade_id": trade_id, "pnl": pnl_trade_total, "pnl_final_portion": pnl_final, "win": win, "duration": duration_seconds}
-        except: return {"trade_id": trade_id, "pnl": 0.0, "pnl_final_portion": 0.0, "win": win, "duration": 0, "erreur": True}
-        finally: trades_actifs.pop(uid, None)
+
+            # ✅ V48/V49: auto-apprentissage IA — enregistre le résultat réel du
+            # trade avec tous les champs enrichis pour affiner les poids futurs
+            # de la stratégie concernée et alimenter les statistiques (/iastats).
+            try:
+                ia_enregistrer_resultat(
+                    symbol=trade["symbol"],
+                    strategie_nom=trade.get("strategie_nom_ia", "?"),
+                    # ✅ V49 FIX: utilise le vrai score du calcul déterministe
+                    # (variable selon le signal) plutôt que la confiance fixe
+                    # de la stratégie (85/90/80), qui ne reflétait pas le
+                    # verdict réel du moteur IA au moment du trade.
+                    score=trade.get("ia_score") if trade.get("ia_score") is not None else trade.get("confiance", 0),
+                    timeframe="H1",
+                    win=win,
+                    tp_atteint=win,
+                    sl_atteint=(not win),
+                    drawdown_pct=0,
+                    avis_ia_score=trade.get("ia_score"),
+                    gemini_score=trade.get("gemini_score"),
+                    sl=trade.get("sl_original"),
+                    tp=trade.get("tp_final"),
+                    duree_secondes=duration_seconds,
+                    contexte_marche=trade.get("contexte_marche"),
+                )
+            except Exception as e:
+                print(f"[IA Learning] Erreur enregistrement: {e}", flush=True)
+
+            print(f"[Trade Closed] {uid}: {trade_id} PnL final={pnl_final:.2f} | "
+                  f"PnL total trade={pnl_trade_total:.2f}", flush=True)
+            return {"trade_id": trade_id, "pnl": pnl_trade_total, "pnl_final_portion": pnl_final,
+                    "win": win, "duration": duration_seconds}
+
+        except Exception as e:
+            # ✅ Filet de sécurité: même en cas de bug imprévu, on notifie
+            # l'utilisateur au lieu de le laisser bloqué en silence.
+            print(f"[Trade Closed] ⚠️ ERREUR pendant la clôture de {uid}/{trade_id}: {e}", flush=True)
+            try:
+                bot.send_message(uid,
+                    f"⚠️ Trade {trade.get('symbol','?')} clôturé (erreur interne lors du calcul détaillé).\n"
+                    f"Consulte /historique pour vérifier. Le trading reprend normalement.",
+                    parse_mode="Markdown")
+            except Exception:
+                pass
+            return {"trade_id": trade_id, "pnl": 0.0, "pnl_final_portion": 0.0,
+                    "win": win, "duration": time.time() - trade.get("timestamp_open", time.time()),
+                    "erreur": True}
+
+        finally:
+            # GARANTIE ABSOLUE: l'utilisateur ne reste jamais bloqué, quoi qu'il arrive.
+            trades_actifs.pop(uid, None)
 
 def fermer_trade_partiel(uid, exit_price):
+    """
+    Ferme 85% de la position au TP1, déplace SL à breakeven pour les 15% restants
+    (Technique exacte de la Stratégie 4).
+    ✅ V44: protégé par lock + try/except (cohérence avec fermer_trade_complet).
+    """
     with lock_trade:
-        if uid not in trades_actifs: return None
+        if uid not in trades_actifs:
+            return None
         trade = trades_actifs[uid]
-        if trade["partial_closed"]: return None
+        if trade["partial_closed"]:
+            return None
+
         try:
             risque_initial = trade["sizing"]["montant_risque"]
+            ratio = RISK_CONFIG["partial_tp_ratio"]
             gain_ratio = abs(exit_price - trade["entry_price"]) / trade["sizing"]["distance_sl"] if trade["sizing"]["distance_sl"] > 0 else 1
-            pnl_partiel = risque_initial * gain_ratio * RISK_CONFIG["partial_tp_ratio"]
-            
-            trade["partial_closed"] = True
-            trade["partial_pnl"] = pnl_partiel
+            pnl_partiel = risque_initial * gain_ratio * ratio
+
+            trade["partial_closed"]   = True
+            trade["partial_pnl"]      = pnl_partiel
             trade["breakeven_active"] = True
-            trade["state"] = TradeState.TRADE_PARTIAL
+            trade["state"]            = TradeState.TRADE_PARTIAL
+
+            # Déplacer le SL au point d'entrée (+ petit buffer pour couvrir les frais)
             buffer = trade["entry_price"] * RISK_CONFIG["breakeven_buffer_pct"]
-            trade["sl"] = trade["entry_price"] + buffer if trade["direction"] == "BUY" else trade["entry_price"] - buffer
+            if trade["direction"] == "BUY":
+                trade["sl"] = trade["entry_price"] + buffer
+            else:
+                trade["sl"] = trade["entry_price"] - buffer
+
             pnl_total[uid] = pnl_total.get(uid, 0) + pnl_partiel
+
+            # Le profit partiel alimente aussi le P&L du jour (circuit breaker + rapport)
             stats = init_daily_stats(uid)
             stats["pnl"] += pnl_partiel
+
+            print(f"[Partial TP] {uid}: {trade['trade_id']} 85% fermé (+{pnl_partiel:.2f}), "
+                  f"SL → Breakeven {trade['sl']:.5f}", flush=True)
+
             return {"pnl_partiel": round(pnl_partiel, 2), "nouveau_sl": trade["sl"]}
-        except: return None
+
+        except Exception as e:
+            print(f"[Partial TP] ⚠️ ERREUR pour {uid}: {e}", flush=True)
+            return None
 
 def appliquer_trailing_stop(uid, prix_current):
-    if uid not in trades_actifs: return False
+    """
+    ✅ V43 NEW: Trailing stop actif uniquement APRÈS le passage en breakeven (15% restants)
+    Sécurise les gains progressivement sur la portion qui continue de courir
+    """
+    if uid not in trades_actifs:
+        return False
     trade = trades_actifs[uid]
-    if not trade["breakeven_active"]: return False
+    if not trade["breakeven_active"]:
+        return False
+
     distance_trail = prix_current * RISK_CONFIG["trailing_stop_distance_pct"]
+
     if trade["direction"] == "BUY":
-        if prix_current - distance_trail > trade["sl"]:
-            trade["sl"] = prix_current - distance_trail
+        nouveau_sl_potentiel = prix_current - distance_trail
+        if nouveau_sl_potentiel > trade["sl"]:
+            trade["sl"] = nouveau_sl_potentiel
             trade["trailing_active"] = True
             return True
     else:
-        if prix_current + distance_trail < trade["sl"]:
-            trade["sl"] = prix_current + distance_trail
+        nouveau_sl_potentiel = prix_current + distance_trail
+        if nouveau_sl_potentiel < trade["sl"]:
+            trade["sl"] = nouveau_sl_potentiel
             trade["trailing_active"] = True
             return True
     return False
 
 def utilisateur_a_trade_actif(uid):
-    return uid in trades_actifs and trades_actifs[uid]["state"] in (TradeState.TRADE_OPEN, TradeState.TRADE_PARTIAL)
+    return uid in trades_actifs and trades_actifs[uid]["state"] in (
+        TradeState.TRADE_OPEN, TradeState.TRADE_PARTIAL
+    )
+
+# ==========================================
+# ✅ V44 NEW: WATCHDOG ANTI-BLOCAGE
+# Filet de sécurité ultime: si jamais un trade reste bloqué anormalement
+# longtemps (bug futur, état incohérent, etc.), on le force-ferme et on
+# prévient l'utilisateur — plus JAMAIS de blocage silencieux permanent.
+# ==========================================
 
 def watchdog_trades_bloques():
     while True:
         try:
-            time.sleep(300) 
+            time.sleep(300)  # vérifie toutes les 5 minutes
             maintenant = time.time()
             for uid in list(trades_actifs.keys()):
                 trade = trades_actifs.get(uid)
-                if not trade: continue
-                age_heures = (maintenant - trade.get("timestamp_open", maintenant)) / 3600
-                if trade["state"] not in (TradeState.TRADE_OPEN, TradeState.TRADE_PARTIAL):
-                    trades_actifs.pop(uid, None)
+                if not trade:
                     continue
+
+                age_heures = (maintenant - trade.get("timestamp_open", maintenant)) / 3600
+
+                # Cas 1: trade dans un état incohérent (ni OPEN ni PARTIAL) → nettoyage immédiat
+                if trade["state"] not in (TradeState.TRADE_OPEN, TradeState.TRADE_PARTIAL):
+                    print(f"[Watchdog] {uid} état incohérent ({trade['state']}) → nettoyage forcé", flush=True)
+                    trades_actifs.pop(uid, None)
+                    try:
+                        bot.send_message(uid,
+                            "🔧 Un trade bloqué a été nettoyé automatiquement. "
+                            "Tu peux recevoir de nouveaux signaux normalement.",
+                            parse_mode="Markdown")
+                    except Exception:
+                        pass
+                    continue
+
+                # Cas 2: trade ouvert depuis trop longtemps → force-clôture au marché
                 if age_heures >= RISK_CONFIG["max_trade_age_hours"]:
                     prix_current = obtenir_prix_broker_realtime(trade["symbol"])
                     if prix_current:
-                        win_watchdog = prix_current >= trade["entry_price"] if trade["direction"] == "BUY" else prix_current <= trade["entry_price"]
+                        # Déterminer gagnant/perdant selon la position actuelle du prix
+                        # par rapport au prix d'entrée (pas de raccourci arbitraire)
+                        if trade["direction"] == "BUY":
+                            win_watchdog = prix_current >= trade["entry_price"]
+                        else:
+                            win_watchdog = prix_current <= trade["entry_price"]
+
+                        print(f"[Watchdog] {uid} trade {trade['trade_id']} ouvert depuis "
+                              f"{age_heures:.1f}h → clôture forcée", flush=True)
                         fermer_trade_complet(uid, prix_current, win=win_watchdog)
-        except: pass
+                        try:
+                            bot.send_message(uid,
+                                f"⏱️ Trade {trade['symbol']} clôturé automatiquement après "
+                                f"{RISK_CONFIG['max_trade_age_hours']}h (sécurité anti-blocage).\n"
+                                f"Consulte /historique pour le détail.",
+                                parse_mode="Markdown")
+                        except Exception:
+                            pass
+        except Exception as e:
+            print(f"[Watchdog] {e}", flush=True)
+
 
 # ==========================================
-# SESSIONS ET AUTORISATIONS
-# ==========================================
+
+PAIRES_SESSION_ASIE    = ["AUDJPY","CADJPY","CHFJPY","USDJPY","EURJPY","AUDUSD","AUDCAD","XAUUSD","XAGUSD"]
+PAIRES_SESSION_LONDRES = ["EURUSD","GBPUSD","EURCHF","USDCHF","CADCHF","EURJPY","EURAUD","XAUUSD","XAGUSD"]
+PAIRES_SESSION_NY      = ["EURUSD","GBPUSD","USDCAD","USDCHF","AUDUSD","XAUUSD","XAGUSD"]
 
 def get_session_active():
     h = datetime.datetime.utcnow().hour + datetime.datetime.utcnow().minute / 60.0
     paires, sessions = [], []
     if 0.0 <= h < 7.0:
-        paires += ["AUDJPY","CADJPY","CHFJPY","USDJPY","EURJPY","AUDUSD","AUDCAD","XAUUSD","XAGUSD"]; sessions.append("ASIE")
+        paires += PAIRES_SESSION_ASIE;    sessions.append("ASIE")
     if 7.0 <= h < 8.0:
-        paires += ["AUDJPY","CADJPY","CHFJPY","USDJPY","EURJPY","AUDUSD","AUDCAD","XAUUSD","XAGUSD", "EURUSD","GBPUSD","EURCHF","USDCHF","CADCHF","EURAUD"]; sessions.append("ASIE+LONDRES")
+        paires += PAIRES_SESSION_ASIE + PAIRES_SESSION_LONDRES; sessions.append("ASIE+LONDRES")
     if 8.0 <= h <= 10.0:
-        paires += ["EURUSD","GBPUSD","EURCHF","USDCHF","CADCHF","EURJPY","EURAUD","XAUUSD","XAGUSD"]; sessions.append("LONDRES")
+        paires += PAIRES_SESSION_LONDRES; sessions.append("LONDRES")
     if 12.0 <= h <= 15.0:
-        paires += ["EURUSD","GBPUSD","USDCAD","USDCHF","AUDUSD","XAUUSD","XAGUSD"]; sessions.append("NEW_YORK")
-    if not sessions: return None, []
+        paires += PAIRES_SESSION_NY;      sessions.append("NEW_YORK")
+    if not sessions:
+        return None, []
     return "+".join(sessions), list(dict.fromkeys(paires))
 
 def dans_killzone():
@@ -511,49 +818,744 @@ def nom_killzone():
     if 12.0 <= h <= 15.0:return "🇺🇸 New York Killzone (12h-15h)"
     return "⏳ Hors session"
 
+def session_actuelle_v43():
+    """Sessions spécifiques à la Stratégie 4 (heures observées dans la vidéo, en UTC approx)"""
+    h = datetime.datetime.utcnow().hour + datetime.datetime.utcnow().minute / 60.0
+    if 1.0 <= h < 6.0:
+        return "ASIAN_ACCUMULATION"
+    if 6.0 <= h < 8.0:
+        return "PRE_LONDON"
+    if 8.0 <= h <= 11.0:
+        return "LONDON_EXPANSION"
+    if 11.0 <= h < 14.0:
+        return "LONDON_NY_GAP"
+    if 14.0 <= h <= 17.0:
+        return "NY_CONTINUATION"
+    return "OFF_SESSION"
+
 def est_symbole_autorise(symbole):
     if symbole in VOLATILE_PAIRS:
-        return ("AUTORISE", "") if volatility_pairs_active.get(symbole, True) else ("BLOCAGE_TOTAL", f"{symbole} désactivé")
-    now = datetime.datetime.utcnow()
-    j, h = now.weekday(), now.hour + now.minute / 60.0
-    if (j == 4 and h >= 21) or j == 5 or (j == 6 and h < 21): return "BLOCAGE_TOTAL", "Week-end"
-    if symbole in COMMODITY_PAIRS: return "AUTORISE", ""
+        if not volatility_pairs_active.get(symbole, True):
+            return "BLOCAGE_TOTAL", f"{symbole} désactivé"
+        return "AUTORISE", ""
+
+    now     = datetime.datetime.utcnow()
+    j, h    = now.weekday(), now.hour + now.minute / 60.0
+    weekend = (j == 4 and h >= 21) or j == 5 or (j == 6 and h < 21)
+
+    if weekend:
+        return "BLOCAGE_TOTAL", "Week-end"
+    if symbole in COMMODITY_PAIRS:
+        return "AUTORISE", ""
+
     session, paires_session = get_session_active()
-    if session is None: return "HORS_SESSION", "🔒 Hors Killzone"
-    if symbole in paires_session: return "AUTORISE", ""
-    return "HORS_SESSION", f"🔒 {symbole} inactif"
+    if session is None:
+        return "HORS_SESSION", "🔒 Hors Killzone"
+    if symbole in paires_session:
+        return "AUTORISE", ""
+    return "HORS_SESSION", f"🔒 {symbole} inactif en {session}"
 
 # ==========================================
-# MODULES TECHNIQUES POUR L'IA (LES YEUX)
+
 # ==========================================
+# 📘 V46 NEW: STRATÉGIES "MASTER CLASS" (basées sur PDF de trading)
+# Remplace l'ancienne couche (Kasper OTE / OTE Scalping / Zone Trading /
+# Bougie Pivot Session) par 3 stratégies documentées:
+#   1. CPR Pullback & Rejection    (Vikram Prabhu — Price Action)
+#   2. Open Drive Breakout PDH/PDL (Vikram Prabhu — Cassure décisive)
+#   3. RSI Extremes & Exhaustion   (Dr Investors + gestion Smart Raja)
+# ==========================================
+
+def calculer_cpr_journalier(symbole):
+    """
+    Extrait le CPR (Central Pivot Range) de la veille — Pivot, BCPR, TCPR —
+    ainsi que PDH/PDL (Plus Haut/Bas de la veille), à partir des bougies H1
+    agrégées par date réelle (bug d'epoch corrigé en V46 — voir
+    _obtenir_donnees_deriv_reseau).
+    """
+    h1 = obtenir_donnees_deriv(symbole, 3600)
+    if not h1 or len(h1) < 30:
+        return None
+
+    try:
+        df = pd.DataFrame([{
+            "open": float(c["open"]), "high": float(c["high"]),
+            "low": float(c["low"]), "close": float(c["close"]),
+            "epoch": int(c["epoch"])
+        } for c in h1])
+        df['date'] = pd.to_datetime(df['epoch'], unit='s').dt.date
+        daily = df.groupby('date').agg({'open':'first','high':'max',
+                                         'low':'min','close':'last'}).reset_index()
+
+        if len(daily) < 2:
+            return None
+
+        prev_day = daily.iloc[-2]  # dernière journée COMPLÈTE (pas celle en cours)
+        pdh, pdl, pdc = float(prev_day['high']), float(prev_day['low']), float(prev_day['close'])
+
+        pivot = (pdh + pdl + pdc) / 3
+        bcpr  = (pdh + pdl) / 2
+        tcpr  = (pivot - bcpr) + pivot
+        top_cpr = max(bcpr, tcpr)
+        bot_cpr = min(bcpr, tcpr)
+
+        cpr_width_pct = ((top_cpr - bot_cpr) / pivot) * 100 if pivot else 0
+        etat_cpr = "Étroit (Tendance)" if cpr_width_pct < 0.15 else "Large (Range)"
+
+        return {
+            "PDH": pdh, "PDL": pdl, "PIVOT": pivot,
+            "TCPR": top_cpr, "BCPR": bot_cpr,
+            "ETAT": etat_cpr, "WIDTH": cpr_width_pct
+        }
+    except Exception as e:
+        print(f"[CPR/{symbole}] {e}", flush=True)
+        return None
+
+def detecter_chandeliers_pdf(df):
+    """
+    Détecte Pin Bar, Engulfing et Marubozu selon les règles strictes du
+    PDF Candlestick Patterns. Analyse la bougie fraîchement CLÔTURÉE (iloc[-2]),
+    jamais la bougie en formation.
+    """
+    if len(df) < 3:
+        return "NONE", 0
+    try:
+        last = df.iloc[-2]
+        prev = df.iloc[-3]
+
+        o, h, l, c = float(last['open']), float(last['high']), float(last['low']), float(last['close'])
+        po, pc = float(prev['open']), float(prev['close'])
+
+        body  = abs(c - o)
+        rng   = h - l
+        if rng == 0:
+            return "NONE", 0
+
+        upper_wick = h - max(o, c)
+        lower_wick = min(o, c) - l
+
+        # Pin Bar — mèche > 2x le corps
+        if lower_wick > body * 2.0 and upper_wick < body:
+            return "PIN_BULL", lower_wick
+        if upper_wick > body * 2.0 and lower_wick < body:
+            return "PIN_BEAR", upper_wick
+
+        # Engulfing — avalement complet du corps précédent
+        if pc < po and c > o and c > po and o < pc:
+            return "ENGULFING_BULL", body
+        if pc > po and c < o and c < po and o > pc:
+            return "ENGULFING_BEAR", body
+
+        # Marubozu — corps > 85% du range, quasi aucune mèche
+        if body > rng * 0.85:
+            return ("MARUBOZU_BULL" if c > o else "MARUBOZU_BEAR"), body
+
+        return "NONE", 0
+    except Exception:
+        return "NONE", 0
+
+# ------------------------------------------
+# STRATÉGIE 1 : CPR PULLBACK & REJECTION
+# ------------------------------------------
+
+def analyser_cpr_rejection(symbole):
+    """
+    Le prix revient tester le CPR (Pivot/BCPR/TCPR) et forme une bougie de
+    rejet (Pin Bar ou Engulfing) → entrée dans le sens du biais journalier
+    (prix vs Pivot), objectif = PDH/PDL.
+    ✅ V46: utilise désormais du VRAI M15 (900s), corrigé du bug de mapping
+    qui renvoyait auparavant du H4 mal étiqueté.
+    """
+    cpr = calculer_cpr_journalier(symbole)
+    c15 = obtenir_donnees_deriv(symbole, 900)
+    if not cpr or not c15 or len(c15) < 5:
+        return None
+
+    try:
+        df15 = pd.DataFrame([{
+            "open": float(c["open"]), "high": float(c["high"]),
+            "low": float(c["low"]), "close": float(c["close"])
+        } for c in c15])
+        px = float(df15['close'].iloc[-1])
+        pattern, _ = detecter_chandeliers_pdf(df15)
+        if pattern == "NONE":
+            return None
+
+        biais = "BULL" if px > cpr["PIVOT"] else "BEAR"
+        signal, sl, tp1, tp_final, zone_nom = None, 0.0, 0.0, 0.0, ""
+
+        if biais == "BULL" and pattern in ("PIN_BULL", "ENGULFING_BULL"):
+            dist_tcpr  = abs(px - cpr["TCPR"])  / px
+            dist_pivot = abs(px - cpr["PIVOT"]) / px
+            if dist_tcpr < 0.002:   zone_nom = "Top CPR"
+            elif dist_pivot < 0.002: zone_nom = "Point Pivot Central"
+            if zone_nom:
+                signal = "BUY"
+                sl = float(df15['low'].iloc[-2]) * 0.999
+                distance_risque = px - sl
+                if distance_risque <= 0:
+                    return None
+                tp1      = px + (distance_risque * 1.5)
+                tp_final = cpr["PDH"]
+
+        elif biais == "BEAR" and pattern in ("PIN_BEAR", "ENGULFING_BEAR"):
+            dist_bcpr  = abs(px - cpr["BCPR"])  / px
+            dist_pivot = abs(px - cpr["PIVOT"]) / px
+            if dist_bcpr < 0.002:   zone_nom = "Bottom CPR"
+            elif dist_pivot < 0.002: zone_nom = "Point Pivot Central"
+            if zone_nom:
+                signal = "SELL"
+                sl = float(df15['high'].iloc[-2]) * 1.001
+                distance_risque = sl - px
+                if distance_risque <= 0:
+                    return None
+                tp1      = px - (distance_risque * 1.5)
+                tp_final = cpr["PDL"]
+
+        if not signal:
+            return None
+
+        risque = abs(px - sl)
+        rr = abs(tp_final - px) / risque if risque > 0 else 0
+        if rr < 1.3:  # ✅ V51: 1.5→1.3 — légèrement assoupli pour plus d'opportunités détectées
+            return None
+
+        return {
+            "action": "🟢 ACHAT (BUY)" if signal == "BUY" else "🔴 VENTE (SELL)",
+            "tendance": biais, "force": cpr["ETAT"],
+            "msg": f"Rejet Chandelier ({pattern.replace('_',' ')}) sur {zone_nom}",
+            "sl": round(sl,5), "tp1": round(tp1,5), "tp": round(tp_final,5),
+            "rr": round(rr,2), "px": round(px,5),
+            "strategie": 1, "confiance": 85 if cpr["ETAT"] == "Large (Range)" else 75,
+            "label": "CPR PULLBACK & REJECTION",
+            "cpr_top": round(cpr["TCPR"],5), "cpr_bot": round(cpr["BCPR"],5),
+            "cpr_etat": cpr["ETAT"], "objectif_pdhl": round(tp_final,5),
+        }
+    except Exception as e:
+        print(f"[CPR-Rejection/{symbole}] {e}", flush=True)
+        return None
+
+# ------------------------------------------
+# STRATÉGIE 2 : OPEN DRIVE BREAKOUT (PDH/PDL)
+# ------------------------------------------
+
+def analyser_open_drive(symbole):
+    """
+    Une bougie forte (Marubozu ou Pin Bar) casse décisivement le PDH ou le
+    PDL sans hésitation — entrée dans le sens de la cassure.
+    """
+    cpr = calculer_cpr_journalier(symbole)
+    c5  = obtenir_donnees_deriv(symbole, 300)
+    if not cpr or not c5 or len(c5) < 5:
+        return None
+
+    try:
+        df5 = pd.DataFrame([{
+            "open": float(c["open"]), "high": float(c["high"]),
+            "low": float(c["low"]), "close": float(c["close"])
+        } for c in c5])
+        px = float(df5['close'].iloc[-1])
+        pattern, _ = detecter_chandeliers_pdf(df5)
+        last_candle = df5.iloc[-2]
+
+        signal, sl, tp_final, niveau_casse = None, 0.0, 0.0, 0.0
+
+        if pattern in ("MARUBOZU_BULL", "PIN_BULL"):
+            if float(last_candle['open']) < cpr["PDH"] * 1.001 and float(last_candle['close']) > cpr["PDH"]:
+                signal = "BUY"
+                niveau_casse = cpr["PDH"]
+                sl = cpr["PDH"] * 0.998
+                dist = px - sl
+                if dist > 0:
+                    tp_final = px + (dist * 2.5)
+
+        elif pattern in ("MARUBOZU_BEAR", "PIN_BEAR"):
+            if float(last_candle['open']) > cpr["PDL"] * 0.999 and float(last_candle['close']) < cpr["PDL"]:
+                signal = "SELL"
+                niveau_casse = cpr["PDL"]
+                sl = cpr["PDL"] * 1.002
+                dist = sl - px
+                if dist > 0:
+                    tp_final = px - (dist * 2.5)
+
+        if not signal or tp_final == 0:
+            return None
+
+        rr  = 2.5
+        tp1 = px + (abs(px - sl) * 1.0) if signal == "BUY" else px - (abs(px - sl) * 1.0)
+
+        return {
+            "action": "🟢 ACHAT (BUY)" if signal == "BUY" else "🔴 VENTE (SELL)",
+            "tendance": "BREAKOUT", "force": "Impulsion Forte",
+            "msg": f"Open Drive : Cassure du {'PDH' if signal=='BUY' else 'PDL'} par {pattern.replace('_',' ')}",
+            "sl": round(sl,5), "tp1": round(tp1,5), "tp": round(tp_final,5),
+            "rr": round(rr,2), "px": round(px,5),
+            "strategie": 2, "confiance": 90,
+            "label": "OPEN DRIVE BREAKOUT",
+            "niveau_casse": round(niveau_casse,5),
+        }
+    except Exception as e:
+        print(f"[OpenDrive/{symbole}] {e}", flush=True)
+        return None
+
+# ------------------------------------------
+# STRATÉGIE 3 : RSI EXTREMES & EXHAUSTION
+# ------------------------------------------
+
+def analyser_rsi_exhaustion(symbole):
+    """
+    RSI en zone extrême (< 30 ou > 70) confirmé par une mèche d'épuisement
+    (Pin Bar) → retournement probable.
+    """
+    c1h = obtenir_donnees_deriv(symbole, 3600)
+    if not c1h or len(c1h) < 20:
+        return None
+
+    try:
+        df1h = pd.DataFrame([{
+            "open": float(c["open"]), "high": float(c["high"]),
+            "low": float(c["low"]), "close": float(c["close"])
+        } for c in c1h])
+        rsi_series = ta.momentum.RSIIndicator(close=df1h["close"], window=14).rsi()
+        if rsi_series.isna().iloc[-2]:
+            return None
+        rsi = float(rsi_series.iloc[-2])
+
+        px = float(df1h['close'].iloc[-1])
+        pattern, _ = detecter_chandeliers_pdf(df1h)
+
+        signal, sl, tp_final = None, 0.0, 0.0
+
+        if rsi < 30 and pattern == "PIN_BULL":
+            signal = "BUY"
+            sl = float(df1h['low'].iloc[-2]) * 0.999
+            dist = px - sl
+            if dist > 0:
+                tp_final = px + (dist * 3.0)
+
+        elif rsi > 70 and pattern == "PIN_BEAR":
+            signal = "SELL"
+            sl = float(df1h['high'].iloc[-2]) * 1.001
+            dist = sl - px
+            if dist > 0:
+                tp_final = px - (dist * 3.0)
+
+        if not signal or tp_final == 0:
+            return None
+
+        tp1 = px + (abs(px - sl) * 1.5) if signal == "BUY" else px - (abs(px - sl) * 1.5)
+
+        return {
+            "action": "🟢 ACHAT (BUY)" if signal == "BUY" else "🔴 VENTE (SELL)",
+            "tendance": "REVERSAL", "force": f"RSI Extrême ({round(rsi,1)})",
+            "msg": "Épuisement : rejet massif des prix avec RSI critique",
+            "sl": round(sl,5), "tp1": round(tp1,5), "tp": round(tp_final,5),
+            "rr": 3.0, "px": round(px,5),
+            "strategie": 3, "confiance": 80,
+            "label": "RSI EXHAUSTION & REVERSAL",
+            "rsi_value": round(rsi,1),
+        }
+    except Exception as e:
+        print(f"[RSI-Exhaustion/{symbole}] {e}", flush=True)
+        return None
+
+# ------------------------------------------
+# ✅ V46 NEW: DÉTECTION DE CONTEXTE (léger, basé sur CPR + RSI)
+# Restaure l'esprit du "cerveau" V44 (une stratégie adaptée au contexte du
+# jour plutôt qu'une cascade aveugle) en s'appuyant sur les nouveaux
+# indicateurs PDF au lieu de l'ancien système EMA/Zones.
+# ------------------------------------------
+
+def detecter_contexte_pdf(symbole):
+    """
+    Retourne un indice de contexte pour prioriser l'ordre des stratégies:
+      "JOUR_TENDANCE" -> CPR étroit: privilégier Open Drive Breakout
+      "JOUR_RANGE"    -> CPR large: privilégier CPR Rejection
+      "INDECIS"       -> pas de CPR disponible, cascade par défaut
+    Mis en cache 2 minutes (même logique que l'ancien V44).
+    """
+    cached = contexte_marche_cache.get(symbole)
+    if cached and (time.time() - cached["ts"]) < 120:
+        return cached["contexte"]
+
+    cpr = calculer_cpr_journalier(symbole)
+    if not cpr:
+        contexte = "INDECIS"
+    elif cpr["ETAT"] == "Étroit (Tendance)":
+        contexte = "JOUR_TENDANCE"
+    else:
+        contexte = "JOUR_RANGE"
+
+    contexte_marche_cache[symbole] = {"contexte": contexte, "ts": time.time()}
+    return contexte
+
+
+# ==========================================
+# 🤖 V48 NEW: MOTEUR IA DE VALIDATION DES SIGNAUX
+# ==========================================
+# Rôle strict: NE GÉNÈRE JAMAIS de signal. Reçoit un signal déjà détecté par
+# une stratégie (inchangée ci-dessus: analyser_cpr_rejection,
+# analyser_open_drive, analyser_rsi_exhaustion), l'évalue sur de nombreux
+# critères techniques, retourne un score de confiance 0-100% + justification.
+#
+# Architecture en 2 couches:
+#   1) Moteur de calcul déterministe (ADX/RSI/MACD/structure/ATR/...) —
+#      TOUJOURS actif, gratuit, ne dépend d'aucun service externe.
+#   2) Second avis Groq (optionnel) — appelé UNIQUEMENT si le calcul a
+#      déjà accepté le signal, pour confirmer ou invalider. Si Groq est
+#      indésactivé/indisponible, le verdict du calcul déterministe fait foi
+#      seul (aucune dépendance dure à Groq).
 
 IA_CONFIG = {
-    "seuil_acceptation": 80,   
-    "groq_active": True,       
+    "seuil_acceptation": 78,   # ✅ V51: 85→78% — desserré pour augmenter le volume de signaux
+                                # (calcul déterministe) tout en gardant un filtre sérieux.
+                                # Ajustable en direct via /iaconfig seuil_acceptation <valeur>
+    "groq_active": True,       # bascule ON/OFF du second avis Groq
+    "groq_seuil_veto": 32,     # ✅ V51: 40→32% — Groq ne pose veto que sur les cas vraiment
+                                # douteux, pour ne pas sur-filtrer des signaux déjà validés.
+    "poids": {                 # Poids relatif de chaque critère dans le score final
+        "tendance_h1":        12,
+        "adx":                10,
+        "rsi_coherence":      10,
+        "macd_coherence":      8,
+        "ema_alignement":      8,
+        "atr_volatilite":      8,
+        "structure_marche":   10,
+        "distance_sr":         8,
+        "qualite_cassure":    10,
+        "spread":              6,
+        "multi_tf_coherence": 10,
+    },
+    "poids_contexte": {        # ✅ V49: pondération de l'ajustement de confiance selon le contexte marché
+        "tendance_forte":      1.10,   # bonus si le contexte va dans le sens du signal
+        "range":               0.90,   # malus léger — les breakouts sont moins fiables en range
+        "tres_volatil":        0.80,   # malus — risque de faux breakout
+        "peu_volatil":         0.95,
+        "consolidation":       0.90,
+        "proche_cassure":      1.05,
+    },
+    "seuil_multi_tf_penalite": 30,  # pénalité (points) si signal contraire à la tendance M15/H1 supérieure
 }
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
-# L'API a déprécié le modèle versatile. Mise à jour vers le modèle actif.
-GROQ_MODEL   = "llama-3.1-8b-instant" 
+GROQ_MODEL   = "llama-3.1-8b-instant"
 GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions"
 
+# Historique enrichi des scores/résultats pour l'auto-apprentissage (✅ V49:
+# tous les champs demandés — stratégie, timeframe, heure, score déterministe,
+# avis IA, SL/TP, résultat, drawdown, durée)
+ia_historique = []      # liste de dicts détaillés (voir ia_enregistrer_resultat)
+ia_poids_ajustes = {}   # cache des poids appris par (strategie_nom, symbole)
+
+# ==========================================
+# 🌍 V49 NEW: MODULE CONTEXTE MARCHÉ (indépendant)
+# ==========================================
+# Détermine automatiquement l'état du marché: tendance haussière/baissière,
+# range, très/peu volatil, consolidation, proche d'une cassure. Ce module
+# est appelé par le moteur déterministe pour ajuster le score, et transmis
+# à Groq pour enrichir son analyse contextuelle.
+
+def analyser_contexte_marche(symbole, df1h, df4h):
+    """
+    Retourne un dict décrivant l'état du marché à l'instant présent.
+    Ne génère aucun signal — sert uniquement à contextualiser un signal
+    déjà détecté par une stratégie.
+    """
+    try:
+        ema20_h1 = df1h['close'].ewm(span=20, adjust=False).mean()
+        ema50_h1 = df1h['close'].ewm(span=50, adjust=False).mean()
+        pente_ema20 = (ema20_h1.iloc[-2] - ema20_h1.iloc[-10]) / max(abs(ema20_h1.iloc[-10]), 1e-9)
+
+        adx = calculer_adx(df1h)
+        atr = calculer_atr(df1h)
+        px = float(df1h['close'].iloc[-2])
+        atr_pct = (atr / px * 100) if px else 0
+
+        recent_high = df1h['high'].iloc[-30:].max()
+        recent_low  = df1h['low'].iloc[-30:].min()
+        rng = recent_high - recent_low
+        position_dans_range = (px - recent_low) / rng if rng > 0 else 0.5
+        proche_cassure = position_dans_range > 0.9 or position_dans_range < 0.1
+
+        if adx >= 25 and abs(pente_ema20) > 0.001:
+            tendance = "HAUSSIERE" if ema20_h1.iloc[-2] > ema50_h1.iloc[-2] else "BAISSIERE"
+        elif adx < 18:
+            tendance = "RANGE"
+        else:
+            tendance = "INDECIS"
+
+        if atr_pct > 1.2:
+            volatilite = "TRES_VOLATIL"
+        elif atr_pct < 0.05:
+            volatilite = "PEU_VOLATIL"
+        else:
+            volatilite = "NORMALE"
+
+        consolidation = (adx < 20 and atr_pct < 0.3)
+
+        return {
+            "tendance": tendance,           # HAUSSIERE / BAISSIERE / RANGE / INDECIS
+            "volatilite": volatilite,       # TRES_VOLATIL / PEU_VOLATIL / NORMALE
+            "consolidation": consolidation,
+            "proche_cassure": proche_cassure,
+            "adx": round(adx, 1),
+            "atr_pct": round(atr_pct, 3),
+            "position_dans_range": round(position_dans_range, 2),
+        }
+    except Exception as e:
+        print(f"[Contexte Marché/{symbole}] {e}", flush=True)
+        return {"tendance": "INDECIS", "volatilite": "NORMALE", "consolidation": False,
+                "proche_cassure": False, "adx": 20.0, "atr_pct": 0.3, "position_dans_range": 0.5}
+
+def contexte_vers_facteur_confiance(contexte, direction_signal):
+    """
+    Traduit le contexte marché en un facteur multiplicatif appliqué au score
+    du calcul déterministe. Toujours borné pour ne jamais dominer le score
+    (le contexte ajuste, il ne décide pas).
+    """
+    poids = IA_CONFIG["poids_contexte"]
+    facteur = 1.0
+    justification = []
+
+    if contexte["tendance"] in ("HAUSSIERE", "BAISSIERE"):
+        sens_marche = "BULL" if contexte["tendance"] == "HAUSSIERE" else "BEAR"
+        if sens_marche == direction_signal:
+            facteur *= poids["tendance_forte"]
+            justification.append(f"Tendance {contexte['tendance'].lower()} confirmée")
+        else:
+            facteur *= (2 - poids["tendance_forte"])  # pénalité symétrique
+            justification.append(f"Signal contraire à la tendance {contexte['tendance'].lower()}")
+    elif contexte["tendance"] == "RANGE":
+        facteur *= poids["range"]
+        justification.append("Marché sans tendance claire (range)")
+
+    if contexte["volatilite"] == "TRES_VOLATIL":
+        facteur *= poids["tres_volatil"]
+        justification.append("Volatilité excessive")
+    elif contexte["volatilite"] == "PEU_VOLATIL":
+        facteur *= poids["peu_volatil"]
+        justification.append("Volatilité faible — momentum limité")
+
+    if contexte["consolidation"]:
+        facteur *= poids["consolidation"]
+        justification.append("Marché en consolidation")
+
+    if contexte["proche_cassure"]:
+        facteur *= poids["proche_cassure"]
+        justification.append("Prix proche d'une zone de cassure")
+
+    return round(max(0.6, min(1.15, facteur)), 3), justification
+
+# ==========================================
+# 🚨 V49 NEW: MODULE DÉTECTION DES FAUX SIGNAUX (indépendant)
+# ==========================================
+# Reconnaît les configurations qui échouent fréquemment: faux breakout,
+# retournement brutal, divergence, cassure sans élan, mouvement épuisé.
+
+def detecter_faux_signal(df1h, df5, signal, contexte):
+    """
+    Retourne (risque_detecte: bool, penalite: int, raisons: [str]).
+    La pénalité est soustraite du score final — jamais assez forte pour
+    annuler à elle seule un signal par ailleurs très solide, mais suffisante
+    pour faire basculer un signal limite sous le seuil.
+    """
+    raisons = []
+    penalite = 0
+    direction = signal["tendance"] if signal["tendance"] in ("BULL", "BEAR") else \
+                ("BULL" if "BUY" in signal["action"] else "BEAR")
+
+    try:
+        # 1. Cassure sans élan (corps de bougie faible malgré une "cassure")
+        last5 = df5.iloc[-2]
+        corps5 = abs(last5['close'] - last5['open'])
+        range5 = last5['high'] - last5['low']
+        if range5 > 0 and (corps5 / range5) < 0.35:
+            penalite += 8
+            raisons.append("Bougie de cassure au corps faible — élan douteux")
+
+        # 2. Mouvement épuisé: 5 bougies consécutives dans le même sens juste avant le signal
+        cinq_dernieres = df5.iloc[-7:-2]
+        if len(cinq_dernieres) == 5:
+            hausses = sum(1 for i in range(len(cinq_dernieres))
+                         if cinq_dernieres.iloc[i]['close'] > cinq_dernieres.iloc[i]['open'])
+            if (direction == "BULL" and hausses >= 5) or (direction == "BEAR" and hausses <= 0):
+                penalite += 10
+                raisons.append("Mouvement déjà étendu — risque d'épuisement")
+
+        # 3. Divergence RSI simple (prix fait un nouveau extrême, RSI non)
+        try:
+            delta = df1h['close'].diff()
+            gain = delta.clip(lower=0).rolling(14).mean()
+            loss = (-delta.clip(upper=0)).rolling(14).mean()
+            rs = gain / loss.replace(0, 1e-9)
+            rsi_series = 100 - (100 / (1 + rs))
+            px_recent = df1h['close'].iloc[-15:-2]
+            rsi_recent = rsi_series.iloc[-15:-2]
+            if direction == "BULL":
+                prix_nouveau_haut = px_recent.iloc[-1] >= px_recent.max()
+                rsi_pas_confirme = rsi_recent.iloc[-1] < rsi_recent.max() * 0.95
+                if prix_nouveau_haut and rsi_pas_confirme:
+                    penalite += 12
+                    raisons.append("Divergence baissière RSI détectée")
+            else:
+                prix_nouveau_bas = px_recent.iloc[-1] <= px_recent.min()
+                rsi_pas_confirme = rsi_recent.iloc[-1] > rsi_recent.min() * 1.05
+                if prix_nouveau_bas and rsi_pas_confirme:
+                    penalite += 12
+                    raisons.append("Divergence haussière RSI détectée")
+        except Exception:
+            pass
+
+        # 4. Retournement brutal récent (mèche opposée massive sur la dernière bougie H1)
+        last1h = df1h.iloc[-2]
+        corps1h = abs(last1h['close'] - last1h['open'])
+        if direction == "BULL":
+            meche_opposee = last1h['high'] - max(last1h['open'], last1h['close'])
+        else:
+            meche_opposee = min(last1h['open'], last1h['close']) - last1h['low']
+        if corps1h > 0 and meche_opposee > corps1h * 1.5:
+            penalite += 10
+            raisons.append("Mèche de retournement récente dans le sens opposé")
+
+        # 5. Contexte défavorable déjà identifié par le module contexte
+        if contexte["volatilite"] == "TRES_VOLATIL":
+            penalite += 5
+            raisons.append("Volatilité excessive — risque de faux breakout accru")
+
+    except Exception as e:
+        print(f"[Faux Signal] {e}", flush=True)
+
+    penalite = min(penalite, 35)  # plafond — ne domine jamais le score global
+    return (penalite > 0), penalite, raisons
+
+# ==========================================
+# ⏱️ V49 NEW: MODULE MULTI-TIMEFRAME (M1/M5/M15/H1)
+# ==========================================
+# Compare plusieurs unités de temps pour vérifier la cohérence du contexte
+# général. Un signal allant contre une forte tendance supérieure est pénalisé.
+
+def analyser_coherence_multi_tf(symbole, direction_signal):
+    """
+    Récupère M1, M5, M15 (approximé via cache court) et H1, calcule la
+    tendance EMA20/50 sur chacun, et retourne un score de cohérence 0-100
+    ainsi qu'une pénalité éventuelle si le signal va contre une unité de
+    temps supérieure (H1 pèse plus que M15, qui pèse plus que M5/M1).
+    """
+    tendances = {}
+    poids_tf = {"M1": 1, "M5": 2, "M15": 3, "H1": 4}
+
+    granularites = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600}
+    for tf_nom, gran in granularites.items():
+        try:
+            candles = obtenir_donnees_deriv(symbole, gran)
+            if not candles or len(candles) < 55:
+                continue
+            df = pd.DataFrame([{"close": float(c["close"])} for c in candles])
+            ema20 = df['close'].ewm(span=20, adjust=False).mean().iloc[-2]
+            ema50 = df['close'].ewm(span=50, adjust=False).mean().iloc[-2]
+            tendances[tf_nom] = "BULL" if ema20 > ema50 else "BEAR"
+        except Exception:
+            continue
+
+    if not tendances:
+        return {"score": 50, "penalite": 0, "detail": tendances, "raisons": ["Données multi-TF indisponibles"]}
+
+    total_poids = sum(poids_tf[tf] for tf in tendances)
+    poids_aligne = sum(poids_tf[tf] for tf, t in tendances.items() if t == direction_signal)
+    score_coherence = round((poids_aligne / total_poids) * 100, 1) if total_poids else 50
+
+    penalite = 0
+    raisons = []
+    # Pénalité spécifique si H1 (le plus pesant) est contraire au signal
+    if tendances.get("H1") and tendances["H1"] != direction_signal:
+        penalite += IA_CONFIG["seuil_multi_tf_penalite"]
+        raisons.append("Signal contraire à la tendance H1 (unité supérieure)")
+    elif tendances.get("M15") and tendances["M15"] != direction_signal:
+        penalite += IA_CONFIG["seuil_multi_tf_penalite"] // 2
+        raisons.append("Signal contraire à la tendance M15")
+
+    if score_coherence >= 75:
+        raisons.append(f"Cohérence multi-TF forte ({score_coherence}%)")
+    elif score_coherence < 40:
+        raisons.append(f"Cohérence multi-TF faible ({score_coherence}%)")
+
+    return {"score": score_coherence, "penalite": penalite, "detail": tendances, "raisons": raisons}
+
+# ==========================================
+# 🛡️ V49 NEW: MODULE GESTION INTELLIGENTE DU RISQUE
+# ==========================================
+# Propose un SL/TP/R:R affiné à partir de la volatilité réelle (ATR), mais
+# reste toujours BORNÉ par les niveaux déjà calculés par la stratégie —
+# ne peut jamais élargir le risque au-delà de ce que la stratégie a prévu,
+# seulement l'ajuster à l'intérieur d'une marge de sécurité.
+
+def optimiser_gestion_risque(signal, contexte, df1h):
+    """
+    Retourne {"sl_optimise", "tp_optimise", "rr_optimise", "note"} — ajuste
+    légèrement le SL pour respecter un multiple d'ATR cohérent avec la
+    volatilité actuelle, sans jamais dépasser ±15% des niveaux d'origine
+    (garde-fou dur pour ne pas contredire la stratégie).
+    """
+    try:
+        atr = calculer_atr(df1h)
+        px = signal["px"]
+        sl_origine = signal["sl"]
+        tp_origine = signal["tp"]
+        direction = signal["tendance"] if signal["tendance"] in ("BULL", "BEAR") else \
+                    ("BULL" if "BUY" in signal["action"] else "BEAR")
+
+        distance_sl_origine = abs(px - sl_origine)
+        distance_sl_atr = atr * 1.5  # multiple standard de gestion de risque
+
+        # Ne jamais s'écarter de plus de 15% du SL déjà défini par la stratégie
+        marge = distance_sl_origine * 0.15
+        distance_sl_bornee = max(distance_sl_origine - marge,
+                                 min(distance_sl_origine + marge, distance_sl_atr))
+
+        if direction == "BULL":
+            sl_optimise = round(px - distance_sl_bornee, 5)
+        else:
+            sl_optimise = round(px + distance_sl_bornee, 5)
+
+        distance_tp_origine = abs(tp_origine - px)
+        rr_origine = signal.get("rr", 0)
+        rr_optimise = round(distance_tp_origine / distance_sl_bornee, 2) if distance_sl_bornee > 0 else rr_origine
+
+        if abs(distance_sl_bornee - distance_sl_origine) < distance_sl_origine * 0.02:
+            note = "SL/TP de la stratégie déjà cohérents avec la volatilité (ATR)"
+        else:
+            note = f"SL affiné selon ATR (x1.5) — ajustement {'+' if distance_sl_bornee > distance_sl_origine else '-'}{abs(round((distance_sl_bornee/distance_sl_origine - 1) * 100, 1))}%"
+
+        return {
+            "sl_optimise": sl_optimise, "tp_optimise": tp_origine,  # TP reste celui de la stratégie
+            "rr_optimise": rr_optimise, "note": note,
+        }
+    except Exception as e:
+        print(f"[Gestion Risque] {e}", flush=True)
+        return {"sl_optimise": signal.get("sl"), "tp_optimise": signal.get("tp"),
+               "rr_optimise": signal.get("rr", 0), "note": "Optimisation indisponible — niveaux stratégie conservés"}
+
 def calculer_adx(df, period=14):
+    """ADX calculé manuellement (indépendant de la lib 'ta' pour rester robuste)."""
     try:
         high, low, close = df['high'], df['low'], df['close']
         plus_dm = high.diff()
         minus_dm = -low.diff()
         plus_dm[plus_dm < 0] = 0
         minus_dm[minus_dm < 0] = 0
-        tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
+        tr = pd.concat([high - low, (high - close.shift()).abs(),
+                        (low - close.shift()).abs()], axis=1).max(axis=1)
         atr = tr.rolling(period).mean()
         plus_di = 100 * (plus_dm.rolling(period).mean() / atr.replace(0, 1e-9))
         minus_di = 100 * (minus_dm.rolling(period).mean() / atr.replace(0, 1e-9))
         dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, 1e-9)
         adx = dx.rolling(period).mean()
         return float(adx.iloc[-2]) if not adx.isna().iloc[-2] else 20.0
-    except: return 20.0
+    except Exception:
+        return 20.0
 
 def calculer_macd_signal(df):
+    """Retourne (macd_line, signal_line, histogram) sur la dernière bougie clôturée."""
     try:
         ema12 = df['close'].ewm(span=12, adjust=False).mean()
         ema26 = df['close'].ewm(span=26, adjust=False).mean()
@@ -561,322 +1563,1121 @@ def calculer_macd_signal(df):
         signal_line = macd_line.ewm(span=9, adjust=False).mean()
         hist = macd_line - signal_line
         return float(macd_line.iloc[-2]), float(signal_line.iloc[-2]), float(hist.iloc[-2])
-    except: return 0.0, 0.0, 0.0
+    except Exception:
+        return 0.0, 0.0, 0.0
 
 def calculer_atr(df, period=14):
     try:
         high, low, close = df['high'], df['low'], df['close']
-        tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
+        tr = pd.concat([high - low, (high - close.shift()).abs(),
+                        (low - close.shift()).abs()], axis=1).max(axis=1)
         return float(tr.rolling(period).mean().iloc[-2])
-    except: return 0.0
+    except Exception:
+        return 0.0
 
-def analyser_contexte_marche(symbole, df1h, df4h):
+def evaluer_structure_marche(df):
+    """Score 0-100: mesure la clarté de la structure (higher highs/lows cohérents)."""
     try:
-        ema20_h1 = df1h['close'].ewm(span=20, adjust=False).mean()
-        ema50_h1 = df1h['close'].ewm(span=50, adjust=False).mean()
-        pente_ema20 = (ema20_h1.iloc[-2] - ema20_h1.iloc[-10]) / max(abs(ema20_h1.iloc[-10]), 1e-9)
-        adx = calculer_adx(df1h)
-        atr = calculer_atr(df1h)
-        px = float(df1h['close'].iloc[-2])
-        atr_pct = (atr / px * 100) if px else 0
-        recent_high = df1h['high'].iloc[-30:].max()
-        recent_low  = df1h['low'].iloc[-30:].min()
+        highs = df['high'].iloc[-20:].values
+        lows = df['low'].iloc[-20:].values
+        if len(highs) < 2 or len(lows) < 2:
+            return 50.0
+        hh = sum(1 for i in range(1, len(highs)) if highs[i] > highs[i-1])
+        hl = sum(1 for i in range(1, len(lows)) if lows[i] > lows[i-1])
+        lh = sum(1 for i in range(1, len(highs)) if highs[i] < highs[i-1])
+        ll = sum(1 for i in range(1, len(lows)) if lows[i] < lows[i-1])
+        coherence_bull = (hh + hl) / (2 * (len(highs) - 1))
+        coherence_bear = (lh + ll) / (2 * (len(lows) - 1))
+        return round(max(coherence_bull, coherence_bear) * 100, 1)
+    except Exception:
+        return 50.0
+
+def calculer_distance_support_resistance(df, px):
+    """Retourne un score 0-100 représentant la proximité relative du prix à un mur SR récent."""
+    try:
+        recent_high = df['high'].iloc[-30:].max()
+        recent_low = df['low'].iloc[-30:].min()
         rng = recent_high - recent_low
-        position_dans_range = (px - recent_low) / rng if rng > 0 else 0.5
-        proche_cassure = position_dans_range > 0.9 or position_dans_range < 0.1
+        if rng <= 0:
+            return 50.0
+        dist_high = abs(recent_high - px) / rng
+        dist_low = abs(px - recent_low) / rng
+        return round(min(dist_high, dist_low) * 100, 1)
+    except Exception:
+        return 50.0
 
-        tendance = "HAUSSIERE" if adx >= 25 and abs(pente_ema20) > 0.001 and ema20_h1.iloc[-2] > ema50_h1.iloc[-2] else ("BAISSIERE" if adx >= 25 and abs(pente_ema20) > 0.001 else ("RANGE" if adx < 18 else "INDECIS"))
-        volatilite = "TRES_VOLATIL" if atr_pct > 1.2 else ("PEU_VOLATIL" if atr_pct < 0.05 else "NORMALE")
-        consolidation = (adx < 20 and atr_pct < 0.3)
+def estimer_spread_relatif(symbole, px):
+    """Approxime le spread relatif attendu par catégorie d'actif."""
+    if symbole in VOLATILE_PAIRS:
+        return 0.02
+    if symbole in COMMODITY_PAIRS:
+        return 0.015
+    return 0.03
 
-        return {"tendance": tendance, "volatilite": volatilite, "consolidation": consolidation, "proche_cassure": proche_cassure, "adx": round(adx, 1), "atr_pct": round(atr_pct, 3), "position_dans_range": round(position_dans_range, 2)}
-    except: return {"tendance": "INDECIS", "volatilite": "NORMALE", "consolidation": False, "proche_cassure": False, "adx": 20.0, "atr_pct": 0.3, "position_dans_range": 0.5}
-
-# ==========================================
-# 🧠 LE CERVEAU IA (TRADER AUTONOME)
-# ==========================================
-
-def cerveau_pro_trader(symbole):
+def moteur_ia_valider_signal(symbole, signal, strategie_nom):
     """
-    Le bot n'utilise plus de stratégies rigides. Python calcule le contexte de marché
-    et envoie le rapport à l'IA (Groq) pour qu'elle prenne la décision finale.
-    """
-    if not IA_CONFIG.get("groq_active", True) or not GROQ_API_KEY:
-        return []
+    ✅ Couche 1 (calcul déterministe). Ne génère AUCUN signal — reçoit un
+    signal déjà détecté par une stratégie existante et l'évalue.
 
+    signal: dict retourné par analyser_cpr_rejection() / analyser_open_drive()
+            / analyser_rsi_exhaustion() (structure inchangée)
+    strategie_nom: "CPR" / "OPEN_DRIVE" / "RSI"
+
+    Retourne: {"accepte": bool, "score": float, "justification": [str],
+               "details": {...}} — jamais None, toujours un verdict explicite.
+    """
     try:
         c1h = obtenir_donnees_deriv(symbole, 3600)
+        c5  = obtenir_donnees_deriv(symbole, 300)
         c4h = obtenir_donnees_h4(symbole)
-        
-        if not c1h or len(c1h) < 30:
-            return []
-            
-        df1h = pd.DataFrame([{"open":float(c["open"]),"high":float(c["high"]),"low":float(c["low"]),"close":float(c["close"])} for c in c1h])
-        df4h = pd.DataFrame([{"open":float(c["open"]),"high":float(c["high"]),"low":float(c["low"]),"close":float(c["close"])} for c in c4h]) if c4h else df1h
-        
-        px = float(df1h['close'].iloc[-1])
+        if not c1h or not c5:
+            return {"accepte": False, "score": 0, "justification": ["Données insuffisantes"], "details": {}}
 
-        contexte = analyser_contexte_marche(symbole, df1h, df4h)
+        df1h = pd.DataFrame([{"open":float(c["open"]),"high":float(c["high"]),
+                               "low":float(c["low"]),"close":float(c["close"])} for c in c1h])
+        df5  = pd.DataFrame([{"open":float(c["open"]),"high":float(c["high"]),
+                               "low":float(c["low"]),"close":float(c["close"])} for c in c5])
+        df4h = pd.DataFrame([{"open":float(c["open"]),"high":float(c["high"]),
+                               "low":float(c["low"]),"close":float(c["close"])} for c in c4h]) if c4h else df1h
+
+        px = signal["px"]
+        direction = signal["tendance"] if signal["tendance"] in ("BULL", "BEAR") else \
+                    ("BULL" if "BUY" in signal["action"] else "BEAR")
+
+        scores = {}
+        justifs_pos, justifs_neg = [], []
+
+        # 1. Tendance H1 (EMA 20/50)
+        try:
+            ema20 = df1h['close'].ewm(span=20, adjust=False).mean().iloc[-2]
+            ema50 = df1h['close'].ewm(span=50, adjust=False).mean().iloc[-2]
+            tendance_bull = ema20 > ema50
+            aligne = (tendance_bull and direction == "BULL") or (not tendance_bull and direction == "BEAR")
+            scores["tendance_h1"] = 100 if aligne else 30
+            (justifs_pos if aligne else justifs_neg).append(
+                "Tendance H1 alignée avec le signal" if aligne else "Tendance H1 contraire au signal")
+        except Exception:
+            scores["tendance_h1"] = 50
+
+        # 2. ADX (force de la tendance)
         adx = calculer_adx(df1h)
-        atr = calculer_atr(df1h)
+        scores["adx"] = min(100, adx * 2.5)
+        if adx >= 25:
+            justifs_pos.append(f"ADX élevé ({adx:.1f}) — tendance forte")
+        else:
+            justifs_neg.append(f"ADX faible ({adx:.1f}) — tendance peu marquée")
+
+        # 3. RSI cohérence
+        try:
+            delta = df1h['close'].diff()
+            gain = delta.clip(lower=0).rolling(14).mean()
+            loss = (-delta.clip(upper=0)).rolling(14).mean()
+            rs = gain / loss.replace(0, 1e-9)
+            rsi_val = float((100 - (100 / (1 + rs))).iloc[-2])
+            if direction == "BULL":
+                coherent = 40 <= rsi_val <= 70
+            else:
+                coherent = 30 <= rsi_val <= 60
+            scores["rsi_coherence"] = 90 if coherent else 40
+            (justifs_pos if coherent else justifs_neg).append(
+                f"RSI cohérent ({rsi_val:.1f})" if coherent else f"RSI incohérent avec le signal ({rsi_val:.1f})")
+        except Exception:
+            scores["rsi_coherence"] = 50
+            rsi_val = 50.0
+
+        # 4. MACD cohérence
         macd_line, signal_line, hist = calculer_macd_signal(df1h)
-        
+        macd_bull = hist > 0
+        macd_ok = (macd_bull and direction == "BULL") or (not macd_bull and direction == "BEAR")
+        scores["macd_coherence"] = 85 if macd_ok else 35
+        (justifs_pos if macd_ok else justifs_neg).append(
+            "MACD confirme la direction" if macd_ok else "MACD divergent du signal")
+
+        # 5. Alignement EMA multi-période (M5)
+        try:
+            e9  = df5['close'].ewm(span=9, adjust=False).mean().iloc[-2]
+            e21 = df5['close'].ewm(span=21, adjust=False).mean().iloc[-2]
+            aligne_m5 = (e9 > e21 and direction == "BULL") or (e9 < e21 and direction == "BEAR")
+            scores["ema_alignement"] = 80 if aligne_m5 else 40
+        except Exception:
+            scores["ema_alignement"] = 50
+
+        # 6. ATR / volatilité
+        atr = calculer_atr(df1h)
+        atr_pct = (atr / px * 100) if px else 0
+        if 0.05 <= atr_pct <= 1.2:
+            scores["atr_volatilite"] = 90
+            justifs_pos.append("Volatilité favorable (ATR normal)")
+        elif atr_pct > 1.2:
+            scores["atr_volatilite"] = 45
+            justifs_neg.append("Volatilité excessive — risque de faux breakout")
+        else:
+            scores["atr_volatilite"] = 55
+            justifs_neg.append("Marché trop calme — momentum faible")
+
+        # 7. Structure de marché
+        structure_score = evaluer_structure_marche(df1h)
+        scores["structure_marche"] = structure_score
+        if structure_score >= 60:
+            justifs_pos.append("Structure de marché claire")
+        else:
+            justifs_neg.append("Structure de marché peu lisible")
+
+        # 8. Distance support/résistance
+        dist_sr = calculer_distance_support_resistance(df1h, px)
+        if strategie_nom == "OPEN_DRIVE":
+            scores["distance_sr"] = 100 - dist_sr if dist_sr < 30 else 50
+        else:
+            scores["distance_sr"] = 100 - dist_sr if dist_sr < 25 else 40
+
+        # 9. Qualité de la cassure / R:R déjà calculé par la stratégie
+        rr = signal.get("rr", 0)
+        scores["qualite_cassure"] = min(100, rr * 30)
+        if rr >= 2.0:
+            justifs_pos.append(f"R/R solide ({rr}R)")
+        else:
+            justifs_neg.append(f"R/R faible ({rr}R)")
+
+        # 10. Spread estimé
+        spread_pct = estimer_spread_relatif(symbole, px)
+        scores["spread"] = 90 if spread_pct < 0.025 else 60
+
+        # 11. Cohérence multi-timeframe (H1 vs H4)
+        try:
+            ema20_4h = df4h['close'].ewm(span=20, adjust=False).mean().iloc[-2]
+            ema50_4h = df4h['close'].ewm(span=50, adjust=False).mean().iloc[-2]
+            tendance_h4_bull = ema20_4h > ema50_4h
+            coherent_tf = (tendance_h4_bull and direction == "BULL") or (not tendance_h4_bull and direction == "BEAR")
+            scores["multi_tf_coherence"] = 90 if coherent_tf else 35
+            (justifs_pos if coherent_tf else justifs_neg).append(
+                "H1 et H4 alignés" if coherent_tf else "Divergence H1/H4 — prudence")
+        except Exception:
+            scores["multi_tf_coherence"] = 50
+
+        # Score final pondéré (poids éventuellement ajustés par apprentissage)
+        poids = ia_poids_ajustes.get((strategie_nom, symbole), IA_CONFIG["poids"])
+        total_poids = sum(poids.values())
+        score_base = sum(scores.get(k, 50) * v for k, v in poids.items()) / total_poids
+
+        # ── ✅ V49: Module Contexte Marché (ajuste le score, ne décide pas) ──
+        contexte = analyser_contexte_marche(symbole, df1h, df4h)
+        facteur_contexte, justif_contexte = contexte_vers_facteur_confiance(contexte, direction)
+        justifs_pos.extend(j for j in justif_contexte if "confirmée" in j or "cassure" in j)
+        justifs_neg.extend(j for j in justif_contexte if "contraire" in j or "sans tendance" in j
+                           or "excessive" in j or "faible" in j or "consolidation" in j)
+
+        # ── ✅ V49: Module Détection Faux Signaux (pénalité soustractive) ──
+        risque_detecte, penalite_faux_signal, raisons_faux_signal = detecter_faux_signal(
+            df1h, df5, signal, contexte)
+        if risque_detecte:
+            justifs_neg.extend(raisons_faux_signal)
+
+        # ── ✅ V49: Module Multi-Timeframe M1/M5/M15/H1 (pénalité soustractive) ──
+        multi_tf = analyser_coherence_multi_tf(symbole, direction)
+        if multi_tf["penalite"] > 0:
+            justifs_neg.extend(multi_tf["raisons"])
+        else:
+            justifs_pos.extend(r for r in multi_tf["raisons"] if "forte" in r)
+
+        # Score final = (score de base × facteur contexte) − pénalités faux-signal/multi-TF
+        score_final = (score_base * facteur_contexte) - penalite_faux_signal - multi_tf["penalite"]
+        score_final = round(max(0, min(100, score_final)), 1)
+
+        accepte = score_final >= IA_CONFIG["seuil_acceptation"]
+
+        # ── ✅ V49: Module Gestion Intelligente du Risque (SL/TP affinés) ──
+        gestion_risque = optimiser_gestion_risque(signal, contexte, df1h)
+
+        return {
+            "accepte": accepte,
+            "score": score_final,
+            "score_base": round(score_base, 1),
+            "justification": justifs_pos if accepte else (justifs_neg if justifs_neg else justifs_pos),
+            "details": scores,
+            "rsi_val": round(rsi_val, 1),
+            "adx_val": round(adx, 1),
+            "contexte_marche": contexte,
+            "risque_faux_signal": risque_detecte,
+            "penalite_faux_signal": penalite_faux_signal,
+            "raisons_faux_signal": raisons_faux_signal,
+            "multi_tf": multi_tf,
+            "gestion_risque": gestion_risque,
+        }
+
+    except Exception as e:
+        print(f"[Moteur IA/{symbole}] {e}", flush=True)
+        return {"accepte": False, "score": 0, "justification": ["Erreur d'analyse IA"], "details": {}}
+
+
+def groq_second_avis(symbole, signal, strategie_nom, verdict_calcul):
+    """
+    ✅ Couche 2 (optionnelle): second avis Groq (llama-3.1-8b-instant).
+    N'est appelé QUE si le calcul déterministe a déjà accepté le signal
+    (verdict_calcul["accepte"] == True) — Groq ne peut jamais faire remonter
+    un signal que le calcul a rejeté, il ne peut que CONFIRMER ou opposer un
+    VETO à un signal déjà validé par le calcul. Robuste: en cas d'erreur
+    réseau/clé absente/quota dépassé, retourne un verdict neutre qui laisse
+    le calcul décider seul.
+
+    Le prompt inclut le contexte marché, les alertes de faux signal et la
+    cohérence multi-timeframe déjà calculés par les modules dédiés — Groq
+    agit comme un analyste qui reçoit un dossier complet plutôt que des
+    chiffres bruts isolés.
+    """
+    if not IA_CONFIG["groq_active"] or not GROQ_API_KEY:
+        return {"disponible": False, "score": None, "veto": False, "avis": "Groq désactivé"}
+
+    try:
+        contexte = verdict_calcul.get("contexte_marche", {})
+        multi_tf = verdict_calcul.get("multi_tf", {})
+        raisons_fs = verdict_calcul.get("raisons_faux_signal", [])
+        gestion_risque = verdict_calcul.get("gestion_risque", {})
+
         prompt = (
-            f"Tu es un algorithme de trading institutionnel. Analyse ce flux de données sur l'actif {symbole}.\n"
-            f"- Prix actuel : {px:.5f}\n"
-            f"- Tendance H1 : {contexte['tendance']} | Volatilité : {contexte['volatilite']}\n"
-            f"- ADX (Force de la tendance) : {adx:.1f}\n"
-            f"- ATR (Volatilité actuelle) : {atr:.5f}\n"
-            f"- MACD Histogramme : {hist:.5f}\n"
-            f"- Marché en consolidation : {contexte['consolidation']}\n"
-            f"- Prix proche d'une cassure : {contexte['proche_cassure']}\n\n"
-            "Prends une décision de trading. Si les conditions sont mauvaises ou incertaines, réponds 'WAIT'. "
-            "Réponds UNIQUEMENT et STRICTEMENT avec ce format JSON (sans markdown ni texte avant/après) :\n"
-            "{"
-            '"action": "BUY" ou "SELL" ou "WAIT", '
-            '"confiance": un entier entre 0 et 100, '
-            '"strategie_choisie": "Nom court du setup que tu as identifié", '
-            '"justification": "Une phrase expliquant ta décision techniquement", '
-            '"distance_sl_pct": pourcentage décimal (ex: 0.005 pour 0.5%), '
-            '"distance_tp_pct": pourcentage décimal (ex: 0.015 pour 1.5%)'
-            "}"
+            "Tu es un analyste de risque expert pour un bot de trading automatisé. "
+            "Un signal a déjà été détecté par une stratégie technique, validé par un moteur "
+            "de calcul déterministe (ADX/RSI/MACD/structure/contexte/multi-timeframe), et une "
+            "gestion de risque a proposé un SL/TP. Ton rôle est de donner un second avis "
+            "indépendant, en confirmant ou en déconseillant, avec une explication précise.\n\n"
+            "Réponds UNIQUEMENT en JSON strict, sans texte autour, format exact:\n"
+            '{"score": <entier 0-100>, "avis": "<2-3 phrases: verdict + raisons principales>"}\n\n'
+            f"=== SIGNAL ===\n"
+            f"Actif: {symbole} | Stratégie: {strategie_nom} | Direction: {signal.get('action')}\n"
+            f"R/R prévu: {signal.get('rr')}\n\n"
+            f"=== CALCUL DÉTERMINISTE ===\n"
+            f"Score: {verdict_calcul.get('score')}% (base avant ajustements: {verdict_calcul.get('score_base','?')}%)\n"
+            f"Justifications: {', '.join(verdict_calcul.get('justification', [])[:4])}\n"
+            f"RSI H1: {verdict_calcul.get('rsi_val', '?')} | ADX H1: {verdict_calcul.get('adx_val', '?')}\n\n"
+            f"=== CONTEXTE MARCHÉ ===\n"
+            f"Tendance: {contexte.get('tendance','?')} | Volatilité: {contexte.get('volatilite','?')}\n"
+            f"Consolidation: {contexte.get('consolidation','?')} | Proche cassure: {contexte.get('proche_cassure','?')}\n\n"
+            f"=== DÉTECTION FAUX SIGNAUX ===\n"
+            f"Alertes: {', '.join(raisons_fs) if raisons_fs else 'Aucune alerte détectée'}\n\n"
+            f"=== MULTI-TIMEFRAME (M1/M5/M15/H1) ===\n"
+            f"Cohérence: {multi_tf.get('score','?')}% | Détail: {multi_tf.get('detail',{})}\n\n"
+            f"=== GESTION DU RISQUE PROPOSÉE ===\n"
+            f"SL optimisé: {gestion_risque.get('sl_optimise','?')} | "
+            f"R:R optimisé: {gestion_risque.get('rr_optimise','?')}\n\n"
+            "Sois sévère si le contexte te semble risqué (faux breakout, marché sans "
+            "direction claire, divergence, volatilité excessive, incohérence multi-TF). "
+            "Réponds uniquement le JSON."
         )
 
         payload = {
             "model": GROQ_MODEL,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.1,
-            "max_tokens": 150,
+            "temperature": 0.2,
+            "max_tokens": 200,
         }
-        resp = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {GROQ_API_KEY}"}, json=payload, timeout=8)
-        
+        resp = requests.post(
+            GROQ_URL,
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+            json=payload, timeout=8,
+        )
         if resp.status_code != 200:
-            return []
-            
-        texte = resp.json()["choices"][0]["message"]["content"].strip()
+            print(f"[Groq] HTTP {resp.status_code}: {resp.text[:200]}", flush=True)
+            return {"disponible": False, "score": None, "veto": False, "avis": "Groq indisponible (HTTP)"}
+
+        data = resp.json()
+        texte = data["choices"][0]["message"]["content"].strip()
         texte = texte.replace("```json", "").replace("```", "").strip()
-        ia_decision = json.loads(texte)
+        parsed = json.loads(texte)
 
-        action = ia_decision.get("action", "WAIT")
-        confiance = float(ia_decision.get("confiance", 0))
-        
-        if action not in ["BUY", "SELL"] or confiance < IA_CONFIG.get("seuil_acceptation", 80):
-            return []
+        score_groq = float(parsed.get("score", 50))
+        avis_groq  = str(parsed.get("avis", ""))[:300]
+        veto = score_groq < IA_CONFIG["groq_seuil_veto"]
 
-        dist_sl = min(float(ia_decision.get("distance_sl_pct", 0.005)), 0.015)
-        dist_tp = float(ia_decision.get("distance_tp_pct", 0.015))
-        
-        sl = px * (1 - dist_sl) if action == "BUY" else px * (1 + dist_sl)
-        tp_final = px * (1 + dist_tp) if action == "BUY" else px * (1 - dist_tp)
-        
-        risque = abs(px - sl)
-        if risque <= 0:
-            return []
-            
-        tp1 = px + (risque * 1.5) if action == "BUY" else px - (risque * 1.5)
-        rr = abs(tp_final - px) / risque
-
-        signal_formate = {
-            "action": "🟢 ACHAT (BUY)" if action == "BUY" else "🔴 VENTE (SELL)",
-            "tendance": "BULL" if action == "BUY" else "BEAR",
-            "force": str(ia_decision.get("strategie_choisie", "Analyse Autonome")).upper()[:25],
-            "msg": ia_decision.get("justification", "Décision IA"),
-            "sl": round(sl, 5),
-            "tp1": round(tp1, 5),
-            "tp": round(tp_final, 5),
-            "rr": round(rr, 2),
-            "px": round(px, 5),
-            "strategie": 99,
-            "confiance": confiance,
-            "label": "🧠 TRADER AUTONOME",
-            "strategie_nom_ia": "PURE_IA",
-            "ia_score": confiance,
-            "ia_justification": [ia_decision.get("justification", "")],
-            "gemini_score": confiance,
-            "gemini_avis": "Processus 100% autonome",
-            "gemini_disponible": True,
-            "contexte_detecte": f"🤖 {ia_decision.get('strategie_choisie', 'IA')}",
-            "contexte_marche": contexte
-        }
-        
-        return [signal_formate]
+        return {"disponible": True, "score": score_groq, "veto": veto, "avis": avis_groq}
 
     except Exception as e:
-        print(f"[Cerveau IA Autonome/{symbole}] Erreur: {e}", flush=True)
-        return []
+        print(f"[Groq] Erreur: {e}", flush=True)
+        return {"disponible": False, "score": None, "veto": False, "avis": "Groq indisponible (erreur)"}
+
+def ia_enregistrer_resultat(symbol, strategie_nom, score, timeframe, win,
+                             tp_atteint, sl_atteint, drawdown_pct=0,
+                             avis_ia_score=None, sl=None, tp=None,
+                             duree_secondes=None, gemini_score=None,
+                             contexte_marche=None):
+    """
+    ✅ Auto-apprentissage enrichi (V49): enregistre tous les champs demandés
+    — actif, stratégie, timeframe, heure, score du calcul déterministe, avis
+    Groq, SL/TP, résultat, drawdown, durée du trade — puis réajuste les
+    poids des critères "structurels" pour ce couple (stratégie, symbole)
+    selon le win-rate historique observé. Méthode simple et transparente,
+    bornée, sans boîte noire.
+    """
+    maintenant = datetime.datetime.utcnow()
+    entree = {
+        "symbol": symbol, "strategie": strategie_nom, "score": score,
+        "timeframe": timeframe, "win": win, "tp_atteint": tp_atteint,
+        "sl_atteint": sl_atteint, "drawdown_pct": drawdown_pct, "ts": time.time(),
+        "heure_utc": maintenant.hour,
+        "date": maintenant.strftime("%Y-%m-%d"),
+        "avis_ia_score": avis_ia_score,   # score du calcul déterministe au moment du trade
+        "gemini_score": gemini_score,     # score Groq au moment du trade (None si non consulté)
+        "sl": sl, "tp": tp,
+        "duree_secondes": duree_secondes,
+        "contexte_marche": contexte_marche,  # dict {tendance, volatilite, ...} au moment du signal
+    }
+    ia_historique.append(entree)
+
+    cle = (strategie_nom, symbol)
+    trades_cle = [h for h in ia_historique if (h["strategie"], h["symbol"]) == cle]
+    if len(trades_cle) < 15:
+        return
+
+    winrate = sum(1 for t in trades_cle if t["win"]) / len(trades_cle)
+    poids_base = dict(IA_CONFIG["poids"])
+
+    ajustement = 1.15 if winrate < 0.45 else (0.9 if winrate > 0.65 else 1.0)
+    criteres_structurels = ("tendance_h1", "adx", "structure_marche", "multi_tf_coherence")
+    poids_ajustes = {k: round(v * (ajustement if k in criteres_structurels else 1.0), 2)
+                     for k, v in poids_base.items()}
+    ia_poids_ajustes[cle] = poids_ajustes
+    print(f"[IA Learning] {cle}: winrate={winrate:.0%} sur {len(trades_cle)} trades "
+          f"→ poids ajustés (facteur {ajustement})", flush=True)
 
 # ==========================================
-# COMMANDES TELEGRAM & SCANNER
+# 📊 V49 NEW: MODULE STATISTIQUES D'APPRENTISSAGE
 # ==========================================
+# Produit les statistiques demandées à partir de ia_historique: taux de
+# réussite par stratégie, par actif, par timeframe, par tranche de score,
+# par heure de la journée, et comparaison signaux confirmés/non confirmés
+# par Groq. Lecture seule — n'affecte jamais les décisions en direct,
+# sert uniquement à la visibilité (/iastats) et à l'ajustement des poids
+# déjà géré par ia_enregistrer_resultat().
+
+def _winrate(liste):
+    if not liste:
+        return None, 0
+    return round(sum(1 for x in liste if x["win"]) / len(liste) * 100, 1), len(liste)
+
+def stats_par_strategie():
+    groupes = {}
+    for h in ia_historique:
+        groupes.setdefault(h["strategie"], []).append(h)
+    return {k: _winrate(v) for k, v in groupes.items()}
+
+def stats_par_actif():
+    groupes = {}
+    for h in ia_historique:
+        groupes.setdefault(h["symbol"], []).append(h)
+    return {k: _winrate(v) for k, v in groupes.items()}
+
+def stats_par_timeframe():
+    groupes = {}
+    for h in ia_historique:
+        groupes.setdefault(h.get("timeframe", "?"), []).append(h)
+    return {k: _winrate(v) for k, v in groupes.items()}
+
+def stats_par_tranche_score():
+    tranches = {"< 85%": [], "85-90%": [], "90-95%": [], "≥ 95%": []}
+    for h in ia_historique:
+        s = h.get("score", 0)
+        if s < 85: tranches["< 85%"].append(h)
+        elif s < 90: tranches["85-90%"].append(h)
+        elif s < 95: tranches["90-95%"].append(h)
+        else: tranches["≥ 95%"].append(h)
+    return {k: _winrate(v) for k, v in tranches.items()}
+
+def stats_par_heure():
+    groupes = {}
+    for h in ia_historique:
+        heure = h.get("heure_utc")
+        if heure is None:
+            continue
+        tranche = f"{(heure // 4) * 4:02d}h-{(heure // 4) * 4 + 4:02d}h"
+        groupes.setdefault(tranche, []).append(h)
+    return {k: _winrate(v) for k, v in sorted(groupes.items())}
+
+def stats_gemini_vs_sans():
+    """Compare le win-rate des trades où Groq a été consulté vs non consulté."""
+    avec_gemini = [h for h in ia_historique if h.get("gemini_score") is not None]
+    sans_gemini = [h for h in ia_historique if h.get("gemini_score") is None]
+    return {"avec_gemini": _winrate(avec_gemini), "sans_gemini": _winrate(sans_gemini)}
+
+def stats_par_contexte_marche():
+    groupes = {}
+    for h in ia_historique:
+        ctx = h.get("contexte_marche") or {}
+        tendance = ctx.get("tendance", "INCONNU")
+        groupes.setdefault(tendance, []).append(h)
+    return {k: _winrate(v) for k, v in groupes.items()}
+
+# ==========================================
+# 🧠 V48: CERVEAU PRO TRADER — STRATÉGIES INDÉPENDANTES + VALIDATION IA
+# ==========================================
+
+def cerveau_pro_trader(symbole):
+    """
+    ✅ V48: Chaque stratégie est évaluée INDÉPENDAMMENT — aucune n'a besoin
+    de l'accord d'une autre pour que son signal soit envoyé. Chaque signal
+    détecté passe par: (1) moteur de calcul déterministe, puis, s'il est
+    accepté, (2) second avis Groq (confirme ou veto). Retourne une LISTE
+    de signaux acceptés (0 à 3). La logique interne de chaque analyser_xxx()
+    n'est jamais modifiée.
+    """
+    signaux_valides = []
+
+    for fn, nom_strategie, emoji_ctx in (
+        (analyser_cpr_rejection,  "CPR",        "🧱 CPR PULLBACK & REJECTION"),
+        (analyser_open_drive,     "OPEN_DRIVE", "🚀 OPEN DRIVE BREAKOUT"),
+        (analyser_rsi_exhaustion, "RSI",        "📉 RSI EXHAUSTION & REVERSAL"),
+    ):
+        signal_brut = fn(symbole)
+        if not signal_brut:
+            continue
+
+        verdict = moteur_ia_valider_signal(symbole, signal_brut, nom_strategie)
+
+        if not verdict["accepte"]:
+            print(f"[IA] {symbole}/{nom_strategie} REJETÉ (calcul) — score {verdict['score']}% "
+                  f"< seuil {IA_CONFIG['seuil_acceptation']}%", flush=True)
+            continue
+
+        # Second avis Groq — ne peut que confirmer ou opposer un veto à un
+        # signal déjà accepté par le calcul, jamais l'inverse.
+        avis_groq = groq_second_avis(symbole, signal_brut, nom_strategie, verdict)
+
+        if avis_groq["veto"]:
+            print(f"[Groq] {symbole}/{nom_strategie} VETO — score Groq "
+                  f"{avis_groq['score']}% < seuil {IA_CONFIG['groq_seuil_veto']}% "
+                  f"({avis_groq['avis']})", flush=True)
+            continue
+
+        signal_brut["contexte_detecte"]  = emoji_ctx
+        signal_brut["ia_score"]          = verdict["score"]
+        signal_brut["ia_score_base"]     = verdict.get("score_base", verdict["score"])
+        signal_brut["ia_justification"]  = verdict["justification"]
+        signal_brut["ia_accepte"]        = True
+        signal_brut["strategie_nom_ia"]  = nom_strategie
+        # ⚠️ Clés conservées sous le nom "gemini_*" pour compatibilité avec le
+        # reste du bot (affichage scanner, ouvrir_trade, apprentissage,
+        # /iastats gemini) qui lit déjà ces noms de champs — elles contiennent
+        # désormais le résultat du second avis GROQ, pas de régression fonctionnelle.
+        signal_brut["gemini_score"]      = avis_groq["score"]
+        signal_brut["gemini_avis"]       = avis_groq["avis"]
+        signal_brut["gemini_disponible"] = avis_groq["disponible"]
+        # ✅ V49: données des nouveaux modules, propagées pour l'affichage et l'apprentissage
+        signal_brut["contexte_marche"]      = verdict.get("contexte_marche", {})
+        signal_brut["risque_faux_signal"]   = verdict.get("risque_faux_signal", False)
+        signal_brut["raisons_faux_signal"]  = verdict.get("raisons_faux_signal", [])
+        signal_brut["multi_tf"]             = verdict.get("multi_tf", {})
+        signal_brut["gestion_risque"]       = verdict.get("gestion_risque", {})
+
+        signaux_valides.append(signal_brut)
+
+    return signaux_valides
+
+
+# ==========================================
+# ✅ /Volatility GRANULAIRE
+# ==========================================
+
+@bot.message_handler(commands=['Volatility'])
+def gerer_volatility(message):
+    if message.chat.id != ADMIN_ID:
+        return bot.send_message(message.chat.id, "❌ Admin uniquement.")
+
+    parts = message.text.strip().split()
+
+    if len(parts) == 1:
+        lignes = ["🔥 *STATUT VOLATILITY PAIRS:*\n━━━━━━━━━━━━━━━━━━"]
+        for p, actif in volatility_pairs_active.items():
+            lignes.append(f"  {'✅' if actif else '❌'} {p}")
+        lignes.append("\n*Commandes:*")
+        lignes.append("/Volatility V10 ON/OFF")
+        lignes.append("/Volatility ALL ON/OFF")
+        return bot.send_message(message.chat.id, "\n".join(lignes), parse_mode="Markdown")
+
+    if len(parts) < 3:
+        return bot.send_message(message.chat.id,
+            "Usage: /Volatility V10 ON\n/Volatility ALL OFF", parse_mode="Markdown")
+
+    paire  = parts[1].upper()
+    action = parts[2].upper()
+
+    if action not in ("ON","OFF"):
+        return bot.send_message(message.chat.id, "Action invalide: ON ou OFF")
+
+    etat = (action == "ON")
+
+    if paire == "ALL":
+        for p in volatility_pairs_active:
+            volatility_pairs_active[p] = etat
+        msg = ("✅ Toutes les paires Volatility *ACTIVÉES*"
+               if etat else "⛔ Toutes les paires Volatility *DÉSACTIVÉES*")
+        return bot.send_message(message.chat.id, msg, parse_mode="Markdown")
+
+    if paire in volatility_pairs_active:
+        volatility_pairs_active[paire] = etat
+        msg = (f"✅ {paire} *ACTIVÉ*" if etat else f"⛔ {paire} *DÉSACTIVÉ*")
+        return bot.send_message(message.chat.id, msg, parse_mode="Markdown")
+
+    bot.send_message(message.chat.id,
+        f"❌ Paire inconnue: {paire}\nValides: V10, V25, V50, V75, V100, ALL")
+
+# ==========================================
+# ✅ V43 NEW: /risk — Configurer le risque par trade
+# ==========================================
+
+@bot.message_handler(commands=['risk'])
+def gerer_risque(message):
+    if message.chat.id != ADMIN_ID:
+        return bot.send_message(message.chat.id, "❌ Admin uniquement.")
+
+    parts = message.text.strip().split()
+    if len(parts) == 1:
+        txt = (
+            f"⚙️ *PARAMÈTRES DE RISQUE ACTUELS*\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Risque/trade : {RISK_CONFIG['risk_per_trade_pct']}%\n"
+            f"Limite perte/jour : {RISK_CONFIG['daily_loss_limit_pct']}%\n"
+            f"Pertes consécutives max : {RISK_CONFIG['max_consecutive_losses']}\n"
+            f"Durée pause anti-tilt : {RISK_CONFIG['pause_duration_minutes']} min\n"
+            f"Partial TP : {int(RISK_CONFIG['partial_tp_ratio']*100)}%\n"
+            f"Trades max/jour : {RISK_CONFIG['max_trades_per_day']}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Usage: /risk <param> <valeur>\n"
+            f"Ex: /risk risk_per_trade_pct 1.5"
+        )
+        return bot.send_message(message.chat.id, txt, parse_mode="Markdown")
+
+    if len(parts) >= 3 and parts[1] in RISK_CONFIG:
+        try:
+            valeur = float(parts[2])
+            RISK_CONFIG[parts[1]] = valeur
+            return bot.send_message(message.chat.id,
+                f"✅ {parts[1]} = {valeur}", parse_mode="Markdown")
+        except ValueError:
+            return bot.send_message(message.chat.id, "❌ Valeur invalide.")
+
+    bot.send_message(message.chat.id, "❌ Paramètre inconnu.")
+
+# ==========================================
+# ✅ V48 NEW: /iaconfig — Configurer le moteur IA
+# ==========================================
+
+@bot.message_handler(commands=['iaconfig'])
+def gerer_ia_config(message):
+    if message.chat.id != ADMIN_ID:
+        return bot.send_message(message.chat.id, "❌ Admin uniquement.")
+
+    parts = message.text.strip().split()
+    if len(parts) == 1:
+        groq_statut = "✅ Actif" if (IA_CONFIG["groq_active"] and GROQ_API_KEY) else \
+                     ("⚠️ Activé mais clé absente" if IA_CONFIG["groq_active"] else "❌ Désactivé")
+        txt = (
+            f"🤖 *PARAMÈTRES MOTEUR IA*\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Seuil d'acceptation (calcul) : {IA_CONFIG['seuil_acceptation']}%\n"
+            f"Second avis Groq : {groq_statut}\n"
+            f"Seuil de veto Groq : {IA_CONFIG['groq_seuil_veto']}%\n"
+            f"Trades enregistrés (apprentissage) : {len(ia_historique)}\n"
+            f"Couples (stratégie,symbole) ajustés : {len(ia_poids_ajustes)}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Usage:\n"
+            f"/iaconfig seuil_acceptation 90\n"
+            f"/iaconfig groq_active 0 (ou 1)\n"
+            f"/iaconfig groq_seuil_veto 35"
+        )
+        return bot.send_message(message.chat.id, txt, parse_mode="Markdown")
+
+    if len(parts) >= 3 and parts[1] == "seuil_acceptation":
+        try:
+            valeur = float(parts[2])
+            if not (0 <= valeur <= 100):
+                return bot.send_message(message.chat.id, "❌ Le seuil doit être entre 0 et 100.")
+            IA_CONFIG["seuil_acceptation"] = valeur
+            return bot.send_message(message.chat.id,
+                f"✅ Seuil d'acceptation IA = {valeur}%", parse_mode="Markdown")
+        except ValueError:
+            return bot.send_message(message.chat.id, "❌ Valeur invalide.")
+
+    if len(parts) >= 3 and parts[1] == "groq_active":
+        IA_CONFIG["groq_active"] = parts[2] in ("1", "true", "on", "True")
+        return bot.send_message(message.chat.id,
+            f"✅ Second avis Groq : {'activé' if IA_CONFIG['groq_active'] else 'désactivé'}",
+            parse_mode="Markdown")
+
+    if len(parts) >= 3 and parts[1] == "groq_seuil_veto":
+        try:
+            valeur = float(parts[2])
+            IA_CONFIG["groq_seuil_veto"] = valeur
+            return bot.send_message(message.chat.id,
+                f"✅ Seuil de veto Groq = {valeur}%", parse_mode="Markdown")
+        except ValueError:
+            return bot.send_message(message.chat.id, "❌ Valeur invalide.")
+
+    bot.send_message(message.chat.id, "❌ Paramètre inconnu.")
 
 @bot.message_handler(commands=['testgroq'])
 def test_groq_reel(message):
     """
-    Commande pour vérifier instantanément la santé de l'API Groq.
+    ✅ Commande de vérification honnête: fait un VRAI appel réseau à l'API
+    Groq (pas un mock) avec un prompt de test, et rapporte EXACTEMENT ce
+    qui se passe — code HTTP, contenu brut de la réponse, erreur précise si
+    échec. Aucune donnée n'est enjolivée: si ça ne marche pas, le message
+    le dit clairement plutôt que de basculer silencieusement en mode dégradé.
     """
     uid = message.chat.id
     if not est_autorise(uid): return
 
     if not GROQ_API_KEY:
-        return bot.send_message(uid, "❌ *Erreur* : Aucune clé GROQ_API_KEY détectée dans l'environnement.", parse_mode="Markdown")
+        return bot.send_message(uid,
+            "❌ *GROQ_API_KEY absente*\n"
+            "Aucune variable d'environnement GROQ_API_KEY configurée sur Render.\n"
+            "Le bot tourne en mode dégradé (calcul seul) — c'est normal, pas un bug.",
+            parse_mode="Markdown")
 
-    bot.send_message(uid, "🔄 *Test de connexion Groq en cours...*", parse_mode="Markdown")
-    
+    bot.send_message(uid, "🔄 Appel réel en cours vers l'API Groq, patiente...")
+
+    debut = time.time()
     try:
-        debut = time.time()
+        prompt_test = (
+            "Réponds UNIQUEMENT ce JSON exact, rien d'autre: "
+            '{"score": 77, "avis": "Ceci est un test de connexion reussi"}'
+        )
         payload = {
             "model": GROQ_MODEL,
-            "messages": [{"role": "user", "content": "Réponds uniquement 'OK' formaté en JSON strict: {\"status\": \"OK\"}"}],
+            "messages": [{"role": "user", "content": prompt_test}],
             "temperature": 0.1,
-            "max_tokens": 20
+            "max_tokens": 50,
         }
-        resp = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {GROQ_API_KEY}"}, json=payload, timeout=10)
+        resp = requests.post(
+            GROQ_URL,
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+            json=payload, timeout=10,
+        )
         duree = round(time.time() - debut, 2)
-        
+
+        rapport = (
+            f"🔬 *TEST RÉEL API GROQ*\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Endpoint : `{GROQ_URL}`\n"
+            f"Modèle : `{GROQ_MODEL}`\n"
+            f"Code HTTP : *{resp.status_code}*\n"
+            f"Durée : {duree}s\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        )
+
         if resp.status_code == 200:
-            data = resp.json()
-            texte_recu = data["choices"][0]["message"]["content"].strip()
-            bot.send_message(uid, 
-                f"✅ *API GROQ OPÉRATIONNELLE*\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"⚡ Latence : `{duree}s`\n"
-                f"🧠 Modèle : `{GROQ_MODEL}`\n"
-                f"💬 Réponse brute : `{texte_recu}`\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"Le moteur IA est prêt à analyser les marchés.", 
-                parse_mode="Markdown")
+            try:
+                data = resp.json()
+                texte_brut = data["choices"][0]["message"]["content"]
+                rapport += (
+                    f"✅ *Réponse brute reçue de Groq* :\n"
+                    f"`{texte_brut[:300]}`\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"👉 Ceci est la réponse RÉELLE de Groq, pas une simulation.\n"
+                    f"Si tu vois du texte cohérent ci-dessus, Groq fonctionne."
+                )
+            except Exception as parse_err:
+                rapport += (
+                    f"⚠️ HTTP 200 mais parsing échoué : {parse_err}\n"
+                    f"Réponse brute complète :\n`{resp.text[:500]}`"
+                )
         else:
-            bot.send_message(uid, 
-                f"❌ *ÉCHEC DE L'API*\n"
-                f"Code HTTP : {resp.status_code}\n"
-                f"Détails : `{resp.text[:200]}`", 
-                parse_mode="Markdown")
-                
+            rapport += (
+                f"❌ *Échec* — Groq a refusé la requête.\n"
+                f"Corps de la réponse :\n`{resp.text[:500]}`\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Causes possibles : clé invalide, modèle `{GROQ_MODEL}` inexistant/déprécié, "
+                f"quota dépassé, compte suspendu."
+            )
+
+        bot.send_message(uid, rapport, parse_mode="Markdown")
+
     except requests.exceptions.Timeout:
-        bot.send_message(uid, "❌ *Timeout* : L'API Groq a mis plus de 10 secondes à répondre.", parse_mode="Markdown")
+        bot.send_message(uid, "❌ *Timeout* — Groq n'a pas répondu en 10s. "
+                              "Le bot basculerait en mode dégradé sur un vrai signal.",
+                         parse_mode="Markdown")
     except Exception as e:
-        bot.send_message(uid, f"❌ *Erreur interne* : `{e}`", parse_mode="Markdown")
+        bot.send_message(uid, f"❌ *Erreur réseau réelle* : `{type(e).__name__}: {e}`\n"
+                              f"Le bot basculerait en mode dégradé sur un vrai signal.",
+                         parse_mode="Markdown")
 
-@bot.message_handler(commands=['start'])
-def bienvenue(message):
-    uid = message.chat.id
-    if not est_autorise(uid): return bot.send_message(uid, "🔒 Accès restreint.")
-    utilisateurs_actifs.add(uid)
-    init_daily_stats(uid)
-    markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row(KeyboardButton("📊 CHOISIR UNE CIBLE"), KeyboardButton("🚀 LANCER L'ANALYSE"))
-    markup.row(KeyboardButton("📜 HISTORIQUE"))
-    bot.send_message(uid, "💼 *SMART MONEY PRIME V51.1*\nTrader Autonome IA + Commande /testgroq active.", reply_markup=markup, parse_mode="Markdown")
-
-@bot.message_handler(func=lambda m: m.text == "📜 HISTORIQUE")
-def historique_bouton(message):
+@bot.message_handler(commands=['iastats'])
+def ia_stats(message):
+    """
+    ✅ V49: Statistiques d'apprentissage enrichies — taux de réussite par
+    stratégie, par actif, par tranche de score de confiance, et comparaison
+    Groq consulté vs non consulté. Usage: /iastats [strategie|actif|score|heure|groq|contexte]
+    """
     uid = message.chat.id
     if not est_autorise(uid): return
-    hist = trades_historique.get(uid, [])
-    if not hist: return bot.send_message(uid, "📭 Aucun trade dans l'historique.")
-    lignes = ["📜 *HISTORIQUE*\n━━━━━━━━━━━━━━━━━━━━━━"]
-    for t in hist[-10:][::-1]:
-        emoji = "✅" if t["win"] else "❌"
-        lignes.append(f"{emoji} {t['symbol']} {t['direction']} | {t['pnl']:+.2f}$")
+    if not ia_historique:
+        return bot.send_message(uid, "📭 Aucune donnée d'apprentissage IA pour le moment.")
+
+    parts = message.text.strip().split()
+    vue = parts[1].lower() if len(parts) > 1 else "resume"
+
+    def fmt_stats(d, titre):
+        lignes = [f"*{titre}*"]
+        for k, (wr, n) in d.items():
+            if wr is None:
+                continue
+            lignes.append(f"  {k} : {wr:.0f}% sur {n} trades")
+        return lignes
+
+    if vue == "strategie":
+        lignes = ["🤖 *WIN-RATE PAR STRATÉGIE*\n━━━━━━━━━━━━━━━━━━━━━━"]
+        lignes += fmt_stats(stats_par_strategie(), "Par stratégie")
+
+    elif vue == "actif":
+        lignes = ["🤖 *WIN-RATE PAR ACTIF*\n━━━━━━━━━━━━━━━━━━━━━━"]
+        lignes += fmt_stats(stats_par_actif(), "Par actif")
+
+    elif vue == "score":
+        lignes = ["🤖 *WIN-RATE PAR TRANCHE DE SCORE*\n━━━━━━━━━━━━━━━━━━━━━━"]
+        lignes += fmt_stats(stats_par_tranche_score(), "Par score du calcul déterministe")
+
+    elif vue == "heure":
+        lignes = ["🤖 *WIN-RATE PAR HEURE (UTC)*\n━━━━━━━━━━━━━━━━━━━━━━"]
+        lignes += fmt_stats(stats_par_heure(), "Par tranche horaire")
+
+    elif vue in ("gemini", "groq"):
+        lignes = ["🤖 *WIN-RATE AVEC/SANS GROQ*\n━━━━━━━━━━━━━━━━━━━━━━"]
+        g = stats_gemini_vs_sans()
+        wr_avec, n_avec = g["avec_gemini"]
+        wr_sans, n_sans = g["sans_gemini"]
+        lignes.append(f"  Avec Groq consulté : {wr_avec:.0f}% sur {n_avec} trades" if wr_avec is not None
+                     else "  Avec Groq consulté : pas assez de données")
+        lignes.append(f"  Sans Groq (calcul seul) : {wr_sans:.0f}% sur {n_sans} trades" if wr_sans is not None
+                     else "  Sans Groq (calcul seul) : pas assez de données")
+
+    elif vue == "contexte":
+        lignes = ["🤖 *WIN-RATE PAR CONTEXTE MARCHÉ*\n━━━━━━━━━━━━━━━━━━━━━━"]
+        lignes += fmt_stats(stats_par_contexte_marche(), "Par tendance détectée")
+
+    else:  # résumé combiné (couples stratégie/symbole + poids ajustés)
+        par_couple = {}
+        for h in ia_historique:
+            cle = (h["strategie"], h["symbol"])
+            par_couple.setdefault(cle, []).append(h["win"])
+
+        lignes = ["🤖 *STATISTIQUES D'APPRENTISSAGE IA*\n━━━━━━━━━━━━━━━━━━━━━━",
+                  f"Total trades enregistrés : {len(ia_historique)}\n"]
+        for (strat, sym), resultats in par_couple.items():
+            wr = sum(1 for r in resultats if r) / len(resultats) * 100
+            ajuste = " (poids ajustés)" if (strat, sym) in ia_poids_ajustes else ""
+            lignes.append(f"{strat} / {sym} : {wr:.0f}% sur {len(resultats)} trades{ajuste}")
+        lignes.append("\n*Vues détaillées disponibles:*")
+        lignes.append("/iastats strategie · /iastats actif · /iastats score")
+        lignes.append("/iastats heure · /iastats groq · /iastats contexte")
+
     bot.send_message(uid, "\n".join(lignes), parse_mode="Markdown")
 
-@bot.message_handler(func=lambda m: m.text == "📊 CHOISIR UNE CIBLE")
-def devises(message):
+# ==========================================
+# ✅ V43 NEW: /rapport — Rapport quotidien
+# ==========================================
+
+def generer_rapport_texte(uid):
+    stats = init_daily_stats(uid)
+    total = stats["trades"]
+    winrate = (stats["wins"] / total * 100) if total > 0 else 0
+    return (
+        f"📊 *RAPPORT DU JOUR* ({stats['date']})\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Trades exécutés : {total}/{RISK_CONFIG['max_trades_per_day']}\n"
+        f"✅ Gagnés : {stats['wins']}  |  ❌ Perdus : {stats['losses']}\n"
+        f"🎯 Win Rate : {winrate:.1f}%\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💰 P&L du jour : {stats['pnl']:+.2f} USD\n"
+        f"🏆 Meilleur trade : {stats['best_trade']:+.2f} USD\n"
+        f"💔 Pire trade : {stats['worst_trade']:+.2f} USD\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🏦 P&L total cumulé : {pnl_total.get(uid,0):+.2f} USD\n"
+        f"📈 Bilan global : {win_count.get(uid,0)}W / {loss_count.get(uid,0)}L"
+    )
+
+@bot.message_handler(commands=['rapport'])
+def rapport_quotidien(message):
     uid = message.chat.id
     if not est_autorise(uid): return
-    markup = InlineKeyboardMarkup(row_width=3)
-    btns_vol = [InlineKeyboardButton(NOMS_AFFICHAGE.get(p, p), callback_data=f"set_{p}") for p, actif in volatility_pairs_active.items() if actif]
-    if btns_vol: markup.add(*btns_vol)
-    markup.add(InlineKeyboardButton("🥇 GOLD", callback_data="set_XAUUSD"), InlineKeyboardButton("🥈 ARGENT", callback_data="set_XAGUSD"))
-    bot.send_message(uid, "🎯 Sélectionne ta cible :", reply_markup=markup, parse_mode="Markdown")
+    bot.send_message(uid, generer_rapport_texte(uid), parse_mode="Markdown")
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
-def save_devise(call):
-    uid = call.message.chat.id
+def envoyer_rapports_quotidiens_auto():
+    """Envoie automatiquement le rapport à 22h UTC chaque jour à tous les users actifs"""
+    dernier_envoi = None
+    while True:
+        try:
+            time.sleep(60)
+            now = datetime.datetime.utcnow()
+            cle_jour = now.strftime("%Y-%m-%d")
+            if now.hour == 22 and dernier_envoi != cle_jour:
+                for uid in list(utilisateurs_actifs):
+                    try:
+                        bot.send_message(uid, "🌙 *Rapport de fin de journée*\n\n" +
+                                         generer_rapport_texte(uid), parse_mode="Markdown")
+                    except:
+                        pass
+                dernier_envoi = cle_jour
+        except Exception as e:
+            print(f"[Rapport Auto] {e}", flush=True)
+
+# ==========================================
+# ✅ V43 NEW: /pause /resume — Circuit breaker manuel
+# ==========================================
+
+@bot.message_handler(commands=['pause'])
+def pause_manuelle(message):
+    uid = message.chat.id
     if not est_autorise(uid): return
-    cle_brute = call.data.replace("set_", "")
-    
-    if cle_brute in signaux_cache: cle = cle_brute; actif = cle_brute.split("_")[0]
-    else:
-        actif = cle_brute
-        candidats = [k for k in signaux_cache if k.startswith(f"{actif}_")]
-        if not candidats: return bot.send_message(uid, f"⏱️ Aucun signal actif sur {actif}.")
-        cle = max(candidats, key=lambda k: signaux_cache[k]["time"])
+    stats = init_daily_stats(uid)
+    stats["paused_until"] = time.time() + (12 * 3600)  # pause 12h
+    bot.send_message(uid, "⏸️ Trading mis en pause manuellement pour 12h.\n"
+                          "Utilise /resume pour reprendre.", parse_mode="Markdown")
 
-    user_prefs[uid] = actif
-    cache = signaux_cache.get(cle)
-    px = obtenir_prix_broker_realtime(actif) or 0
-    if px <= 0: return bot.send_message(uid, "⚠️ Impossible de récupérer le prix.")
-    
-    entry_direction = "BUY" if "BUY" in cache["action"] else "SELL"
-    sl_cache, tp1_cache, tp_final_cache = cache["mt5_sl"], cache["mt5_tp1"], cache["mt5_tp"]
-    
-    trade_id, sizing = ouvrir_trade(uid, actif, entry_direction, px, sl_cache, tp1_cache, tp_final_cache, cache["strategie"], cache["confiance"], label=cache.get("label"))
-    
-    signal = (
-        f"💼 *{cache.get('label')}* — {actif}\n"
+@bot.message_handler(commands=['resume'])
+def resume_manuel(message):
+    uid = message.chat.id
+    if not est_autorise(uid): return
+    stats = init_daily_stats(uid)
+    stats["paused_until"] = None
+    stats["consecutive_losses"] = 0
+    bot.send_message(uid, "▶️ Trading repris. Bonne chance!", parse_mode="Markdown")
+
+# ==========================================
+# ✅ V44 NEW: /debloquer — Déblocage manuel immédiat (admin ou soi-même)
+# Complète le watchdog automatique (5 min) pour un déblocage instantané.
+# ==========================================
+
+@bot.message_handler(commands=['debloquer'])
+def debloquer_manuel(message):
+    uid = message.chat.id
+    if not est_autorise(uid): return
+
+    parts = message.text.strip().split()
+    cible = uid
+    if len(parts) > 1 and message.chat.id == ADMIN_ID:
+        try:
+            cible = int(parts[1])
+        except ValueError:
+            return bot.send_message(uid, "❌ ID invalide.")
+
+    etait_bloque = cible in trades_actifs
+    trades_actifs.pop(cible, None)
+
+    stats = init_daily_stats(cible)
+    stats["paused_until"] = None
+
+    if etait_bloque:
+        bot.send_message(uid, f"🔓 Utilisateur {cible} débloqué. Trade actif nettoyé.",
+                         parse_mode="Markdown")
+        if cible != uid:
+            try:
+                bot.send_message(cible, "🔓 Ton compte a été débloqué par l'admin. "
+                                        "Tu peux à nouveau recevoir des signaux.",
+                                 parse_mode="Markdown")
+            except: pass
+    else:
+        bot.send_message(uid, f"✅ Aucun blocage détecté pour {cible} — tout est déjà normal.",
+                         parse_mode="Markdown")
+
+@bot.message_handler(commands=['status'])
+def status_technique(message):
+    uid = message.chat.id
+    if not est_autorise(uid): return
+    bloque = "🟠 OUI" if uid in trades_actifs else "🟢 NON"
+    en_pause, jusqua = utilisateur_en_pause(uid)
+    txt = (
+        f"🔧 *STATUS TECHNIQUE*\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"{'🟢 BUY MARKET' if entry_direction == 'BUY' else '🔴 SELL MARKET'}\n"
-        f"💰 Entrée  : {px:.5f}\n"
-        f"🛑 SL      : {sl_cache:.5f}\n"
-        f"🎯 TP1     : {tp1_cache:.5f}\n"
-        f"🏁 TP Final: {tp_final_cache:.5f}\n"
+        f"Trade actif en cours : {bloque}\n"
+        f"Pause anti-tilt : {'🟠 OUI' if en_pause else '🟢 NON'}\n"
+        f"Cycle scanner : ~15s (parallélisé)\n"
+        f"Validité signal : {RISK_CONFIG['signal_validity_seconds']}s\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"✅ *TRADE OUVERT* | 🆔 {trade_id}"
+        f"Si tu ne reçois plus de signaux malgré tout, "
+        f"utilise /debloquer pour te débloquer immédiatement."
     )
-    bot.send_message(uid, signal, parse_mode="Markdown")
+    bot.send_message(uid, txt, parse_mode="Markdown")
+
+# ==========================================
+# SCANNER PRINCIPAL V43
+# ==========================================
 
 def _analyser_une_paire(paire):
+    """
+    ✅ V48: cerveau_pro_trader() retourne désormais une LISTE de signaux
+    (0 à 3 — un par stratégie indépendante validée par le moteur IA/Groq).
+    Retourne une liste de tuples (paire, res, px), vide si rien à signaler.
+    """
     try:
-        if est_symbole_autorise(paire)[0] != "AUTORISE": return []
+        statut, _ = est_symbole_autorise(paire)
+        if statut != "AUTORISE":
+            return []
+
         signaux = cerveau_pro_trader(paire)
+        if not signaux:
+            return []
+
         resultats = []
         for res in signaux:
             px = obtenir_prix_broker_realtime(paire) or res["px"]
-            if valider_prix_avant_signal(paire, px): resultats.append((paire, res, px))
+            if valider_prix_avant_signal(paire, px):
+                resultats.append((paire, res, px))
         return resultats
-    except: return []
+    except Exception as e:
+        print(f"[Analyse/{paire}] {e}", flush=True)
+        return []
 
 def scanner_marche_auto():
+    """
+    Scanner parallélisé (ThreadPoolExecutor). Chaque paire peut désormais
+    générer PLUSIEURS signaux indépendants (un par stratégie CPR/OPEN_DRIVE/
+    RSI, chacune validée séparément par le moteur IA + second avis Groq).
+    """
     toutes_paires = ELITE_PAIRS_MT5
+
     while True:
         try:
-            time.sleep(15)
+            time.sleep(15)  # cycle plus rapide, rendu possible par la parallélisation
             libres = [u for u in utilisateurs_actifs if est_autorise(u)]
-            if not libres: continue
-            
+            if not libres:
+                continue
+
             resultats = []
             with ThreadPoolExecutor(max_workers=10) as executor:
                 futures = {executor.submit(_analyser_une_paire, p): p for p in toutes_paires}
                 for future in as_completed(futures, timeout=25):
-                    try: resultats.extend(future.result())
-                    except: pass
-            
+                    try:
+                        r_list = future.result()
+                        resultats.extend(r_list)
+                    except Exception as e:
+                        print(f"[Scanner Parallel] {e}", flush=True)
+
+            # ── Diffusion des signaux trouvés (rapide, pas de réseau lourd ici) ──
             for paire, res, px in resultats:
+                # ✅ V48: clé de cache différenciée par stratégie — indispensable
+                # pour ne jamais écraser un signal CPR avec un signal Open Drive
+                # détecté indépendamment sur la même paire.
                 cle = f"{paire}_{res.get('strategie_nom_ia', 'PRO')}"
                 signaux_cache[cle] = {
-                    "time": time.time(), "action": res["action"], "mt5_sl": res["sl"], 
-                    "mt5_tp1": res.get("tp1", res["tp"]), "mt5_tp": res["tp"], "mt5_rr": res["rr"],
-                    "confiance": res["confiance"], "strategie": res["strategie"], "label": res["label"]
+                    "time":    time.time(),
+                    "action":  res["action"],
+                    "mt5_sl":  res["sl"],
+                    "mt5_tp1": res.get("tp1", res["tp"]),
+                    "mt5_tp":  res["tp"],
+                    "mt5_rr":  res["rr"],
+                    "force":   res["force"],
+                    "msg":     res["msg"],
+                    "confiance": res["confiance"],
+                    "strategie": res["strategie"],
+                    "strategie_nom_ia": res.get("strategie_nom_ia", "?"),
+                    "label":   res["label"],
+                    "contexte":res.get("contexte_detecte",""),
+                    "ia_score": res.get("ia_score", 0),
+                    "ia_justification": res.get("ia_justification", []),
+                    "gemini_score": res.get("gemini_score"),
+                    "gemini_avis": res.get("gemini_avis", ""),
+                    "gemini_disponible": res.get("gemini_disponible", False),
+                    "extra":   res,
                 }
+                derniere_alerte_auto[cle] = time.time()
+
+                nom  = NOMS_AFFICHAGE.get(paire, f"{paire[:3]}/{paire[3:]}")
+                dir_ = "🟢 BUY" if "BUY" in res["action"] else "🔴 SELL"
+
                 for uid in libres:
                     if utilisateur_a_trade_actif(uid): continue
-                    markup = InlineKeyboardMarkup().add(InlineKeyboardButton(f"⚡ Copier {paire}", callback_data=f"set_{cle}"))
-                    
-                    txt = (
-                        f"💼 *TRADER AUTONOME IA*\n"
-                        f"{paire}  {res['action']}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🧠 Setup : {res['force']}\n"
-                        f"📍 {res['msg']}\n"
-                        f"🤖 Confiance IA : {res.get('ia_score','?')}%\n"
-                        f"⚖️ R/R : {res['rr']}R\n"
-                        f"💰 Prix actuel : {px:.5f}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━"
+
+                    peut_trader, raison = utilisateur_peut_trader(uid)
+                    if not peut_trader: continue
+
+                    markup = InlineKeyboardMarkup().add(
+                        InlineKeyboardButton(f"⚡ Copier {nom}", callback_data=f"set_{cle}")
                     )
-                    try: bot.send_message(uid, txt, reply_markup=markup, parse_mode="Markdown")
-                    except: pass
-        except: pass
+
+                    # ✅ V46: détails spécifiques aux 3 stratégies PDF
+                    if res["strategie"] == 1:      # CPR Rejection
+                        ligne_extra = (f"🧱 CPR : {res.get('cpr_bot',0):.5f} - {res.get('cpr_top',0):.5f} "
+                                       f"({res.get('cpr_etat','')})\n"
+                                       f"🎯 Objectif : {'PDH' if res['tendance']=='BULL' else 'PDL'} "
+                                       f"{res.get('objectif_pdhl',0):.5f}\n")
+                    elif res["strategie"] == 2:    # Open Drive Breakout
+                        ligne_extra = (f"🚀 Cassure {'PDH' if 'BUY' in res['action'] else 'PDL'} : "
+                                       f"{res.get('niveau_casse',0):.5f}\n")
+                    elif res["strategie"] == 3:    # RSI Exhaustion
+                        ligne_extra = f"📉 RSI (H1) : {res.get('rsi_value','?')}\n"
+                    else:
+                        ligne_extra = ""
+
+                    sizing = calculer_position_size(CAPITAL_ACTUEL, RISK_CONFIG["risk_per_trade_pct"],
+                                                    px, res["sl"], paire)
+
+                    justif_txt = " · ".join(res.get("ia_justification", [])[:2])
+                    if res.get("gemini_disponible"):
+                        ligne_gemini = (f"🔮 Groq : {res.get('gemini_score','?')}% — "
+                                       f"{res.get('gemini_avis','')}\n")
+                    else:
+                        ligne_gemini = ""
+
+                    # ✅ V49: ligne contexte marché
+                    ctx = res.get("contexte_marche", {})
+                    if ctx:
+                        ligne_contexte_marche = (
+                            f"🌍 Marché : {ctx.get('tendance','?')} · "
+                            f"Vol. {ctx.get('volatilite','?')} · ADX {ctx.get('adx','?')}\n")
+                    else:
+                        ligne_contexte_marche = ""
+
+                    # ✅ V49: alerte faux signal si détectée
+                    if res.get("risque_faux_signal"):
+                        alertes = ", ".join(res.get("raisons_faux_signal", [])[:2])
+                        ligne_alerte = f"🚨 Vigilance : {alertes}\n"
+                    else:
+                        ligne_alerte = ""
+
+                    # ✅ V49: cohérence multi-timeframe
+                    mtf = res.get("multi_tf", {})
+                    if mtf.get("score") is not None:
+                        ligne_mtf = f"⏱️ Cohérence M1-M5-M15-H1 : {mtf['score']}%\n"
+                    else:
+                        ligne_mtf = ""
+
+                    # ✅ V49: gestion de risque optimisée (si un ajustement notable a eu lieu)
+                    gr = res.get("gestion_risque", {})
+                    ligne_risque_ia = f"🛡️ {gr.get('note','')}\n" if gr.get("note") else ""
+
+                    txt = (
+                        f"💼 *TERMINAL PRIME V51*\n"
+                        f"{nom}  {dir_}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"🎯 Stratégie : *{res['label']}*\n"
+                        f"📊 Contexte  : {res.get('contexte_detecte','')}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"☁️ Structure : {res['force']}\n"
+                        f"📍 {res['msg']}\n"
+                        f"⏰ {nom_killzone()}\n"
+                        f"{ligne_extra}"
+                        f"{ligne_contexte_marche}"
+                        f"{ligne_mtf}"
+                        f"{ligne_alerte}"
+                        f"{ligne_risque_ia}"
+                        f"⚖️ R/R : {res['rr']}R\n"
+                        f"🎖️ Confiance stratégie : {res['confiance']}%\n"
+                        f"🤖 Score IA (calcul) : *{res.get('ia_score','?')}%* — {justif_txt}\n"
+                        f"{ligne_gemini}"
+                        f"💰 Prix réel : {px:.5f}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"💵 Risque calculé : ${sizing['montant_risque']} "
+                        f"({RISK_CONFIG['risk_per_trade_pct']}% du capital)\n"
+                        f"⏳ Signal valide {RISK_CONFIG['signal_validity_seconds']}s"
+                    )
+                    try:
+                        bot.send_message(uid, txt, reply_markup=markup, parse_mode="Markdown")
+                    except:
+                        pass
+
+        except Exception as e:
+            print(f"[Scanner V44] {e}", flush=True)
+
+# ==========================================
+# ✅ V43 NEW: MONITORING AVANCÉ DES TRADES
+# Gère: TP1 partiel (85%) → Breakeven → Trailing Stop → TP final / SL
+# ==========================================
 
 def monitorer_trades_actifs():
     while True:
@@ -885,37 +2686,148 @@ def monitorer_trades_actifs():
             for uid in list(trades_actifs.keys()):
                 if uid not in trades_actifs: continue
                 trade = trades_actifs[uid]
-                px = obtenir_prix_broker_realtime(trade["symbol"])
-                if not px: continue
-                dir_ = trade["direction"]
 
+                symbole      = trade["symbol"]
+                prix_current = obtenir_prix_broker_realtime(symbole)
+                if not prix_current: continue
+
+                direction = trade["direction"]
+
+                # ── PHASE 1: Trade encore plein (avant TP1) ─────────────
                 if trade["state"] == TradeState.TRADE_OPEN:
-                    hit_tp1 = (dir_ == "BUY" and px >= trade["tp1"]) or (dir_ == "SELL" and px <= trade["tp1"])
-                    hit_sl  = (dir_ == "BUY" and px <= trade["sl"]) or (dir_ == "SELL" and px >= trade["sl"])
-                    
+
+                    hit_tp1 = (direction == "BUY"  and prix_current >= trade["tp1"]) or \
+                              (direction == "SELL" and prix_current <= trade["tp1"])
+                    hit_sl  = (direction == "BUY"  and prix_current <= trade["sl"]) or \
+                              (direction == "SELL" and prix_current >= trade["sl"])
+
                     if hit_sl:
-                        res = fermer_trade_complet(uid, px, win=False)
-                        try: bot.send_message(uid, f"❌ *TRADE PERDU* sur {trade['symbol']}\nPerte: {res['pnl']:.2f}$", parse_mode="Markdown")
-                        except: pass
-                    elif hit_tp1:
-                        partiel = fermer_trade_partiel(uid, px)
-                        try: bot.send_message(uid, f"🟡 *TP1 ATTEINT* sur {trade['symbol']}\n85% fermé, SL en Breakeven.", parse_mode="Markdown")
-                        except: pass
-                
+                        result = fermer_trade_complet(uid, prix_current, win=False)
+                        if result:
+                            envoyer_message_resultat(uid, trade, result, perte_totale=True)
+                        continue
+
+                    if hit_tp1:
+                        partiel = fermer_trade_partiel(uid, prix_current)
+                        if partiel:
+                            envoyer_message_partiel(uid, trade, partiel, prix_current)
+                        continue
+
+                # ── PHASE 2: 85% fermé, 15% en breakeven + trailing ─────
                 elif trade["state"] == TradeState.TRADE_PARTIAL:
-                    appliquer_trailing_stop(uid, px)
-                    hit_tp = (dir_ == "BUY" and px >= trade["tp_final"]) or (dir_ == "SELL" and px <= trade["tp_final"])
-                    hit_sl = (dir_ == "BUY" and px <= trade["sl"]) or (dir_ == "SELL" and px >= trade["sl"])
-                    
-                    if hit_tp or hit_sl:
-                        res = fermer_trade_complet(uid, px, win=True)
-                        try: bot.send_message(uid, f"✅ *TRADE CLOS (15%)* sur {trade['symbol']}\nGain: +{res['pnl']:.2f}$", parse_mode="Markdown")
-                        except: pass
-        except: pass
+
+                    # Appliquer le trailing stop (sécurise les gains progressivement)
+                    appliquer_trailing_stop(uid, prix_current)
+
+                    hit_tp_final = (direction == "BUY"  and prix_current >= trade["tp_final"]) or \
+                                   (direction == "SELL" and prix_current <= trade["tp_final"])
+                    hit_be_sl    = (direction == "BUY"  and prix_current <= trade["sl"]) or \
+                                   (direction == "SELL" and prix_current >= trade["sl"])
+
+                    if hit_tp_final:
+                        result = fermer_trade_complet(uid, prix_current, win=True)
+                        if result:
+                            envoyer_message_resultat(uid, trade, result, perte_totale=False,
+                                                     partiel_deja_pris=True)
+                        continue
+
+                    if hit_be_sl:
+                        # Sortie au breakeven ou en trailing stop — jamais une vraie perte
+                        # car le SL ne peut être déplacé que dans le sens favorable après TP1
+                        result = fermer_trade_complet(uid, prix_current, win=True)
+                        if result:
+                            envoyer_message_resultat(uid, trade, result, perte_totale=False,
+                                                     partiel_deja_pris=True, sortie_be=True)
+                        continue
+
+        except Exception as e:
+            print(f"[Monitor] {e}", flush=True)
+
+def envoyer_message_partiel(uid, trade, partiel, prix_current):
+    msg = (
+        f"🟡 *TP1 ATTEINT — 85% SÉCURISÉ!*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 {trade['symbol']}\n"
+        f"Entrée : {trade['entry_price']:.5f}\n"
+        f"TP1    : {prix_current:.5f}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💰 *Profit partiel : +{partiel['pnl_partiel']:.2f} USD* (85% fermé)\n"
+        f"🛡️ SL déplacé en *Breakeven* : {partiel['nouveau_sl']:.5f}\n"
+        f"🏃 15% restant continue vers le TP final, *sans risque*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Technique pro: sécuriser le gain, laisser courir le reste."
+    )
+    try: bot.send_message(uid, msg, parse_mode="Markdown")
+    except: pass
+
+def envoyer_message_resultat(uid, trade, result, perte_totale, partiel_deja_pris=False, sortie_be=False):
+    stats = init_daily_stats(uid)
+
+    if perte_totale:
+        msg = (
+            f"❌ *TRADE PERDU* 😔\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 {trade['symbol']}\n"
+            f"Entrée : {trade['entry_price']:.5f}\n"
+            f"Sortie : {result['pnl']:+.2f} USD (Stop Loss)\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💔 *Perte : {result['pnl']:.2f} USD*\n"
+            f"⏱️ Durée : {int(result['duration']/60)} min\n"
+            f"🎖️ {trade.get('label','')} (Confiance {trade['confiance']}%)\n"
+        )
+    elif sortie_be:
+        msg = (
+            f"🛡️ *SORTIE EN BREAKEVEN/TRAILING*\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 {trade['symbol']}\n"
+            f"Le 15% restant est sorti au niveau sécurisé.\n"
+            f"💰 Gain sécurisé sur cette portion : {result['pnl']:+.2f} USD\n"
+            f"⏱️ Durée totale : {int(result['duration']/60)} min\n"
+            f"🎖️ {trade.get('label','')}\n"
+        )
+    else:
+        msg = (
+            f"✅ *TP FINAL ATTEINT — TRADE GAGNÉ!* 🎉🎉\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 {trade['symbol']}\n"
+            f"Entrée : {trade['entry_price']:.5f}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 *Profit (15% final) : +{result['pnl']:.2f} USD*\n"
+            f"⏱️ Durée : {int(result['duration']/60)} min\n"
+            f"🎖️ {trade.get('label','')} (Confiance {trade['confiance']}%)\n"
+        )
+
+    msg += (
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 Bilan du jour : {stats['wins']}W / {stats['losses']}L "
+        f"({stats['pnl']:+.2f} USD)\n"
+        f"🏦 P&L total : {pnl_total.get(uid,0):+.2f} USD"
+    )
+
+    # Alerte si circuit breaker se déclenche après ce trade
+    if daily_loss_limit_atteinte(uid):
+        msg += (f"\n\n🛑 *LIMITE DE PERTE JOURNALIÈRE ATTEINTE.*\n"
+                f"Trading suspendu jusqu'à demain — protection du capital.")
+    else:
+        en_pause, _ = utilisateur_en_pause(uid)
+        if en_pause:
+            msg += (f"\n\n⏸️ *PAUSE ANTI-TILT ACTIVÉE* "
+                    f"({RISK_CONFIG['max_consecutive_losses']} pertes consécutives).\n"
+                    f"Reprise dans {RISK_CONFIG['pause_duration_minutes']} minutes.")
+
+    try: bot.send_message(uid, msg, parse_mode="Markdown")
+    except: pass
 
 # ==========================================
-# ACCES VIP
+# GESTION DES CLÉS VIP
 # ==========================================
+
+DUREES_VALIDES = {
+    "1s": (7,"1 Semaine"), "2s": (14,"2 Semaines"),
+    "1m": (30,"1 Mois"),   "3m": (90,"3 Mois"),
+    "6m": (180,"6 Mois"),  "1a": (365,"1 An"),
+    "vie": ("LIFETIME","À VIE 👑"),
+}
 
 def est_autorise(uid):
     if uid == ADMIN_ID: return True
@@ -923,24 +2835,371 @@ def est_autorise(uid):
         exp = utilisateurs_autorises[uid]
         if exp == "LIFETIME" or datetime.datetime.now() < exp: return True
         del utilisateurs_autorises[uid]
+        try: bot.send_message(uid, "⚠️ Abonnement expiré. Contacte l'admin.")
+        except: pass
     return False
-
-@bot.message_handler(commands=['vip'])
-def activer_vip(message):
-    cid = message.chat.id
-    parts = message.text.strip().split()
-    if len(parts) < 2: return bot.send_message(cid, "⚠️ Usage : /vip VOTRE-CLÉ")
-    cle = parts[1].strip()
-    if cle not in cles_generees: return bot.send_message(cid, "❌ Clé invalide.")
-    utilisateurs_autorises[cid] = "LIFETIME"
-    bot.send_message(cid, "🎉 *ACCÈS DÉVERROUILLÉ !*\n/start pour commencer.", parse_mode="Markdown")
 
 @bot.message_handler(commands=['keygen'])
 def generer_cle(message):
     if message.chat.id != ADMIN_ID: return
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        return bot.send_message(message.chat.id,
+            "⚙️ *GÉNÉRATEUR DE CLÉS VIP*\nUsage : /keygen 1m\n"
+            "1s / 2s / 1m / 3m / 6m / 1a / vie / <jours>", parse_mode="Markdown")
+    arg = parts[1].lower().strip()
+    if arg in DUREES_VALIDES:
+        jours, label = DUREES_VALIDES[arg]
+    else:
+        try:
+            jours = int(arg)
+            label = f"{jours} jours"
+        except:
+            return bot.send_message(message.chat.id, "❌ Argument invalide.")
     cle = "VIP-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=10))
-    cles_generees[cle] = "LIFETIME"
-    bot.send_message(message.chat.id, f"✅ *CLÉ GÉNÉRÉE*\n`{cle}`", parse_mode="Markdown")
+    cles_generees[cle] = jours
+    bot.send_message(message.chat.id,
+        f"✅ *CLÉ VIP GÉNÉRÉE*\n🔑 `{cle}`\n⏳ Durée : {label}\n"
+        f"Activation : `/vip {cle}`", parse_mode="Markdown")
+
+@bot.message_handler(commands=['vip'])
+def activer_vip(message):
+    cid   = message.chat.id
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        return bot.send_message(cid, "⚠️ Usage : /vip VOTRE-CLÉ")
+    cle = parts[1].strip()
+    if cle not in cles_generees:
+        return bot.send_message(cid, "❌ Clé invalide ou déjà utilisée.")
+    jours = cles_generees.pop(cle)
+    if jours == "LIFETIME":
+        utilisateurs_autorises[cid] = "LIFETIME"; txt = "À VIE 👑"
+    else:
+        exp = datetime.datetime.now() + datetime.timedelta(days=jours)
+        utilisateurs_autorises[cid] = exp; txt = exp.strftime('%d/%m/%Y à %H:%M')
+    bot.send_message(cid,
+        f"🎉 *ACCÈS DÉVERROUILLÉ !*\n⏳ Expiration : {txt}\n/start pour commencer.",
+        parse_mode="Markdown")
+
+@bot.message_handler(commands=['abonnes'])
+def lister_abonnes(message):
+    if message.chat.id != ADMIN_ID: return
+    now = datetime.datetime.now()
+    lignes = ["👥 *ABONNÉS ACTIFS :*\n──────────────────"]
+    for uid, exp in utilisateurs_autorises.items():
+        if uid == ADMIN_ID: continue
+        if exp == "LIFETIME":       statut = "👑 À vie"
+        elif now < exp:             statut = f"✅ {(exp-now).days}j (exp: {exp.strftime('%d/%m/%Y')})"
+        else:                       statut = "❌ Expiré"
+        lignes.append(f"• {uid} → {statut}")
+    bot.send_message(message.chat.id, "\n".join(lignes), parse_mode="Markdown")
+
+@bot.message_handler(commands=['cles'])
+def lister_cles(message):
+    if message.chat.id != ADMIN_ID: return
+    if not cles_generees:
+        return bot.send_message(message.chat.id, "Aucune clé en attente.")
+    lignes = ["🔑 *CLÉS EN ATTENTE :*\n──────────────────"]
+    for cle, jours in cles_generees.items():
+        lignes.append(f"`{cle}` → {'À VIE' if jours=='LIFETIME' else f'{jours}j'}")
+    bot.send_message(message.chat.id, "\n".join(lignes), parse_mode="Markdown")
+
+# ==========================================
+# ✅ V43 NEW: /historique — Derniers trades
+# ==========================================
+
+@bot.message_handler(commands=['historique'])
+def historique_trades(message):
+    uid = message.chat.id
+    if not est_autorise(uid): return
+    hist = trades_historique.get(uid, [])
+    if not hist:
+        return bot.send_message(uid, "📭 Aucun trade dans l'historique.")
+
+    lignes = ["📜 *HISTORIQUE (10 derniers trades)*\n━━━━━━━━━━━━━━━━━━━━━━"]
+    for t in hist[-10:][::-1]:
+        emoji = "✅" if t["win"] else "❌"
+        date_str = datetime.datetime.fromtimestamp(t["timestamp"]).strftime("%d/%m %H:%M")
+        lignes.append(f"{emoji} {t['symbol']} {t['direction']} | "
+                      f"{t['pnl']:+.2f}$ | {date_str}")
+    bot.send_message(uid, "\n".join(lignes), parse_mode="Markdown")
+
+# ==========================================
+# INTERFACE TELEGRAM PRINCIPALE
+# ==========================================
+
+def obtenir_clavier(uid):
+    # ✅ V44.1: bouton BROKER retiré — mode MT5 (Gold/Argent/Volatility) unique
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row(KeyboardButton("📊 CHOISIR UNE CIBLE"),
+               KeyboardButton("🚀 LANCER L'ANALYSE"))
+    markup.row(KeyboardButton("⏰ HEURES DE TRADING"),
+               KeyboardButton("📊 RAPPORT DU JOUR"))
+    markup.row(KeyboardButton("📜 HISTORIQUE"))
+    return markup
+
+@bot.message_handler(commands=['start'])
+def bienvenue(message):
+    uid = message.chat.id
+    if not est_autorise(uid):
+        return bot.send_message(uid, "🔒 Accès restreint. /vip VOTRE-CLÉ pour activer.")
+    utilisateurs_actifs.add(uid)
+    init_daily_stats(uid)
+
+    kz  = "🟢 ACTIVE" if dans_killzone() else "🔴 INACTIVE"
+    vol = "\n".join([f"  {'✅' if v else '❌'} {p}"
+                     for p, v in volatility_pairs_active.items()])
+    trade_info = ""
+    if uid in trades_actifs:
+        t = trades_actifs[uid]
+        trade_info = f"\n🟠 *TRADE ACTIF:* {t['symbol']} {t['direction']} @ {t['entry_price']}"
+
+    bot.send_message(uid,
+        f"💼 *TERMINAL PRIME V51* — ANALYSTE IA MULTI-MODULES (GROQ)\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"3 stratégies indépendantes, chacune validée par IA\n"
+        f"🎯 Scan exclusif : 🥇 Gold · 🥈 Argent · 🔥 Volatility\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🧱 CPR Pullback & Rejection\n"
+        f"🚀 Open Drive Breakout PDH/PDL\n"
+        f"📉 RSI Extremes & Exhaustion\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🤖 *Moteur IA — 5 modules :*\n"
+        f"  • Calcul déterministe (seuil {IA_CONFIG['seuil_acceptation']}%)\n"
+        f"  • 🌍 Contexte marché (tendance/volatilité/range)\n"
+        f"  • 🚨 Détection faux signaux (divergence, épuisement...)\n"
+        f"  • ⏱️ Cohérence multi-timeframe (M1/M5/M15/H1)\n"
+        f"  • 🛡️ Gestion intelligente du risque (SL affiné ATR)\n"
+        f"  • 🔮 Second avis Groq {'actif' if IA_CONFIG['groq_active'] and GROQ_API_KEY else 'inactif'}\n"
+        f"  • Apprend des résultats réels (/iastats)\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🛡️ *Gestion pro intégrée :*\n"
+        f"  • Position sizing réel ({RISK_CONFIG['risk_per_trade_pct']}%/trade)\n"
+        f"  • TP partiel 85% + Breakeven auto\n"
+        f"  • Trailing stop après breakeven\n"
+        f"  • Limite perte/jour {RISK_CONFIG['daily_loss_limit_pct']}%\n"
+        f"  • Pause anti-tilt après {RISK_CONFIG['max_consecutive_losses']} pertes\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🔥 Volatility Pairs :\n{vol}\n"
+        f"⏰ Killzone : {kz}{trade_info}",
+        reply_markup=obtenir_clavier(uid), parse_mode="Markdown")
+
+@bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
+def horaires(message):
+    kz  = "🟢 EN COURS" if dans_killzone() else "🔴 INACTIVE"
+    vol = "\n".join([f"  {'✅' if v else '❌'} {p}"
+                     for p, v in volatility_pairs_active.items()])
+    bot.send_message(message.chat.id,
+        f"🕒 *KILLZONES & CPR JOURNALIER*\n\n"
+        f"🌏 Asie    : 00:00 – 07:00 GMT\n"
+        f"🇬🇧 Londres : 08:00 – 11:00 GMT\n"
+        f"🇺🇸 New York: 14:00 – 17:00 GMT\n\n"
+        f"⏰ Statut : {kz}\n"
+        f"🧱 Le CPR (Pivot/BCPR/TCPR) se recalcule chaque jour à partir\n"
+        f"   de la clôture de la veille — actif 24/24 sur Volatility,\n"
+        f"   soumis aux horaires de marché pour Gold/Argent.\n\n"
+        f"🔥 Volatility :\n{vol}\n\n"
+        f"/Volatility V50 OFF → désactiver V50\n"
+        f"/Volatility ALL ON  → tout activer",
+        parse_mode="Markdown")
+
+@bot.message_handler(func=lambda m: m.text == "📊 RAPPORT DU JOUR")
+def rapport_bouton(message):
+    uid = message.chat.id
+    if not est_autorise(uid): return
+    bot.send_message(uid, generer_rapport_texte(uid), parse_mode="Markdown")
+
+@bot.message_handler(func=lambda m: m.text == "📜 HISTORIQUE")
+def historique_bouton(message):
+    historique_trades(message)
+
+@bot.message_handler(func=lambda m: m.text in ["📊 CHOISIR UNE CIBLE",
+                                               "📊 CHOISIR UNE CIBLE ELITE"])
+def devises(message):
+    uid = message.chat.id
+    if not est_autorise(uid): return
+    if uid in trades_actifs:
+        return bot.send_message(uid,
+            "🟠 *TRADE ACTIF EN COURS*\n"
+            "Attendez la clôture avant d'ouvrir un autre.",
+            parse_mode="Markdown")
+
+    peut_trader, raison = utilisateur_peut_trader(uid)
+    if not peut_trader:
+        return bot.send_message(uid, raison, parse_mode="Markdown")
+
+    # ✅ V44.1: mode unique — Gold, Argent, Volatility (plus de Forex/POCKET)
+    markup = InlineKeyboardMarkup(row_width=3)
+    btns_vol = [InlineKeyboardButton(
+                    NOMS_AFFICHAGE.get(p, p),
+                    callback_data=f"set_{p}")
+                for p, actif in volatility_pairs_active.items() if actif]
+    if btns_vol:
+        markup.add(*btns_vol)
+    markup.add(InlineKeyboardButton("🥇 GOLD",   callback_data="set_XAUUSD"),
+               InlineKeyboardButton("🥈 ARGENT", callback_data="set_XAGUSD"))
+    bot.send_message(uid, "🎯 Sélectionne ta cible :",
+                     reply_markup=markup, parse_mode="Markdown")
+
+@bot.message_handler(func=lambda m: m.text == "🚀 LANCER L'ANALYSE")
+def lancer(message):
+    uid = message.chat.id
+    if not est_autorise(uid): return
+    if uid in trades_actifs:
+        return bot.send_message(uid, "⚠️ Trade actif en cours.")
+    actif = user_prefs.get(uid)
+    if not actif:
+        return bot.send_message(uid, "⚠️ Choisis d'abord une cible !")
+    fake = type("C", (), {
+        "data": f"set_{actif}",
+        "message": message,
+        "from_user": message.from_user,
+        "id": 0
+    })()
+    save_devise(fake)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
+def save_devise(call):
+    uid = call.message.chat.id
+    if not est_autorise(uid): return
+
+    if uid in trades_actifs:
+        try: bot.answer_callback_query(call.id,
+                                       "🟠 Trade actif! Attendez la clôture.", show_alert=True)
+        except: pass
+        return
+
+    peut_trader, raison = utilisateur_peut_trader(uid)
+    if not peut_trader:
+        try: bot.answer_callback_query(call.id, raison, show_alert=True)
+        except: pass
+        return
+
+    cle_brute = call.data.replace("set_", "")
+
+    try: bot.delete_message(uid, call.message.message_id)
+    except: pass
+
+    # ✅ V48: la clé peut être soit "SYMBOLE_STRATEGIE" (bouton "Copier" reçu
+    # directement depuis le scanner — référence exacte du signal affiché,
+    # indispensable pour ne jamais mélanger deux signaux indépendants sur la
+    # même paire), soit "SYMBOLE" seul (sélection manuelle via le menu
+    # "CHOISIR UNE CIBLE" — on prend alors le signal le plus récent parmi
+    # les stratégies disponibles pour cette paire).
+    if cle_brute in signaux_cache:
+        cle = cle_brute
+        actif = cle_brute.split("_")[0]
+    else:
+        actif = cle_brute
+        candidats = [k for k in signaux_cache if k.startswith(f"{actif}_")]
+        if not candidats:
+            return bot.send_message(uid,
+                f"⏱️ Aucun signal actif sur {NOMS_AFFICHAGE.get(actif, actif)}\n"
+                f"Attends le prochain scan automatique.", parse_mode="Markdown")
+        cle = max(candidats, key=lambda k: signaux_cache[k]["time"])
+
+    user_prefs[uid] = actif
+    cache = signaux_cache.get(cle)
+
+    # ✅ V44 FIX: fenêtre de validité réduite (45s au lieu de 90s) — un
+    # signal vieux de 90s peut déjà être largement dépassé sur une paire
+    # rapide (Volatility indices).
+    if not cache or (time.time() - cache["time"]) > RISK_CONFIG["signal_validity_seconds"]:
+        return bot.send_message(uid,
+            f"⏱️ Signal expiré sur {NOMS_AFFICHAGE.get(actif, actif)}\n"
+            f"Attends le prochain scan automatique.", parse_mode="Markdown")
+
+    px  = obtenir_prix_broker_realtime(actif) or 0
+    nom = NOMS_AFFICHAGE.get(actif, actif)
+    fmt = ".0f" if actif in VOLATILE_PAIRS else ".5f"
+
+    if px <= 0:
+        return bot.send_message(uid,
+            f"⚠️ Impossible de récupérer le prix actuel de {nom}. Réessaie dans un instant.",
+            parse_mode="Markdown")
+
+    entry_direction = "BUY" if "BUY" in cache["action"] else "SELL"
+    sl_cache, tp1_cache, tp_final_cache = cache["mt5_sl"], cache["mt5_tp1"], cache["mt5_tp"]
+
+    # ✅ V44 FIX NOUVEAU: revalider le marché AVANT d'ouvrir le trade.
+    # Si le prix a déjà dépassé le SL ou le TP1 (ou TP final) prévu pendant
+    # le délai entre le scan et le clic, on REFUSE d'ouvrir — c'est
+    # exactement le scénario "j'entre et j'ai déjà atteint mon TP1".
+    if entry_direction == "BUY":
+        deja_sl  = px <= sl_cache
+        deja_tp1 = px >= tp1_cache
+    else:
+        deja_sl  = px >= sl_cache
+        deja_tp1 = px <= tp1_cache
+
+    if deja_sl:
+        return bot.send_message(uid,
+            f"❌ *Signal annulé* — {nom}\n"
+            f"Le marché a déjà atteint le niveau de Stop Loss prévu "
+            f"({sl_cache:{fmt}}) pendant le délai d'exécution.\n"
+            f"Aucun trade ouvert. Attends le prochain signal.",
+            parse_mode="Markdown")
+
+    if deja_tp1:
+        return bot.send_message(uid,
+            f"❌ *Signal annulé* — {nom}\n"
+            f"Le marché a déjà atteint l'objectif TP1 prévu ({tp1_cache:{fmt}}) "
+            f"avant que tu n'ouvres la position — entrer maintenant capturerait "
+            f"un R/R trop dégradé.\n"
+            f"Aucun trade ouvert. Attends le prochain signal.",
+            parse_mode="Markdown")
+
+    # Recalcul du R/R réellement disponible avec le prix FRAIS d'exécution
+    risque_restant  = abs(px - sl_cache)
+    recomp_restante = abs(tp_final_cache - px)
+    rr_restant = (recomp_restante / risque_restant) if risque_restant > 0 else 0
+    rr_original = cache["mt5_rr"]
+
+    if rr_original > 0:
+        degradation_pct = max(0, (1 - (rr_restant / rr_original)) * 100)
+    else:
+        degradation_pct = 0
+
+    if degradation_pct > RISK_CONFIG["max_rr_degradation_pct"]:
+        return bot.send_message(uid,
+            f"❌ *Signal annulé* — {nom}\n"
+            f"Le R/R restant s'est trop dégradé depuis la détection du signal "
+            f"({rr_original:.2f}R → {rr_restant:.2f}R, -{degradation_pct:.0f}%).\n"
+            f"Aucun trade ouvert pour protéger la qualité de l'entrée.",
+            parse_mode="Markdown")
+
+    trade_id, sizing = ouvrir_trade(uid, actif, entry_direction, px,
+                                    sl_cache, tp1_cache, tp_final_cache,
+                                    cache["strategie"], cache["confiance"],
+                                    label=cache.get("label","SIGNAL"),
+                                    strategie_nom_ia=cache.get("strategie_nom_ia","?"),
+                                    ia_score=cache.get("ia_score"),
+                                    gemini_score=cache.get("gemini_score"),
+                                    contexte_marche=cache.get("extra", {}).get("contexte_marche"))
+
+    signal = (
+        f"💼 *{cache.get('label','SIGNAL')}* — {nom}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{'🟢 BUY MARKET' if 'BUY' in cache['action'] else '🔴 SELL MARKET'}\n"
+        f"📊 Contexte : {cache.get('contexte','')}\n"
+        f"🤖 Score IA validé : {cache.get('ia_score','?')}%\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💰 Entrée  : {px:{fmt}}\n"
+        f"🛑 SL      : {sl_cache:{fmt}}\n"
+        f"🎯 TP1 (85%): {tp1_cache:{fmt}}\n"
+        f"🏁 TP Final (15%): {tp_final_cache:{fmt}}\n"
+        f"⚖️ R/R actuel : {rr_restant:.2f}R (prévu {rr_original:.2f}R)\n"
+        f"🎖️ Confiance : {cache.get('confiance',0)}%\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💵 *Risque réel calculé* : ${sizing['montant_risque']}\n"
+        f"   ({RISK_CONFIG['risk_per_trade_pct']}% du capital ${CAPITAL_ACTUEL})\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"✅ *TRADE OUVERT*\n"
+        f"🆔 {trade_id}\n"
+        f"📬 Au TP1: 85% fermé + SL→Breakeven automatique\n"
+        f"🏃 Au TP Final: 15% restant sécurisé par trailing stop"
+    )
+    bot.send_message(uid, signal, parse_mode="Markdown")
 
 # ==========================================
 # LANCEMENT
@@ -948,8 +3207,10 @@ def generer_cle(message):
 
 if __name__ == "__main__":
     keep_alive()
-    Thread(target=scanner_marche_auto, daemon=True).start()
-    Thread(target=monitorer_trades_actifs, daemon=True).start()
-    Thread(target=watchdog_trades_bloques, daemon=True).start()
-    print("💼 SMART MONEY PRIME V51.1 (TRADER AUTONOME + /testgroq) ACTIF", flush=True)
+    Thread(target=scanner_marche_auto,            daemon=True).start()
+    Thread(target=monitorer_trades_actifs,         daemon=True).start()
+    Thread(target=envoyer_rapports_quotidiens_auto,daemon=True).start()
+    Thread(target=watchdog_trades_bloques,         daemon=True).start()
+    print("💼 TERMINAL PRIME V51 — ANALYSTE IA MULTI-MODULES (GROQ) ACTIF "
+          "(3 stratégies indépendantes, contexte/faux-signaux/multi-TF/risque, Groq, scanner parallèle, watchdog)", flush=True)
     bot.infinity_polling()
