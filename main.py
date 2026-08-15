@@ -73,7 +73,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # CONFIGURATION
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAGW4vuD85vkyybDpmHpZ70rcfCE_odoydY"
+TELEGRAM_TOKEN = "8658287331:AAEWmiehZJI5j5iBkJ4Ugs7WSd2vwhR2VPA"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 ADMIN_ID = 5968288964
 CAPITAL_ACTUEL = 40650
@@ -2016,19 +2016,46 @@ def cerveau_pro_trader(symbole):
     accepté, (2) second avis Groq (confirme ou veto). Retourne une LISTE
     de signaux acceptés (0 à 3). La logique interne de chaque analyser_xxx()
     n'est jamais modifiée.
+
+    🔍 V51-DEBUG: instrumentation temporaire de diagnostic — logge
+    explicitement CHAQUE étape même quand rien n'est détecté, pour identifier
+    précisément où le pipeline s'arrête (aucune stratégie ne déclenche vs.
+    stratégie déclenche mais rejetée par le calcul vs. rejetée par Groq).
+    À retirer une fois le problème confirmé et résolu.
     """
     signaux_valides = []
+    print(f"[DEBUG] === Analyse {symbole} — début cycle ===", flush=True)
 
     for fn, nom_strategie, emoji_ctx in (
         (analyser_cpr_rejection,  "CPR",        "🧱 CPR PULLBACK & REJECTION"),
         (analyser_open_drive,     "OPEN_DRIVE", "🚀 OPEN DRIVE BREAKOUT"),
         (analyser_rsi_exhaustion, "RSI",        "📉 RSI EXHAUSTION & REVERSAL"),
     ):
-        signal_brut = fn(symbole)
-        if not signal_brut:
+        try:
+            signal_brut = fn(symbole)
+        except Exception as e:
+            print(f"[DEBUG] {symbole}/{nom_strategie} EXCEPTION pendant la détection: "
+                  f"{type(e).__name__}: {e}", flush=True)
             continue
 
-        verdict = moteur_ia_valider_signal(symbole, signal_brut, nom_strategie)
+        if not signal_brut:
+            print(f"[DEBUG] {symbole}/{nom_strategie} → aucune configuration détectée "
+                  f"(fonction a retourné None)", flush=True)
+            continue
+
+        print(f"[DEBUG] {symbole}/{nom_strategie} → SIGNAL BRUT DÉTECTÉ: "
+              f"action={signal_brut.get('action')} rr={signal_brut.get('rr')} "
+              f"px={signal_brut.get('px')}", flush=True)
+
+        try:
+            verdict = moteur_ia_valider_signal(symbole, signal_brut, nom_strategie)
+        except Exception as e:
+            print(f"[DEBUG] {symbole}/{nom_strategie} EXCEPTION dans moteur_ia_valider_signal: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            continue
+
+        print(f"[DEBUG] {symbole}/{nom_strategie} → score calcul = {verdict.get('score')}% "
+              f"(seuil actuel = {IA_CONFIG['seuil_acceptation']}%)", flush=True)
 
         if not verdict["accepte"]:
             print(f"[IA] {symbole}/{nom_strategie} REJETÉ (calcul) — score {verdict['score']}% "
@@ -2037,13 +2064,23 @@ def cerveau_pro_trader(symbole):
 
         # Second avis Groq — ne peut que confirmer ou opposer un veto à un
         # signal déjà accepté par le calcul, jamais l'inverse.
-        avis_groq = groq_second_avis(symbole, signal_brut, nom_strategie, verdict)
+        try:
+            avis_groq = groq_second_avis(symbole, signal_brut, nom_strategie, verdict)
+        except Exception as e:
+            print(f"[DEBUG] {symbole}/{nom_strategie} EXCEPTION dans groq_second_avis: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            continue
+
+        print(f"[DEBUG] {symbole}/{nom_strategie} → Groq disponible={avis_groq.get('disponible')} "
+              f"score={avis_groq.get('score')} veto={avis_groq.get('veto')}", flush=True)
 
         if avis_groq["veto"]:
             print(f"[Groq] {symbole}/{nom_strategie} VETO — score Groq "
                   f"{avis_groq['score']}% < seuil {IA_CONFIG['groq_seuil_veto']}% "
                   f"({avis_groq['avis']})", flush=True)
             continue
+
+        print(f"[DEBUG] {symbole}/{nom_strategie} → ✅✅✅ SIGNAL VALIDÉ DE BOUT EN BOUT", flush=True)
 
         signal_brut["contexte_detecte"]  = emoji_ctx
         signal_brut["ia_score"]          = verdict["score"]
@@ -2503,24 +2540,38 @@ def _analyser_une_paire(paire):
     ✅ V48: cerveau_pro_trader() retourne désormais une LISTE de signaux
     (0 à 3 — un par stratégie indépendante validée par le moteur IA/Groq).
     Retourne une liste de tuples (paire, res, px), vide si rien à signaler.
+
+    🔍 V51-DEBUG: instrumentation temporaire — logge le filtre de session et
+    la validation de prix, les deux autres points de silence possibles en
+    plus du pipeline stratégie/calcul/Groq déjà instrumenté dans
+    cerveau_pro_trader(). À retirer une fois le problème résolu.
     """
     try:
-        statut, _ = est_symbole_autorise(paire)
+        statut, raison = est_symbole_autorise(paire)
         if statut != "AUTORISE":
+            print(f"[DEBUG] {paire} BLOQUÉ par le filtre de session: {statut} — {raison}", flush=True)
             return []
 
         signaux = cerveau_pro_trader(paire)
         if not signaux:
+            print(f"[DEBUG] {paire} → cerveau_pro_trader n'a produit aucun signal ce cycle", flush=True)
             return []
 
         resultats = []
         for res in signaux:
             px = obtenir_prix_broker_realtime(paire) or res["px"]
-            if valider_prix_avant_signal(paire, px):
+            if not px:
+                print(f"[DEBUG] {paire}/{res.get('strategie_nom_ia','?')} → "
+                      f"IMPOSSIBLE d'obtenir un prix broker temps réel", flush=True)
+                continue
+            valide = valider_prix_avant_signal(paire, px)
+            print(f"[DEBUG] {paire}/{res.get('strategie_nom_ia','?')} → "
+                  f"validation prix (broker={px}, stratégie={res.get('px')}) = {valide}", flush=True)
+            if valide:
                 resultats.append((paire, res, px))
         return resultats
     except Exception as e:
-        print(f"[Analyse/{paire}] {e}", flush=True)
+        print(f"[Analyse/{paire}] EXCEPTION: {type(e).__name__}: {e}", flush=True)
         return []
 
 def scanner_marche_auto():
