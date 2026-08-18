@@ -73,7 +73,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # CONFIGURATION
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAEWmiehZJI5j5iBkJ4Ugs7WSd2vwhR2VPA"
+TELEGRAM_TOKEN = "8658287331:AAGcXrxR3mRRJduP8ZsZmUIkh7yftGe3F2M"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 ADMIN_ID = 5968288964
 CAPITAL_ACTUEL = 40650
@@ -916,6 +916,13 @@ def detecter_chandeliers_pdf(df):
     Détecte Pin Bar, Engulfing et Marubozu selon les règles strictes du
     PDF Candlestick Patterns. Analyse la bougie fraîchement CLÔTURÉE (iloc[-2]),
     jamais la bougie en formation.
+
+    ✅ V52: seuils légèrement assouplis pour augmenter la fréquence de
+    détection sans dénaturer les patterns (toujours des vrais Pin/Engulfing/
+    Marubozu, juste avec une tolérance un peu plus réaliste sur des bougies
+    imparfaites, ce qui est courant en conditions de marché réelles):
+      - Pin Bar: mèche > 2.0x le corps → > 1.8x le corps
+      - Marubozu: corps > 85% du range → corps > 75% du range
     """
     if len(df) < 3:
         return "NONE", 0
@@ -934,10 +941,10 @@ def detecter_chandeliers_pdf(df):
         upper_wick = h - max(o, c)
         lower_wick = min(o, c) - l
 
-        # Pin Bar — mèche > 2x le corps
-        if lower_wick > body * 2.0 and upper_wick < body:
+        # Pin Bar — mèche > 1.8x le corps (✅ V52: 2.0 → 1.8, assoupli)
+        if lower_wick > body * 1.8 and upper_wick < body:
             return "PIN_BULL", lower_wick
-        if upper_wick > body * 2.0 and lower_wick < body:
+        if upper_wick > body * 1.8 and lower_wick < body:
             return "PIN_BEAR", upper_wick
 
         # Engulfing — avalement complet du corps précédent
@@ -946,8 +953,8 @@ def detecter_chandeliers_pdf(df):
         if pc > po and c < o and c < po and o > pc:
             return "ENGULFING_BEAR", body
 
-        # Marubozu — corps > 85% du range, quasi aucune mèche
-        if body > rng * 0.85:
+        # Marubozu — corps > 75% du range (✅ V52: 85% → 75%, assoupli)
+        if body > rng * 0.75:
             return ("MARUBOZU_BULL" if c > o else "MARUBOZU_BEAR"), body
 
         return "NONE", 0
@@ -965,6 +972,10 @@ def analyser_cpr_rejection(symbole):
     (prix vs Pivot), objectif = PDH/PDL.
     ✅ V46: utilise désormais du VRAI M15 (900s), corrigé du bug de mapping
     qui renvoyait auparavant du H4 mal étiqueté.
+    ✅ V52: tolérance de proximité à la zone CPR élargie de 0.2% à 0.4% du
+    prix — le prix "teste" une zone dans un intervalle plus réaliste au lieu
+    d'exiger un contact quasi exact, ce qui excluait la grande majorité des
+    pullbacks valides.
     """
     cpr = calculer_cpr_journalier(symbole)
     c15 = obtenir_donnees_deriv(symbole, 900)
@@ -984,11 +995,14 @@ def analyser_cpr_rejection(symbole):
         biais = "BULL" if px > cpr["PIVOT"] else "BEAR"
         signal, sl, tp1, tp_final, zone_nom = None, 0.0, 0.0, 0.0, ""
 
+        # ✅ V52: 0.002 → 0.004 (0.4% au lieu de 0.2%)
+        TOLERANCE_ZONE_CPR = 0.004
+
         if biais == "BULL" and pattern in ("PIN_BULL", "ENGULFING_BULL"):
             dist_tcpr  = abs(px - cpr["TCPR"])  / px
             dist_pivot = abs(px - cpr["PIVOT"]) / px
-            if dist_tcpr < 0.002:   zone_nom = "Top CPR"
-            elif dist_pivot < 0.002: zone_nom = "Point Pivot Central"
+            if dist_tcpr < TOLERANCE_ZONE_CPR:   zone_nom = "Top CPR"
+            elif dist_pivot < TOLERANCE_ZONE_CPR: zone_nom = "Point Pivot Central"
             if zone_nom:
                 signal = "BUY"
                 sl = float(df15['low'].iloc[-2]) * 0.999
@@ -1001,8 +1015,8 @@ def analyser_cpr_rejection(symbole):
         elif biais == "BEAR" and pattern in ("PIN_BEAR", "ENGULFING_BEAR"):
             dist_bcpr  = abs(px - cpr["BCPR"])  / px
             dist_pivot = abs(px - cpr["PIVOT"]) / px
-            if dist_bcpr < 0.002:   zone_nom = "Bottom CPR"
-            elif dist_pivot < 0.002: zone_nom = "Point Pivot Central"
+            if dist_bcpr < TOLERANCE_ZONE_CPR:   zone_nom = "Bottom CPR"
+            elif dist_pivot < TOLERANCE_ZONE_CPR: zone_nom = "Point Pivot Central"
             if zone_nom:
                 signal = "SELL"
                 sl = float(df15['high'].iloc[-2]) * 1.001
@@ -1041,8 +1055,12 @@ def analyser_cpr_rejection(symbole):
 
 def analyser_open_drive(symbole):
     """
-    Une bougie forte (Marubozu ou Pin Bar) casse décisivement le PDH ou le
-    PDL sans hésitation — entrée dans le sens de la cassure.
+    Une bougie forte (Marubozu, Pin Bar ou Engulfing) casse décisivement le
+    PDH ou le PDL sans hésitation — entrée dans le sens de la cassure.
+    ✅ V52: patterns de confirmation élargis (ajout d'Engulfing en plus de
+    Marubozu/Pin) et tolérance sur le niveau de départ de la bougie assouplie
+    (0.1% → 0.15%), pour capter davantage de cassures propres sans accepter
+    n'importe quelle bougie.
     """
     cpr = calculer_cpr_journalier(symbole)
     c5  = obtenir_donnees_deriv(symbole, 300)
@@ -1060,8 +1078,13 @@ def analyser_open_drive(symbole):
 
         signal, sl, tp_final, niveau_casse = None, 0.0, 0.0, 0.0
 
-        if pattern in ("MARUBOZU_BULL", "PIN_BULL"):
-            if float(last_candle['open']) < cpr["PDH"] * 1.001 and float(last_candle['close']) > cpr["PDH"]:
+        # ✅ V52: 0.001 → 0.0015 (marge un peu plus large sur le point de départ)
+        MARGE_CASSURE = 0.0015
+        PATTERNS_HAUSSE = ("MARUBOZU_BULL", "PIN_BULL", "ENGULFING_BULL")
+        PATTERNS_BAISSE = ("MARUBOZU_BEAR", "PIN_BEAR", "ENGULFING_BEAR")
+
+        if pattern in PATTERNS_HAUSSE:
+            if float(last_candle['open']) < cpr["PDH"] * (1 + MARGE_CASSURE) and float(last_candle['close']) > cpr["PDH"]:
                 signal = "BUY"
                 niveau_casse = cpr["PDH"]
                 sl = cpr["PDH"] * 0.998
@@ -1069,8 +1092,8 @@ def analyser_open_drive(symbole):
                 if dist > 0:
                     tp_final = px + (dist * 2.5)
 
-        elif pattern in ("MARUBOZU_BEAR", "PIN_BEAR"):
-            if float(last_candle['open']) > cpr["PDL"] * 0.999 and float(last_candle['close']) < cpr["PDL"]:
+        elif pattern in PATTERNS_BAISSE:
+            if float(last_candle['open']) > cpr["PDL"] * (1 - MARGE_CASSURE) and float(last_candle['close']) < cpr["PDL"]:
                 signal = "SELL"
                 niveau_casse = cpr["PDL"]
                 sl = cpr["PDL"] * 1.002
@@ -1104,8 +1127,12 @@ def analyser_open_drive(symbole):
 
 def analyser_rsi_exhaustion(symbole):
     """
-    RSI en zone extrême (< 30 ou > 70) confirmé par une mèche d'épuisement
+    RSI en zone extrême (< 35 ou > 65) confirmé par une mèche d'épuisement
     (Pin Bar) → retournement probable.
+    ✅ V52: seuils RSI 30/70 → 35/65 — zone d'extrême légèrement élargie,
+    reste cohérent avec la logique "épuisement" du PDF mais se déclenche
+    plus souvent (30/70 est atteint rarement sur H1 en dehors de mouvements
+    très marqués).
     """
     c1h = obtenir_donnees_deriv(symbole, 3600)
     if not c1h or len(c1h) < 20:
@@ -1126,14 +1153,18 @@ def analyser_rsi_exhaustion(symbole):
 
         signal, sl, tp_final = None, 0.0, 0.0
 
-        if rsi < 30 and pattern == "PIN_BULL":
+        # ✅ V52: 30/70 → 35/65
+        SEUIL_RSI_BAS  = 35
+        SEUIL_RSI_HAUT = 65
+
+        if rsi < SEUIL_RSI_BAS and pattern == "PIN_BULL":
             signal = "BUY"
             sl = float(df1h['low'].iloc[-2]) * 0.999
             dist = px - sl
             if dist > 0:
                 tp_final = px + (dist * 3.0)
 
-        elif rsi > 70 and pattern == "PIN_BEAR":
+        elif rsi > SEUIL_RSI_HAUT and pattern == "PIN_BEAR":
             signal = "SELL"
             sl = float(df1h['high'].iloc[-2]) * 1.001
             dist = sl - px
@@ -1207,12 +1238,14 @@ def detecter_contexte_pdf(symbole):
 #      seul (aucune dépendance dure à Groq).
 
 IA_CONFIG = {
-    "seuil_acceptation": 78,   # ✅ V51: 85→78% — desserré pour augmenter le volume de signaux
-                                # (calcul déterministe) tout en gardant un filtre sérieux.
+    "seuil_acceptation": 60,   # ✅ V52: 78→60% — desserré à nouveau. Le vrai
+                                # goulot identifié était les fonctions de
+                                # stratégie elles-mêmes (aucune configuration
+                                # détectée), donc ce seuil peut redescendre
+                                # à un niveau filtrant mais raisonnable.
                                 # Ajustable en direct via /iaconfig seuil_acceptation <valeur>
     "groq_active": True,       # bascule ON/OFF du second avis Groq
-    "groq_seuil_veto": 32,     # ✅ V51: 40→32% — Groq ne pose veto que sur les cas vraiment
-                                # douteux, pour ne pas sur-filtrer des signaux déjà validés.
+    "groq_seuil_veto": 25,     # ✅ V52: 32→25% — cohérent avec le nouveau seuil global
     "poids": {                 # Poids relatif de chaque critère dans le score final
         "tendance_h1":        12,
         "adx":                10,
@@ -1243,7 +1276,7 @@ GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions"
 
 # Historique enrichi des scores/résultats pour l'auto-apprentissage (✅ V49:
 # tous les champs demandés — stratégie, timeframe, heure, score déterministe,
-# avis IA, SL/TP, résultat, drawdown, durée)
+# avis Groq, SL/TP, résultat, drawdown, durée)
 ia_historique = []      # liste de dicts détaillés (voir ia_enregistrer_resultat)
 ia_poids_ajustes = {}   # cache des poids appris par (strategie_nom, symbole)
 
@@ -1617,7 +1650,7 @@ def estimer_spread_relatif(symbole, px):
 def moteur_ia_valider_signal(symbole, signal, strategie_nom):
     """
     ✅ Couche 1 (calcul déterministe). Ne génère AUCUN signal — reçoit un
-    signal déjà détecté par une stratégie existante et l'évalue.
+    signal déjà détecté par une stratégie et l'évalue.
 
     signal: dict retourné par analyser_cpr_rejection() / analyser_open_drive()
             / analyser_rsi_exhaustion() (structure inchangée)
@@ -2015,13 +2048,16 @@ def cerveau_pro_trader(symbole):
     détecté passe par: (1) moteur de calcul déterministe, puis, s'il est
     accepté, (2) second avis Groq (confirme ou veto). Retourne une LISTE
     de signaux acceptés (0 à 3). La logique interne de chaque analyser_xxx()
-    n'est jamais modifiée.
+    n'est jamais modifiée par ce cerveau — seuls les seuils internes des
+    stratégies ont été assouplis en V52 (voir analyser_cpr_rejection,
+    analyser_open_drive, analyser_rsi_exhaustion, detecter_chandeliers_pdf).
 
     🔍 V51-DEBUG: instrumentation temporaire de diagnostic — logge
     explicitement CHAQUE étape même quand rien n'est détecté, pour identifier
     précisément où le pipeline s'arrête (aucune stratégie ne déclenche vs.
     stratégie déclenche mais rejetée par le calcul vs. rejetée par Groq).
-    À retirer une fois le problème confirmé et résolu.
+    Conservée en V52 car toujours utile pour vérifier l'effet des nouveaux
+    seuils en conditions réelles.
     """
     signaux_valides = []
     print(f"[DEBUG] === Analyse {symbole} — début cycle ===", flush=True)
@@ -2693,7 +2729,7 @@ def scanner_marche_auto():
                     ligne_risque_ia = f"🛡️ {gr.get('note','')}\n" if gr.get("note") else ""
 
                     txt = (
-                        f"💼 *TERMINAL PRIME V51*\n"
+                        f"💼 *TERMINAL PRIME V52*\n"
                         f"{nom}  {dir_}\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"🎯 Stratégie : *{res['label']}*\n"
@@ -3006,7 +3042,7 @@ def bienvenue(message):
         trade_info = f"\n🟠 *TRADE ACTIF:* {t['symbol']} {t['direction']} @ {t['entry_price']}"
 
     bot.send_message(uid,
-        f"💼 *TERMINAL PRIME V51* — ANALYSTE IA MULTI-MODULES (GROQ)\n"
+        f"💼 *TERMINAL PRIME V52* — ANALYSTE IA MULTI-MODULES (GROQ)\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"3 stratégies indépendantes, chacune validée par IA\n"
         f"🎯 Scan exclusif : 🥇 Gold · 🥈 Argent · 🔥 Volatility\n"
@@ -3262,6 +3298,6 @@ if __name__ == "__main__":
     Thread(target=monitorer_trades_actifs,         daemon=True).start()
     Thread(target=envoyer_rapports_quotidiens_auto,daemon=True).start()
     Thread(target=watchdog_trades_bloques,         daemon=True).start()
-    print("💼 TERMINAL PRIME V51 — ANALYSTE IA MULTI-MODULES (GROQ) ACTIF "
-          "(3 stratégies indépendantes, contexte/faux-signaux/multi-TF/risque, Groq, scanner parallèle, watchdog)", flush=True)
+    print("💼 TERMINAL PRIME V52 — ANALYSTE IA MULTI-MODULES (GROQ) ACTIF "
+          "(3 stratégies indépendantes assouplies, contexte/faux-signaux/multi-TF/risque, Groq, scanner parallèle, watchdog)", flush=True)
     bot.infinity_polling()
