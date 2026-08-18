@@ -73,7 +73,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # CONFIGURATION
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAGcXrxR3mRRJduP8ZsZmUIkh7yftGe3F2M"
+TELEGRAM_TOKEN = "8658287331:AAGSKehRU2A78Ao_LUgQWD5AatJL3dJeHYU"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 ADMIN_ID = 5968288964
 CAPITAL_ACTUEL = 40650
@@ -962,180 +962,155 @@ def detecter_chandeliers_pdf(df):
         return "NONE", 0
 
 # ------------------------------------------
-# STRATÉGIE 1 : CPR PULLBACK & REJECTION
+# ✅ V53 NEW: STRATÉGIE UNIQUE — TREND PULLBACK & CONFLUENCE
 # ------------------------------------------
+# Remplace les 3 anciennes stratégies indépendantes (CPR Pullback, Open
+# Drive Breakout, RSI Exhaustion), qui exigeaient chacune 2-3 conditions
+# rares simultanées (ex: prix exactement sur un pivot journalier + bougie
+# de rejet dans la même bougie) — configuration extrêmement peu fréquente
+# statistiquement, d'où le silence quasi permanent malgré 8 paires scannées.
+#
+# Méthode utilisée par la plupart des systèmes algorithmiques discrétionnaires
+# sérieux ("trend pullback with confluence") — au lieu d'empiler des
+# conditions rares en ET logique strict, on combine des conditions COURANTES
+# mais cohérentes entre elles :
+#
+#   1. TENDANCE MACRO (H1)     — EMA21 vs EMA55 + ADX ≥ 18 → sens autorisé
+#   2. STRUCTURE (H1)          — higher-highs/lows cohérents dans ce sens
+#   3. PULLBACK (M15)          — le prix revient près de l'EMA21 M15
+#      (zone de valeur dynamique, testée en continu, pas un niveau fixe)
+#   4. MOMENTUM SAIN (M15/H1)  — RSI 35-65 (ni extrême ni plat) + MACD
+#      histogram qui pointe dans le sens du trade
+#   5. DÉCLENCHEUR D'ENTRÉE    — bougie de confirmation (Pin/Engulfing/
+#      Marubozu) sur le pullback
+#   6. RISQUE BASÉ SUR L'ATR   — SL = max(1.2×ATR, structure + buffer),
+#      TP = plus proche swing PDH/PDL (référence CPR conservée comme cible
+#      objective) avec R:R minimum 1.6
+#
+# Le score de confluence (0-100, un point par critère rempli plus le degré
+# de qualité) est transmis en "confiance" — le moteur IA déterministe et le
+# second avis Groq restent ensuite la couche de validation finale, inchangée.
 
-def analyser_cpr_rejection(symbole):
-    """
-    Le prix revient tester le CPR (Pivot/BCPR/TCPR) et forme une bougie de
-    rejet (Pin Bar ou Engulfing) → entrée dans le sens du biais journalier
-    (prix vs Pivot), objectif = PDH/PDL.
-    ✅ V46: utilise désormais du VRAI M15 (900s), corrigé du bug de mapping
-    qui renvoyait auparavant du H4 mal étiqueté.
-    ✅ V52: tolérance de proximité à la zone CPR élargie de 0.2% à 0.4% du
-    prix — le prix "teste" une zone dans un intervalle plus réaliste au lieu
-    d'exiger un contact quasi exact, ce qui excluait la grande majorité des
-    pullbacks valides.
-    """
-    cpr = calculer_cpr_journalier(symbole)
-    c15 = obtenir_donnees_deriv(symbole, 900)
-    if not cpr or not c15 or len(c15) < 5:
-        return None
+def _ema(series, span):
+    return series.ewm(span=span, adjust=False).mean()
 
+# ------------------------------------------
+# ✅ V54 NEW: SUPPORT/RÉSISTANCE + ORDER BLOCKS (Smart Money Concepts)
+# ------------------------------------------
+# Ajoute deux couches de confluence supplémentaires, inspirées des méthodes
+# "Smart Money Concepts" (ICT) utilisées par de nombreux traders algo
+# institutionnels/professionnels :
+#   • Support/Résistance : niveaux issus des swings récents, retenus
+#     seulement s'ils ont été "touchés" au moins 2 fois (zone respectée par
+#     le marché, pas un simple pic isolé).
+#   • Order Block : dernière bougie opposée avant un mouvement impulsif qui
+#     casse la structure — la zone d'où l'argent institutionnel a
+#     "initié" le mouvement, souvent re-testée avant continuation.
+# Ces zones ne remplacent pas la logique de pullback existante (EMA21 M15),
+# elles s'y ajoutent : une entrée est valide si le prix est proche de l'UNE
+# des zones reconnues, et le score de confluence augmente si PLUSIEURS
+# zones se chevauchent au même endroit (confluence réelle, pas coïncidence).
+
+def detecter_swing_points(df, ordre=3):
+    """Détecte les sommets/creux locaux (swing highs/lows) par comparaison
+    avec une fenêtre de part et d'autre — méthode standard, indépendante
+    de toute librairie externe."""
+    highs = df['high'].values
+    lows = df['low'].values
+    n = len(df)
+    swing_highs, swing_lows = [], []
+    for i in range(ordre, n - ordre):
+        fenetre_h = highs[i-ordre:i+ordre+1]
+        fenetre_l = lows[i-ordre:i+ordre+1]
+        if highs[i] == fenetre_h.max():
+            swing_highs.append(float(highs[i]))
+        if lows[i] == fenetre_l.min():
+            swing_lows.append(float(lows[i]))
+    return swing_highs, swing_lows
+
+def detecter_niveaux_cles(df, lookback=80, tolerance_cluster=0.0015):
+    """
+    Regroupe les swings proches en "clusters" et ne retient que les niveaux
+    touchés au moins 2 fois — ce sont les vraies zones de support/résistance
+    respectées par le marché, pas des pics isolés sans signification.
+    Retourne une liste de prix (float).
+    """
     try:
-        df15 = pd.DataFrame([{
-            "open": float(c["open"]), "high": float(c["high"]),
-            "low": float(c["low"]), "close": float(c["close"])
-        } for c in c15])
-        px = float(df15['close'].iloc[-1])
-        pattern, _ = detecter_chandeliers_pdf(df15)
-        if pattern == "NONE":
-            return None
+        sub = df.iloc[-lookback:] if len(df) > lookback else df
+        swing_highs, swing_lows = detecter_swing_points(sub, ordre=3)
+        tous = sorted(swing_highs + swing_lows)
+        if not tous:
+            return []
 
-        biais = "BULL" if px > cpr["PIVOT"] else "BEAR"
-        signal, sl, tp1, tp_final, zone_nom = None, 0.0, 0.0, 0.0, ""
+        clusters = []
+        for prix in tous:
+            place = False
+            for c in clusters:
+                if abs(prix - c["moyenne"]) / prix < tolerance_cluster * 3:
+                    c["membres"].append(prix)
+                    c["moyenne"] = sum(c["membres"]) / len(c["membres"])
+                    place = True
+                    break
+            if not place:
+                clusters.append({"moyenne": prix, "membres": [prix]})
 
-        # ✅ V52: 0.002 → 0.004 (0.4% au lieu de 0.2%)
-        TOLERANCE_ZONE_CPR = 0.004
+        return [round(c["moyenne"], 5) for c in clusters if len(c["membres"]) >= 2]
+    except Exception:
+        return []
 
-        if biais == "BULL" and pattern in ("PIN_BULL", "ENGULFING_BULL"):
-            dist_tcpr  = abs(px - cpr["TCPR"])  / px
-            dist_pivot = abs(px - cpr["PIVOT"]) / px
-            if dist_tcpr < TOLERANCE_ZONE_CPR:   zone_nom = "Top CPR"
-            elif dist_pivot < TOLERANCE_ZONE_CPR: zone_nom = "Point Pivot Central"
-            if zone_nom:
-                signal = "BUY"
-                sl = float(df15['low'].iloc[-2]) * 0.999
-                distance_risque = px - sl
-                if distance_risque <= 0:
-                    return None
-                tp1      = px + (distance_risque * 1.5)
-                tp_final = cpr["PDH"]
-
-        elif biais == "BEAR" and pattern in ("PIN_BEAR", "ENGULFING_BEAR"):
-            dist_bcpr  = abs(px - cpr["BCPR"])  / px
-            dist_pivot = abs(px - cpr["PIVOT"]) / px
-            if dist_bcpr < TOLERANCE_ZONE_CPR:   zone_nom = "Bottom CPR"
-            elif dist_pivot < TOLERANCE_ZONE_CPR: zone_nom = "Point Pivot Central"
-            if zone_nom:
-                signal = "SELL"
-                sl = float(df15['high'].iloc[-2]) * 1.001
-                distance_risque = sl - px
-                if distance_risque <= 0:
-                    return None
-                tp1      = px - (distance_risque * 1.5)
-                tp_final = cpr["PDL"]
-
-        if not signal:
-            return None
-
-        risque = abs(px - sl)
-        rr = abs(tp_final - px) / risque if risque > 0 else 0
-        if rr < 1.3:  # ✅ V51: 1.5→1.3 — légèrement assoupli pour plus d'opportunités détectées
-            return None
-
-        return {
-            "action": "🟢 ACHAT (BUY)" if signal == "BUY" else "🔴 VENTE (SELL)",
-            "tendance": biais, "force": cpr["ETAT"],
-            "msg": f"Rejet Chandelier ({pattern.replace('_',' ')}) sur {zone_nom}",
-            "sl": round(sl,5), "tp1": round(tp1,5), "tp": round(tp_final,5),
-            "rr": round(rr,2), "px": round(px,5),
-            "strategie": 1, "confiance": 85 if cpr["ETAT"] == "Large (Range)" else 75,
-            "label": "CPR PULLBACK & REJECTION",
-            "cpr_top": round(cpr["TCPR"],5), "cpr_bot": round(cpr["BCPR"],5),
-            "cpr_etat": cpr["ETAT"], "objectif_pdhl": round(tp_final,5),
-        }
-    except Exception as e:
-        print(f"[CPR-Rejection/{symbole}] {e}", flush=True)
-        return None
-
-# ------------------------------------------
-# STRATÉGIE 2 : OPEN DRIVE BREAKOUT (PDH/PDL)
-# ------------------------------------------
-
-def analyser_open_drive(symbole):
+def detecter_order_blocks(df, lookback=40):
     """
-    Une bougie forte (Marubozu, Pin Bar ou Engulfing) casse décisivement le
-    PDH ou le PDL sans hésitation — entrée dans le sens de la cassure.
-    ✅ V52: patterns de confirmation élargis (ajout d'Engulfing en plus de
-    Marubozu/Pin) et tolérance sur le niveau de départ de la bougie assouplie
-    (0.1% → 0.15%), pour capter davantage de cassures propres sans accepter
-    n'importe quelle bougie.
+    Repère les Order Blocks — la dernière bougie opposée avant une bougie
+    d'impulsion (corps > 1.6x le corps moyen) qui casse la structure locale.
+    Retourne (obs_bull, obs_bear), chacune une liste de zones (bas, haut)
+    triées de la plus récente à la plus ancienne, limitée aux 3 dernières
+    par direction (les plus pertinentes pour un pullback actuel).
     """
-    cpr = calculer_cpr_journalier(symbole)
-    c5  = obtenir_donnees_deriv(symbole, 300)
-    if not cpr or not c5 or len(c5) < 5:
-        return None
-
     try:
-        df5 = pd.DataFrame([{
-            "open": float(c["open"]), "high": float(c["high"]),
-            "low": float(c["low"]), "close": float(c["close"])
-        } for c in c5])
-        px = float(df5['close'].iloc[-1])
-        pattern, _ = detecter_chandeliers_pdf(df5)
-        last_candle = df5.iloc[-2]
+        sub = df.iloc[-lookback:] if len(df) > lookback else df
+        if len(sub) < 6:
+            return [], []
 
-        signal, sl, tp_final, niveau_casse = None, 0.0, 0.0, 0.0
+        opens  = sub['open'].values
+        closes = sub['close'].values
+        highs  = sub['high'].values
+        lows   = sub['low'].values
+        corps  = abs(closes - opens)
+        corps_moyen = corps[:-1].mean() if len(corps) > 1 else 0
+        if corps_moyen <= 0:
+            return [], []
 
-        # ✅ V52: 0.001 → 0.0015 (marge un peu plus large sur le point de départ)
-        MARGE_CASSURE = 0.0015
-        PATTERNS_HAUSSE = ("MARUBOZU_BULL", "PIN_BULL", "ENGULFING_BULL")
-        PATTERNS_BAISSE = ("MARUBOZU_BEAR", "PIN_BEAR", "ENGULFING_BEAR")
+        obs_bull, obs_bear = [], []
+        for i in range(2, len(sub) - 1):
+            if corps[i] <= corps_moyen * 1.6:
+                continue  # pas assez impulsif pour marquer un OB
 
-        if pattern in PATTERNS_HAUSSE:
-            if float(last_candle['open']) < cpr["PDH"] * (1 + MARGE_CASSURE) and float(last_candle['close']) > cpr["PDH"]:
-                signal = "BUY"
-                niveau_casse = cpr["PDH"]
-                sl = cpr["PDH"] * 0.998
-                dist = px - sl
-                if dist > 0:
-                    tp_final = px + (dist * 2.5)
+            if closes[i] > opens[i] and closes[i-1] <= opens[i-1]:
+                # bougie d'impulsion haussière → la bougie baissière/neutre
+                # juste avant est l'Order Block haussier (zone de support)
+                top    = max(opens[i-1], closes[i-1], highs[i-1])
+                bottom = float(lows[i-1])
+                obs_bull.append((bottom, round(top, 5)))
 
-        elif pattern in PATTERNS_BAISSE:
-            if float(last_candle['open']) > cpr["PDL"] * (1 - MARGE_CASSURE) and float(last_candle['close']) < cpr["PDL"]:
-                signal = "SELL"
-                niveau_casse = cpr["PDL"]
-                sl = cpr["PDL"] * 1.002
-                dist = sl - px
-                if dist > 0:
-                    tp_final = px - (dist * 2.5)
+            elif closes[i] < opens[i] and closes[i-1] >= opens[i-1]:
+                top    = float(highs[i-1])
+                bottom = min(opens[i-1], closes[i-1], lows[i-1])
+                obs_bear.append((round(bottom, 5), top))
 
-        if not signal or tp_final == 0:
-            return None
+        return obs_bull[-3:], obs_bear[-3:]
+    except Exception:
+        return [], []
 
-        rr  = 2.5
-        tp1 = px + (abs(px - sl) * 1.0) if signal == "BUY" else px - (abs(px - sl) * 1.0)
-
-        return {
-            "action": "🟢 ACHAT (BUY)" if signal == "BUY" else "🔴 VENTE (SELL)",
-            "tendance": "BREAKOUT", "force": "Impulsion Forte",
-            "msg": f"Open Drive : Cassure du {'PDH' if signal=='BUY' else 'PDL'} par {pattern.replace('_',' ')}",
-            "sl": round(sl,5), "tp1": round(tp1,5), "tp": round(tp_final,5),
-            "rr": round(rr,2), "px": round(px,5),
-            "strategie": 2, "confiance": 90,
-            "label": "OPEN DRIVE BREAKOUT",
-            "niveau_casse": round(niveau_casse,5),
-        }
-    except Exception as e:
-        print(f"[OpenDrive/{symbole}] {e}", flush=True)
-        return None
-
-# ------------------------------------------
-# STRATÉGIE 3 : RSI EXTREMES & EXHAUSTION
-# ------------------------------------------
-
-def analyser_rsi_exhaustion(symbole):
+def analyser_trend_pullback_confluence(symbole):
     """
-    RSI en zone extrême (< 35 ou > 65) confirmé par une mèche d'épuisement
-    (Pin Bar) → retournement probable.
-    ✅ V52: seuils RSI 30/70 → 35/65 — zone d'extrême légèrement élargie,
-    reste cohérent avec la logique "épuisement" du PDF mais se déclenche
-    plus souvent (30/70 est atteint rarement sur H1 en dehors de mouvements
-    très marqués).
+    Stratégie unique de confluence — voir explication ci-dessus. Retourne
+    un dict au même format que les anciennes stratégies (compatible avec
+    tout le reste du pipeline: moteur IA, Groq, ouverture de trade, etc.)
+    ou None si aucune configuration de qualité suffisante n'est trouvée.
     """
     c1h = obtenir_donnees_deriv(symbole, 3600)
-    if not c1h or len(c1h) < 20:
+    c15 = obtenir_donnees_deriv(symbole, 900)
+    if not c1h or len(c1h) < 60 or not c15 or len(c15) < 30:
         return None
 
     try:
@@ -1143,51 +1118,175 @@ def analyser_rsi_exhaustion(symbole):
             "open": float(c["open"]), "high": float(c["high"]),
             "low": float(c["low"]), "close": float(c["close"])
         } for c in c1h])
-        rsi_series = ta.momentum.RSIIndicator(close=df1h["close"], window=14).rsi()
-        if rsi_series.isna().iloc[-2]:
+        df15 = pd.DataFrame([{
+            "open": float(c["open"]), "high": float(c["high"]),
+            "low": float(c["low"]), "close": float(c["close"])
+        } for c in c15])
+
+        px = float(df15['close'].iloc[-1])
+
+        # ── 1. TENDANCE MACRO (H1) ──────────────────────────────────────
+        ema21_h1 = _ema(df1h['close'], 21)
+        ema55_h1 = _ema(df1h['close'], 55)
+        adx_h1   = calculer_adx(df1h)
+
+        if adx_h1 < 18:
+            return None  # marché sans direction claire — on ne force rien
+
+        tendance_bull = ema21_h1.iloc[-2] > ema55_h1.iloc[-2]
+        direction = "BULL" if tendance_bull else "BEAR"
+
+        # ── 2. STRUCTURE (H1) ────────────────────────────────────────────
+        structure_score = evaluer_structure_marche(df1h)
+        if structure_score < 45:
+            return None  # structure trop confuse pour trader dans un sens
+
+        # ── 3. PULLBACK vers une zone de valeur reconnue ────────────────
+        # ✅ V54: une entrée est désormais valide si le prix est proche
+        # de N'IMPORTE LAQUELLE des zones suivantes (pas seulement l'EMA21):
+        #   • EMA21 M15 (moyenne dynamique)
+        #   • Un Order Block H1 dans le bon sens (zone institutionnelle)
+        #   • Un niveau de Support/Résistance H1 validé (≥2 touches)
+        # Le score de confluence augmente si plusieurs zones se recoupent.
+        ema21_m15 = _ema(df15['close'], 21)
+        val_zone  = float(ema21_m15.iloc[-2])
+        distance_ema_pct = abs(px - val_zone) / px if px else 1
+        TOLERANCE_EMA = 0.006  # 0.6%
+
+        obs_bull, obs_bear = detecter_order_blocks(df1h)
+        niveaux_cles = detecter_niveaux_cles(df1h)
+        TOLERANCE_NIVEAU = 0.0025  # 0.25% autour d'un niveau S/R
+
+        zones_touchees = []
+
+        if abs(distance_ema_pct) <= TOLERANCE_EMA:
+            zones_touchees.append("EMA21 M15")
+
+        ob_pertinent = None
+        if direction == "BULL":
+            for bottom, top in obs_bull:
+                marge = (top - bottom) * 0.25
+                if (bottom - marge) <= px <= (top + marge):
+                    zones_touchees.append("Order Block haussier")
+                    ob_pertinent = (bottom, top)
+                    break
+        else:
+            for bottom, top in obs_bear:
+                marge = (top - bottom) * 0.25
+                if (bottom - marge) <= px <= (top + marge):
+                    zones_touchees.append("Order Block baissier")
+                    ob_pertinent = (bottom, top)
+                    break
+
+        niveau_pertinent = None
+        for niveau in niveaux_cles:
+            if abs(px - niveau) / px < TOLERANCE_NIVEAU:
+                zones_touchees.append("Support/Résistance clé")
+                niveau_pertinent = niveau
+                break
+
+        if not zones_touchees:
+            return None  # aucune zone de valeur reconnue à proximité
+
+        # ── 4. MOMENTUM SAIN (ni extrême, ni plat) ──────────────────────
+        try:
+            rsi_series = ta.momentum.RSIIndicator(close=df15["close"], window=14).rsi()
+            rsi_val = float(rsi_series.iloc[-2])
+        except Exception:
             return None
-        rsi = float(rsi_series.iloc[-2])
+        if not (35 <= rsi_val <= 65):
+            return None
 
-        px = float(df1h['close'].iloc[-1])
-        pattern, _ = detecter_chandeliers_pdf(df1h)
+        macd_line, macd_signal, macd_hist = calculer_macd_signal(df15)
+        momentum_ok = (macd_hist > 0) if direction == "BULL" else (macd_hist < 0)
+        if not momentum_ok:
+            return None
 
-        signal, sl, tp_final = None, 0.0, 0.0
+        # ── 5. DÉCLENCHEUR D'ENTRÉE (bougie de confirmation M15) ────────
+        pattern, _ = detecter_chandeliers_pdf(df15)
+        patterns_valides_bull = ("PIN_BULL", "ENGULFING_BULL", "MARUBOZU_BULL")
+        patterns_valides_bear = ("PIN_BEAR", "ENGULFING_BEAR", "MARUBOZU_BEAR")
+        if direction == "BULL" and pattern not in patterns_valides_bull:
+            return None
+        if direction == "BEAR" and pattern not in patterns_valides_bear:
+            return None
 
-        # ✅ V52: 30/70 → 35/65
-        SEUIL_RSI_BAS  = 35
-        SEUIL_RSI_HAUT = 65
+        # ── 6. RISQUE BASÉ SUR L'ATR + CIBLE OBJECTIVE (PDH/PDL si dispo) ─
+        atr15 = calculer_atr(df15)
+        if atr15 <= 0:
+            return None
 
-        if rsi < SEUIL_RSI_BAS and pattern == "PIN_BULL":
+        bougie_signal = df15.iloc[-2]
+        cpr = calculer_cpr_journalier(symbole)  # sert uniquement de référence de cible, plus de filtre d'entrée
+
+        # ✅ V54: si un Order Block pertinent a été identifié, son bord
+        # externe est une référence de SL plus précise (structurelle) que
+        # l'ATR seul — on prend le plus prudent des deux (jamais moins
+        # sécurisé que l'ATR, potentiellement plus serré s'il est cohérent).
+        if direction == "BULL":
             signal = "BUY"
-            sl = float(df1h['low'].iloc[-2]) * 0.999
-            dist = px - sl
-            if dist > 0:
-                tp_final = px + (dist * 3.0)
-
-        elif rsi > SEUIL_RSI_HAUT and pattern == "PIN_BEAR":
+            sl_structure = float(bougie_signal['low']) - (atr15 * 0.15)
+            sl_atr       = px - (atr15 * 1.2)
+            sl_candidats = [sl_structure, sl_atr]
+            if ob_pertinent:
+                sl_candidats.append(ob_pertinent[0] - (atr15 * 0.1))
+            sl = min(sl_candidats)  # le plus prudent (le plus bas)
+            distance_risque = px - sl
+            if distance_risque <= 0:
+                return None
+            cible_objective = cpr["PDH"] if cpr and cpr["PDH"] > px else px + (distance_risque * 2.2)
+            tp_final = max(cible_objective, px + (distance_risque * 1.6))
+            tp1 = px + (distance_risque * 1.0)
+        else:
             signal = "SELL"
-            sl = float(df1h['high'].iloc[-2]) * 1.001
-            dist = sl - px
-            if dist > 0:
-                tp_final = px - (dist * 3.0)
+            sl_structure = float(bougie_signal['high']) + (atr15 * 0.15)
+            sl_atr       = px + (atr15 * 1.2)
+            sl_candidats = [sl_structure, sl_atr]
+            if ob_pertinent:
+                sl_candidats.append(ob_pertinent[1] + (atr15 * 0.1))
+            sl = max(sl_candidats)  # le plus prudent (le plus haut)
+            distance_risque = sl - px
+            if distance_risque <= 0:
+                return None
+            cible_objective = cpr["PDL"] if cpr and cpr["PDL"] < px else px - (distance_risque * 2.2)
+            tp_final = min(cible_objective, px - (distance_risque * 1.6))
+            tp1 = px - (distance_risque * 1.0)
 
-        if not signal or tp_final == 0:
+        risque = abs(px - sl)
+        rr = abs(tp_final - px) / risque if risque > 0 else 0
+        if rr < 1.6:
             return None
 
-        tp1 = px + (abs(px - sl) * 1.5) if signal == "BUY" else px - (abs(px - sl) * 1.5)
+        # ── Score de confluence (informatif — la validation finale reste
+        # le moteur IA + Groq, inchangés) ───────────────────────────────
+        score_confluence = 55
+        score_confluence += min(15, (adx_h1 - 18) * 1.0)            # tendance plus forte = mieux
+        score_confluence += min(10, (structure_score - 45) * 0.15)  # structure plus nette = mieux
+        score_confluence += 8 if pattern.startswith("ENGULFING") else 4  # engulfing = confirmation plus franche
+        # ✅ V54: bonus de confluence par zone reconnue — plusieurs zones
+        # qui se recoupent au même endroit = signal statistiquement plus
+        # fiable qu'une seule zone isolée.
+        score_confluence += 6 * len(zones_touchees)
+        if len(zones_touchees) >= 2:
+            score_confluence += 8  # bonus supplémentaire pour vraie confluence multi-zones
+        score_confluence = round(min(97, score_confluence), 1)
+
+        zones_txt = " + ".join(zones_touchees)
 
         return {
             "action": "🟢 ACHAT (BUY)" if signal == "BUY" else "🔴 VENTE (SELL)",
-            "tendance": "REVERSAL", "force": f"RSI Extrême ({round(rsi,1)})",
-            "msg": "Épuisement : rejet massif des prix avec RSI critique",
+            "tendance": direction, "force": f"ADX {round(adx_h1,1)} · Structure {structure_score}%",
+            "msg": f"Pullback sur {zones_txt} + {pattern.replace('_',' ')} (confluence tendance H1)",
             "sl": round(sl,5), "tp1": round(tp1,5), "tp": round(tp_final,5),
-            "rr": 3.0, "px": round(px,5),
-            "strategie": 3, "confiance": 80,
-            "label": "RSI EXHAUSTION & REVERSAL",
-            "rsi_value": round(rsi,1),
+            "rr": round(rr,2), "px": round(px,5),
+            "strategie": 1, "confiance": int(score_confluence),
+            "label": "TREND PULLBACK & CONFLUENCE",
+            "rsi_value": round(rsi_val,1), "adx_value": round(adx_h1,1),
+            "zones_confluence": zones_touchees,
+            "order_block": ob_pertinent, "niveau_cle": niveau_pertinent,
         }
     except Exception as e:
-        print(f"[RSI-Exhaustion/{symbole}] {e}", flush=True)
+        print(f"[TrendPullback/{symbole}] {e}", flush=True)
         return None
 
 # ------------------------------------------
@@ -1225,8 +1324,8 @@ def detecter_contexte_pdf(symbole):
 # 🤖 V48 NEW: MOTEUR IA DE VALIDATION DES SIGNAUX
 # ==========================================
 # Rôle strict: NE GÉNÈRE JAMAIS de signal. Reçoit un signal déjà détecté par
-# une stratégie (inchangée ci-dessus: analyser_cpr_rejection,
-# analyser_open_drive, analyser_rsi_exhaustion), l'évalue sur de nombreux
+# une stratégie (inchangée ci-dessus: analyser_trend_pullback_confluence),
+# l'évalue sur de nombreux
 # critères techniques, retourne un score de confiance 0-100% + justification.
 #
 # Architecture en 2 couches:
@@ -1238,14 +1337,13 @@ def detecter_contexte_pdf(symbole):
 #      seul (aucune dépendance dure à Groq).
 
 IA_CONFIG = {
-    "seuil_acceptation": 60,   # ✅ V52: 78→60% — desserré à nouveau. Le vrai
-                                # goulot identifié était les fonctions de
-                                # stratégie elles-mêmes (aucune configuration
-                                # détectée), donc ce seuil peut redescendre
-                                # à un niveau filtrant mais raisonnable.
+    "seuil_acceptation": 55,   # ✅ V53: stratégie unique de confluence — déjà
+                                # plus sélective en amont (6 critères combinés),
+                                # donc le calcul déterministe peut rester à un
+                                # seuil modéré sans sur-filtrer.
                                 # Ajustable en direct via /iaconfig seuil_acceptation <valeur>
     "groq_active": True,       # bascule ON/OFF du second avis Groq
-    "groq_seuil_veto": 25,     # ✅ V52: 32→25% — cohérent avec le nouveau seuil global
+    "groq_seuil_veto": 25,     # seuil de veto Groq (score Groq en dessous = rejet)
     "poids": {                 # Poids relatif de chaque critère dans le score final
         "tendance_h1":        12,
         "adx":                10,
@@ -1652,9 +1750,9 @@ def moteur_ia_valider_signal(symbole, signal, strategie_nom):
     ✅ Couche 1 (calcul déterministe). Ne génère AUCUN signal — reçoit un
     signal déjà détecté par une stratégie et l'évalue.
 
-    signal: dict retourné par analyser_cpr_rejection() / analyser_open_drive()
-            / analyser_rsi_exhaustion() (structure inchangée)
-    strategie_nom: "CPR" / "OPEN_DRIVE" / "RSI"
+    signal: dict retourné par analyser_trend_pullback_confluence()
+            (structure inchangée)
+    strategie_nom: "TREND_PULLBACK"
 
     Retourne: {"accepte": bool, "score": float, "justification": [str],
                "details": {...}} — jamais None, toujours un verdict explicite.
@@ -2048,24 +2146,22 @@ def cerveau_pro_trader(symbole):
     détecté passe par: (1) moteur de calcul déterministe, puis, s'il est
     accepté, (2) second avis Groq (confirme ou veto). Retourne une LISTE
     de signaux acceptés (0 à 3). La logique interne de chaque analyser_xxx()
-    n'est jamais modifiée par ce cerveau — seuls les seuils internes des
-    stratégies ont été assouplis en V52 (voir analyser_cpr_rejection,
-    analyser_open_drive, analyser_rsi_exhaustion, detecter_chandeliers_pdf).
+    n'est jamais modifiée par ce cerveau. ✅ V53: les 3 anciennes stratégies
+    indépendantes (CPR/Open Drive/RSI) ont été remplacées par une stratégie
+    unique de confluence (voir analyser_trend_pullback_confluence) — moins
+    de conditions rares empilées, plus de signaux, qualité maintenue par le
+    cumul de critères courants + validation IA/Groq inchangée en aval.
 
-    🔍 V51-DEBUG: instrumentation temporaire de diagnostic — logge
-    explicitement CHAQUE étape même quand rien n'est détecté, pour identifier
-    précisément où le pipeline s'arrête (aucune stratégie ne déclenche vs.
-    stratégie déclenche mais rejetée par le calcul vs. rejetée par Groq).
-    Conservée en V52 car toujours utile pour vérifier l'effet des nouveaux
-    seuils en conditions réelles.
+    🔍 DEBUG: instrumentation de diagnostic conservée — logge explicitement
+    CHAQUE étape même quand rien n'est détecté, pour identifier précisément
+    où le pipeline s'arrête (stratégie ne déclenche vs. rejetée par le
+    calcul vs. rejetée par Groq).
     """
     signaux_valides = []
     print(f"[DEBUG] === Analyse {symbole} — début cycle ===", flush=True)
 
     for fn, nom_strategie, emoji_ctx in (
-        (analyser_cpr_rejection,  "CPR",        "🧱 CPR PULLBACK & REJECTION"),
-        (analyser_open_drive,     "OPEN_DRIVE", "🚀 OPEN DRIVE BREAKOUT"),
-        (analyser_rsi_exhaustion, "RSI",        "📉 RSI EXHAUSTION & REVERSAL"),
+        (analyser_trend_pullback_confluence, "TREND_PULLBACK", "📈 TREND PULLBACK & CONFLUENCE"),
     ):
         try:
             signal_brut = fn(symbole)
@@ -2677,19 +2773,19 @@ def scanner_marche_auto():
                         InlineKeyboardButton(f"⚡ Copier {nom}", callback_data=f"set_{cle}")
                     )
 
-                    # ✅ V46: détails spécifiques aux 3 stratégies PDF
-                    if res["strategie"] == 1:      # CPR Rejection
-                        ligne_extra = (f"🧱 CPR : {res.get('cpr_bot',0):.5f} - {res.get('cpr_top',0):.5f} "
-                                       f"({res.get('cpr_etat','')})\n"
-                                       f"🎯 Objectif : {'PDH' if res['tendance']=='BULL' else 'PDL'} "
-                                       f"{res.get('objectif_pdhl',0):.5f}\n")
-                    elif res["strategie"] == 2:    # Open Drive Breakout
-                        ligne_extra = (f"🚀 Cassure {'PDH' if 'BUY' in res['action'] else 'PDL'} : "
-                                       f"{res.get('niveau_casse',0):.5f}\n")
-                    elif res["strategie"] == 3:    # RSI Exhaustion
-                        ligne_extra = f"📉 RSI (H1) : {res.get('rsi_value','?')}\n"
-                    else:
-                        ligne_extra = ""
+                    # ✅ V54: détails de la stratégie unique Trend Pullback & Confluence
+                    # + zones Smart Money (Order Block / Support-Résistance)
+                    ligne_extra = (f"📈 RSI M15 : {res.get('rsi_value','?')} · "
+                                   f"ADX H1 : {res.get('adx_value','?')}\n")
+                    zones_conf = res.get("zones_confluence", [])
+                    if zones_conf:
+                        ligne_extra += f"🎯 Confluence : {' + '.join(zones_conf)}\n"
+                    ob = res.get("order_block")
+                    if ob:
+                        ligne_extra += f"📦 Order Block : {ob[0]:.5f} - {ob[1]:.5f}\n"
+                    niveau_cle = res.get("niveau_cle")
+                    if niveau_cle:
+                        ligne_extra += f"📏 Niveau clé : {niveau_cle:.5f}\n"
 
                     sizing = calculer_position_size(CAPITAL_ACTUEL, RISK_CONFIG["risk_per_trade_pct"],
                                                     px, res["sl"], paire)
@@ -2729,7 +2825,7 @@ def scanner_marche_auto():
                     ligne_risque_ia = f"🛡️ {gr.get('note','')}\n" if gr.get("note") else ""
 
                     txt = (
-                        f"💼 *TERMINAL PRIME V52*\n"
+                        f"💼 *TERMINAL PRIME V54*\n"
                         f"{nom}  {dir_}\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"🎯 Stratégie : *{res['label']}*\n"
@@ -3042,14 +3138,15 @@ def bienvenue(message):
         trade_info = f"\n🟠 *TRADE ACTIF:* {t['symbol']} {t['direction']} @ {t['entry_price']}"
 
     bot.send_message(uid,
-        f"💼 *TERMINAL PRIME V52* — ANALYSTE IA MULTI-MODULES (GROQ)\n"
+        f"💼 *TERMINAL PRIME V54* — ANALYSTE IA MULTI-MODULES (GROQ)\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"3 stratégies indépendantes, chacune validée par IA\n"
+        f"Stratégie unique par confluence, validée par IA\n"
         f"🎯 Scan exclusif : 🥇 Gold · 🥈 Argent · 🔥 Volatility\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🧱 CPR Pullback & Rejection\n"
-        f"🚀 Open Drive Breakout PDH/PDL\n"
-        f"📉 RSI Extremes & Exhaustion\n"
+        f"📈 TREND PULLBACK & CONFLUENCE\n"
+        f"   Tendance H1 + Structure + Momentum sain\n"
+        f"   + Pullback EMA21 M15 / Order Block / S-R clé\n"
+        f"   + Bougie de confirmation + Risque géré ATR\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🤖 *Moteur IA — 5 modules :*\n"
         f"  • Calcul déterministe (seuil {IA_CONFIG['seuil_acceptation']}%)\n"
@@ -3298,6 +3395,6 @@ if __name__ == "__main__":
     Thread(target=monitorer_trades_actifs,         daemon=True).start()
     Thread(target=envoyer_rapports_quotidiens_auto,daemon=True).start()
     Thread(target=watchdog_trades_bloques,         daemon=True).start()
-    print("💼 TERMINAL PRIME V52 — ANALYSTE IA MULTI-MODULES (GROQ) ACTIF "
+    print("💼 TERMINAL PRIME V54 — ANALYSTE IA MULTI-MODULES (GROQ) ACTIF "
           "(3 stratégies indépendantes assouplies, contexte/faux-signaux/multi-TF/risque, Groq, scanner parallèle, watchdog)", flush=True)
     bot.infinity_polling()
