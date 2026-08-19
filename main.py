@@ -73,7 +73,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # CONFIGURATION
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAGNbKq3JY5ttpc6P8g6x_QpySzrb5UyrzU"
+TELEGRAM_TOKEN = "8658287331:AAEdg2z5IxXgLn1mf2QeEJoZEl3Rf1LVZmo"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 ADMIN_ID = 5968288964
 CAPITAL_ACTUEL = 40650
@@ -1103,14 +1103,25 @@ def detecter_order_blocks(df, lookback=40):
 
 def analyser_trend_pullback_confluence(symbole):
     """
-    Stratégie unique de confluence — voir explication ci-dessus. Retourne
-    un dict au même format que les anciennes stratégies (compatible avec
-    tout le reste du pipeline: moteur IA, Groq, ouverture de trade, etc.)
-    ou None si aucune configuration de qualité suffisante n'est trouvée.
+    ✅ V55: Stratégie de confluence par SCORE CUMULATIF (et non plus par
+    filtres ET stricts). Chaque critère apporte des points ; le signal est
+    émis si le score total dépasse un seuil, même si un critère isolé
+    n'est pas parfait. C'est la méthode utilisée par la majorité des
+    systèmes de confluence professionnels — empiler des conditions ET
+    strictes fait chuter la probabilité combinée de façon exponentielle
+    (ex: 6 conditions à 70% de chance chacune = 12% de chance qu'elles
+    soient TOUTES vraies en même temps), alors qu'un score cumulatif
+    reste sélectif sans devenir statistiquement quasi impossible.
+
+    Logge un diagnostic précis à chaque rejet (V55-DEBUG) pour identifier
+    immédiatement quel(s) critère(s) manquent si le volume de signaux
+    reste insuffisant.
     """
     c1h = obtenir_donnees_deriv(symbole, 3600)
     c15 = obtenir_donnees_deriv(symbole, 900)
     if not c1h or len(c1h) < 60 or not c15 or len(c15) < 30:
+        print(f"[DEBUG-TP] {symbole} REJET: données insuffisantes "
+              f"(c1h={len(c1h) if c1h else 0}, c15={len(c15) if c15 else 0})", flush=True)
         return None
 
     try:
@@ -1124,91 +1135,113 @@ def analyser_trend_pullback_confluence(symbole):
         } for c in c15])
 
         px = float(df15['close'].iloc[-1])
+        score = 0.0
 
-        # ── 1. TENDANCE MACRO (H1) ──────────────────────────────────────
+        # ── 1. TENDANCE MACRO (H1) — score progressif, pas de coupure dure ─
         ema21_h1 = _ema(df1h['close'], 21)
         ema55_h1 = _ema(df1h['close'], 55)
         adx_h1   = calculer_adx(df1h)
-
-        if adx_h1 < 18:
-            return None  # marché sans direction claire — on ne force rien
-
         tendance_bull = ema21_h1.iloc[-2] > ema55_h1.iloc[-2]
         direction = "BULL" if tendance_bull else "BEAR"
+        score_tendance = min(20, max(0, (adx_h1 - 12) * 1.3))
+        score += score_tendance
 
-        # ── 2. STRUCTURE (H1) ────────────────────────────────────────────
+        # ── 2. STRUCTURE (H1) — score progressif ─────────────────────────
         structure_score = evaluer_structure_marche(df1h)
-        if structure_score < 45:
-            return None  # structure trop confuse pour trader dans un sens
+        score_structure = min(15, max(0, (structure_score - 35) * 0.3))
+        score += score_structure
 
-        # ── 3. PULLBACK vers une zone de valeur reconnue ────────────────
-        # ✅ V54: une entrée est désormais valide si le prix est proche
-        # de N'IMPORTE LAQUELLE des zones suivantes (pas seulement l'EMA21):
-        #   • EMA21 M15 (moyenne dynamique)
-        #   • Un Order Block H1 dans le bon sens (zone institutionnelle)
-        #   • Un niveau de Support/Résistance H1 validé (≥2 touches)
-        # Le score de confluence augmente si plusieurs zones se recoupent.
+        # ── 3. ZONE DE PULLBACK — EMA21 M15 / Order Block / S-R clé ─────
+        # ✅ V55: tolérances élargies (EMA 0.6%→1.0%, S/R 0.25%→0.4%,
+        # marge OB 25%→40%). Une zone reste OBLIGATOIRE (on ne veut pas
+        # entrer en pleine impulsion sans aucun retour), mais la proximité
+        # requise est nettement plus réaliste.
         ema21_m15 = _ema(df15['close'], 21)
         val_zone  = float(ema21_m15.iloc[-2])
         distance_ema_pct = abs(px - val_zone) / px if px else 1
-        TOLERANCE_EMA = 0.006  # 0.6%
+        TOLERANCE_EMA = 0.010
 
         obs_bull, obs_bear = detecter_order_blocks(df1h)
         niveaux_cles = detecter_niveaux_cles(df1h)
-        TOLERANCE_NIVEAU = 0.0025  # 0.25% autour d'un niveau S/R
+        TOLERANCE_NIVEAU = 0.004
 
         zones_touchees = []
+        score_zone = 0.0
 
-        if abs(distance_ema_pct) <= TOLERANCE_EMA:
+        if distance_ema_pct <= TOLERANCE_EMA:
             zones_touchees.append("EMA21 M15")
+            score_zone += max(5, 15 * (1 - distance_ema_pct / TOLERANCE_EMA))
 
         ob_pertinent = None
-        if direction == "BULL":
-            for bottom, top in obs_bull:
-                marge = (top - bottom) * 0.25
-                if (bottom - marge) <= px <= (top + marge):
-                    zones_touchees.append("Order Block haussier")
-                    ob_pertinent = (bottom, top)
-                    break
-        else:
-            for bottom, top in obs_bear:
-                marge = (top - bottom) * 0.25
-                if (bottom - marge) <= px <= (top + marge):
-                    zones_touchees.append("Order Block baissier")
-                    ob_pertinent = (bottom, top)
-                    break
+        obs_list = obs_bull if direction == "BULL" else obs_bear
+        for bottom, top in obs_list:
+            marge = (top - bottom) * 0.4
+            if (bottom - marge) <= px <= (top + marge):
+                zones_touchees.append(f"Order Block {'haussier' if direction=='BULL' else 'baissier'}")
+                ob_pertinent = (bottom, top)
+                score_zone += 15
+                break
 
         niveau_pertinent = None
         for niveau in niveaux_cles:
             if abs(px - niveau) / px < TOLERANCE_NIVEAU:
                 zones_touchees.append("Support/Résistance clé")
                 niveau_pertinent = niveau
+                score_zone += 12
                 break
 
         if not zones_touchees:
-            return None  # aucune zone de valeur reconnue à proximité
+            print(f"[DEBUG-TP] {symbole} REJET: aucune zone de pullback proche "
+                  f"(dist EMA21={distance_ema_pct*100:.2f}%, tolérance={TOLERANCE_EMA*100:.1f}%, "
+                  f"{len(obs_list)} OB détectés, {len(niveaux_cles)} niveaux clés détectés)", flush=True)
+            return None
 
-        # ── 4. MOMENTUM SAIN (ni extrême, ni plat) ──────────────────────
+        score += min(25, score_zone)
+
+        # ── 4. MOMENTUM — score progressif (pas de coupure dure) ────────
         try:
             rsi_series = ta.momentum.RSIIndicator(close=df15["close"], window=14).rsi()
             rsi_val = float(rsi_series.iloc[-2])
         except Exception:
-            return None
-        if not (35 <= rsi_val <= 65):
-            return None
+            rsi_val = 50.0
+
+        score_rsi = 15 if 30 <= rsi_val <= 70 else (8 if 20 <= rsi_val <= 80 else 0)
+        score += score_rsi
 
         macd_line, macd_signal, macd_hist = calculer_macd_signal(df15)
         momentum_ok = (macd_hist > 0) if direction == "BULL" else (macd_hist < 0)
-        if not momentum_ok:
-            return None
+        score_macd = 10 if momentum_ok else 0
+        score += score_macd
 
-        # ── 5. DÉCLENCHEUR D'ENTRÉE (bougie de confirmation M15) ────────
+        # ── 5. DÉCLENCHEUR D'ENTRÉE — pattern fort OU bougie directionnelle
+        # simple en secours (score plus faible mais n'exclut pas le signal) ─
         pattern, _ = detecter_chandeliers_pdf(df15)
         patterns_valides_bull = ("PIN_BULL", "ENGULFING_BULL", "MARUBOZU_BULL")
         patterns_valides_bear = ("PIN_BEAR", "ENGULFING_BEAR", "MARUBOZU_BEAR")
-        if direction == "BULL" and pattern not in patterns_valides_bull:
+        bougie_signal = df15.iloc[-2]
+        corps_directionnel = (bougie_signal['close'] > bougie_signal['open']) if direction == "BULL" \
+                             else (bougie_signal['close'] < bougie_signal['open'])
+
+        if (direction == "BULL" and pattern in patterns_valides_bull) or \
+           (direction == "BEAR" and pattern in patterns_valides_bear):
+            score_pattern = 20
+        elif corps_directionnel:
+            score_pattern = 8
+            if pattern == "NONE":
+                pattern = "BOUGIE_DIRECTIONNELLE"
+        else:
+            print(f"[DEBUG-TP] {symbole} REJET: bougie de signal contraire à la direction "
+                  f"({direction}, pattern={pattern})", flush=True)
             return None
-        if direction == "BEAR" and pattern not in patterns_valides_bear:
+
+        score += score_pattern
+
+        # ── SCORE MINIMUM POUR ÉMETTRE UN SIGNAL ────────────────────────
+        SEUIL_SCORE_CONFLUENCE = 45  # sur ~100 max, ajustable ici si besoin
+        if score < SEUIL_SCORE_CONFLUENCE:
+            print(f"[DEBUG-TP] {symbole} REJET: score confluence {score:.1f} < seuil {SEUIL_SCORE_CONFLUENCE} "
+                  f"(tendance={score_tendance:.1f} structure={score_structure:.1f} "
+                  f"zone={score_zone:.1f} rsi={score_rsi} macd={score_macd} pattern={score_pattern})", flush=True)
             return None
 
         # ── 6. RISQUE BASÉ SUR L'ATR + CIBLE OBJECTIVE (PDH/PDL si dispo) ─
@@ -1216,77 +1249,65 @@ def analyser_trend_pullback_confluence(symbole):
         if atr15 <= 0:
             return None
 
-        bougie_signal = df15.iloc[-2]
-        cpr = calculer_cpr_journalier(symbole)  # sert uniquement de référence de cible, plus de filtre d'entrée
+        cpr = calculer_cpr_journalier(symbole)  # référence de cible, plus de filtre d'entrée
 
-        # ✅ V54: si un Order Block pertinent a été identifié, son bord
-        # externe est une référence de SL plus précise (structurelle) que
-        # l'ATR seul — on prend le plus prudent des deux (jamais moins
-        # sécurisé que l'ATR, potentiellement plus serré s'il est cohérent).
         if direction == "BULL":
-            signal = "BUY"
+            signal_dir = "BUY"
             sl_structure = float(bougie_signal['low']) - (atr15 * 0.15)
             sl_atr       = px - (atr15 * 1.2)
             sl_candidats = [sl_structure, sl_atr]
             if ob_pertinent:
                 sl_candidats.append(ob_pertinent[0] - (atr15 * 0.1))
-            sl = min(sl_candidats)  # le plus prudent (le plus bas)
+            sl = min(sl_candidats)
             distance_risque = px - sl
             if distance_risque <= 0:
                 return None
-            cible_objective = cpr["PDH"] if cpr and cpr["PDH"] > px else px + (distance_risque * 2.2)
-            tp_final = max(cible_objective, px + (distance_risque * 1.6))
+            cible_objective = cpr["PDH"] if cpr and cpr["PDH"] > px else px + (distance_risque * 2.0)
+            tp_final = max(cible_objective, px + (distance_risque * 1.4))
             tp1 = px + (distance_risque * 1.0)
         else:
-            signal = "SELL"
+            signal_dir = "SELL"
             sl_structure = float(bougie_signal['high']) + (atr15 * 0.15)
             sl_atr       = px + (atr15 * 1.2)
             sl_candidats = [sl_structure, sl_atr]
             if ob_pertinent:
                 sl_candidats.append(ob_pertinent[1] + (atr15 * 0.1))
-            sl = max(sl_candidats)  # le plus prudent (le plus haut)
+            sl = max(sl_candidats)
             distance_risque = sl - px
             if distance_risque <= 0:
                 return None
-            cible_objective = cpr["PDL"] if cpr and cpr["PDL"] < px else px - (distance_risque * 2.2)
-            tp_final = min(cible_objective, px - (distance_risque * 1.6))
+            cible_objective = cpr["PDL"] if cpr and cpr["PDL"] < px else px - (distance_risque * 2.0)
+            tp_final = min(cible_objective, px - (distance_risque * 1.4))
             tp1 = px - (distance_risque * 1.0)
 
         risque = abs(px - sl)
         rr = abs(tp_final - px) / risque if risque > 0 else 0
-        if rr < 1.6:
+        if rr < 1.4:  # ✅ V55: 1.6 → 1.4, cohérent avec le score déjà filtrant
+            print(f"[DEBUG-TP] {symbole} REJET: R/R {rr:.2f} < 1.4 (score confluence "
+                  f"pourtant OK à {score:.1f})", flush=True)
             return None
 
-        # ── Score de confluence (informatif — la validation finale reste
-        # le moteur IA + Groq, inchangés) ───────────────────────────────
-        score_confluence = 55
-        score_confluence += min(15, (adx_h1 - 18) * 1.0)            # tendance plus forte = mieux
-        score_confluence += min(10, (structure_score - 45) * 0.15)  # structure plus nette = mieux
-        score_confluence += 8 if pattern.startswith("ENGULFING") else 4  # engulfing = confirmation plus franche
-        # ✅ V54: bonus de confluence par zone reconnue — plusieurs zones
-        # qui se recoupent au même endroit = signal statistiquement plus
-        # fiable qu'une seule zone isolée.
-        score_confluence += 6 * len(zones_touchees)
-        if len(zones_touchees) >= 2:
-            score_confluence += 8  # bonus supplémentaire pour vraie confluence multi-zones
-        score_confluence = round(min(97, score_confluence), 1)
-
+        confiance = int(min(97, round(score)))
         zones_txt = " + ".join(zones_touchees)
 
+        print(f"[DEBUG-TP] {symbole} ✅ SIGNAL ÉMIS — score={score:.1f} direction={direction} "
+              f"zones={zones_txt} pattern={pattern} rr={rr:.2f}", flush=True)
+
         return {
-            "action": "🟢 ACHAT (BUY)" if signal == "BUY" else "🔴 VENTE (SELL)",
+            "action": "🟢 ACHAT (BUY)" if signal_dir == "BUY" else "🔴 VENTE (SELL)",
             "tendance": direction, "force": f"ADX {round(adx_h1,1)} · Structure {structure_score}%",
-            "msg": f"Pullback sur {zones_txt} + {pattern.replace('_',' ')} (confluence tendance H1)",
+            "msg": f"Pullback sur {zones_txt} + {pattern.replace('_',' ')} (score confluence {int(score)})",
             "sl": round(sl,5), "tp1": round(tp1,5), "tp": round(tp_final,5),
             "rr": round(rr,2), "px": round(px,5),
-            "strategie": 1, "confiance": int(score_confluence),
+            "strategie": 1, "confiance": confiance,
             "label": "TREND PULLBACK & CONFLUENCE",
             "rsi_value": round(rsi_val,1), "adx_value": round(adx_h1,1),
             "zones_confluence": zones_touchees,
             "order_block": ob_pertinent, "niveau_cle": niveau_pertinent,
+            "score_confluence_brut": round(score,1),
         }
     except Exception as e:
-        print(f"[TrendPullback/{symbole}] {e}", flush=True)
+        print(f"[TrendPullback/{symbole}] EXCEPTION: {type(e).__name__}: {e}", flush=True)
         return None
 
 # ------------------------------------------
@@ -2825,7 +2846,7 @@ def scanner_marche_auto():
                     ligne_risque_ia = f"🛡️ {gr.get('note','')}\n" if gr.get("note") else ""
 
                     txt = (
-                        f"💼 *TERMINAL PRIME V54*\n"
+                        f"💼 *TERMINAL PRIME V55*\n"
                         f"{nom}  {dir_}\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"🎯 Stratégie : *{res['label']}*\n"
@@ -3138,7 +3159,7 @@ def bienvenue(message):
         trade_info = f"\n🟠 *TRADE ACTIF:* {t['symbol']} {t['direction']} @ {t['entry_price']}"
 
     bot.send_message(uid,
-        f"💼 *TERMINAL PRIME V54* — ANALYSTE IA MULTI-MODULES (GROQ)\n"
+        f"💼 *TERMINAL PRIME V55* — ANALYSTE IA MULTI-MODULES (GROQ)\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"Stratégie unique par confluence, validée par IA\n"
         f"🎯 Scan exclusif : 🥇 Gold · 🥈 Argent · 🔥 Volatility\n"
@@ -3395,6 +3416,6 @@ if __name__ == "__main__":
     Thread(target=monitorer_trades_actifs,         daemon=True).start()
     Thread(target=envoyer_rapports_quotidiens_auto,daemon=True).start()
     Thread(target=watchdog_trades_bloques,         daemon=True).start()
-    print("💼 TERMINAL PRIME V54 — ANALYSTE IA MULTI-MODULES (GROQ) ACTIF "
+    print("💼 TERMINAL PRIME V55 — ANALYSTE IA MULTI-MODULES (GROQ) ACTIF "
           "(3 stratégies indépendantes assouplies, contexte/faux-signaux/multi-TF/risque, Groq, scanner parallèle, watchdog)", flush=True)
     bot.infinity_polling()
