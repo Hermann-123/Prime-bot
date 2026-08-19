@@ -1,63 +1,10 @@
-"""
-╔════════════════════════════════════════════════════════════════════════════╗
-║   TERMINAL PRIME V51 — GROQ (MODÈLE CORRIGÉ) + SEUILS DESSERRÉS           ║
-║                                                                            ║
-║  Base V50 (Groq: llama-3.1-70b-versatile → llama-3.1-8b-instant, seul    ║
-║  modèle confirmé fonctionnel via /testgroq) + AJUSTEMENTS V51:            ║
-║                                                                            ║
-║   • Seuil d'acceptation calcul déterministe : 85% → 78%                  ║
-║   • Seuil de veto Groq : 40% → 32%                                       ║
-║   • R:R minimum CPR Pullback & Rejection : 1.5 → 1.3                     ║
-║   Objectif: augmenter le volume de signaux quotidiens sans changer        ║
-║   l'architecture ni la logique interne des stratégies. Tous ces seuils   ║
-║   restent ajustables en direct via /iaconfig et sans redéploiement.      ║
-║                                                                            ║
-║  🤖 PRINCIPE STRICT RESPECTÉ (inchangé depuis V48):                       ║
-║   • Les stratégies (CPR/Open Drive/RSI) restent LA fondation du bot,      ║
-║     RIGOUREUSEMENT INCHANGÉES, totalement indépendantes entre elles.      ║
-║   • Le calcul déterministe reste le véritable cerveau — l'IA (Groq)       ║
-║     n'intervient qu'après lui et ne peut jamais reverser un rejet.        ║
-║                                                                            ║
-║  🌍 MODULE CONTEXTE MARCHÉ (analyser_contexte_marche): tendance haussière/║
-║     baissière/range, volatilité forte/faible, consolidation, proximité   ║
-║     d'une cassure — ajuste le score du calcul par un facteur borné.      ║
-║                                                                            ║
-║  🚨 MODULE DÉTECTION FAUX SIGNAUX (detecter_faux_signal): cassure sans   ║
-║     élan, mouvement épuisé, divergence RSI, mèche de retournement —      ║
-║     applique une pénalité soustractive plafonnée au score.               ║
-║                                                                            ║
-║  ⏱️ MODULE MULTI-TIMEFRAME (analyser_coherence_multi_tf): compare M1/M5/ ║
-║     M15/H1, pénalise un signal contraire à une unité de temps supérieure.║
-║                                                                            ║
-║  🛡️ MODULE GESTION INTELLIGENTE DU RISQUE (optimiser_gestion_risque):    ║
-║     affine le SL selon l'ATR réel, toujours borné à ±15% du niveau       ║
-║     déjà fixé par la stratégie — ne peut jamais élargir le risque.       ║
-║                                                                            ║
-║  🔮 GROQ enrichi: reçoit désormais le dossier complet (contexte,         ║
-║     alertes faux-signal, cohérence multi-TF, risque optimisé) et rend    ║
-║     un verdict structuré (confirmer/déconseiller + explication).         ║
-║                                                                            ║
-║  📚 APPRENTISSAGE ENRICHI (ia_enregistrer_resultat): actif, stratégie,   ║
-║     timeframe, heure, score déterministe, avis Groq, SL/TP, résultat,  ║
-║     drawdown, durée, contexte marché — tous les champs demandés.         ║
-║     Statistiques disponibles via /iastats [strategie|actif|score|heure|  ║
-║     groq|contexte].                                                      ║
-║                                                                            ║
-║  ✅ INFRASTRUCTURE V44/V46/V48 CONSERVÉE INTÉGRALEMENT (zéro régression):║
-║   Accès VIP, /Volatility granulaire, killzones, watchdog anti-blocage,   ║
-║   scanner parallèle, revalidation prix/R:R au clic, TP partiel           ║
-║   85%+breakeven+trailing, rapports quotidiens, /risk /rapport /pause     ║
-║   /resume /debloquer /status /historique /iaconfig /iastats.             ║
-╚════════════════════════════════════════════════════════════════════════════╝
-"""
-
 import os
+import sys
 import datetime
 import random
 import time
 import string
 import json
-import math
 import websocket
 import pandas as pd
 import ta
@@ -65,3357 +12,715 @@ import requests
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from flask import Flask
-from threading import Thread, Lock
-from enum import Enum
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Thread, Timer
 
 # ==========================================
-# CONFIGURATION
+# CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAEdg2z5IxXgLn1mf2QeEJoZEl3Rf1LVZmo"
+TELEGRAM_TOKEN = "8658287331:AAEn8rHopf5EHMApJP_wr86PObHj7K6m0mU"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-ADMIN_ID = 5968288964
-CAPITAL_ACTUEL = 40650
+
+ADMIN_ID = 5968288964 
+CAPITAL_ACTUEL = 40650 
 FMP_API_KEY = os.environ.get("FMP_API_KEY", "D0srw6sB3otYTc00UdBE9otPIbhkKV8X")
 
 # ==========================================
-# RISK MANAGEMENT — CONFIGURATION GLOBALE
+# VARIABLES D'ÉTAT ET ROUTAGE
 # ==========================================
 
-RISK_CONFIG = {
-    "risk_per_trade_pct": 1.0,        # % du capital risqué par trade
-    "daily_loss_limit_pct": 5.0,      # Stop journalier si perte cumulée atteint ce %
-    "max_consecutive_losses": 3,      # Pause auto après N pertes d'affilée
-    "pause_duration_minutes": 120,    # Durée de la pause anti-tilt
-    "partial_tp_ratio": 0.85,         # 85% de la position fermée au TP1 (technique vidéo)
-    "breakeven_buffer_pct": 0.0005,   # Petit buffer au-dessus du prix d'entrée pour le BE
-    "trailing_stop_activation_rr": 1.0,  # Active le trailing dès que prix atteint 1R après BE
-    "trailing_stop_distance_pct": 0.003, # Distance du trailing stop (0.3%)
-    "max_trades_per_day": 8,          # Limite de trades par jour (évite sur-trading)
-    "max_trade_age_hours": 12,        # ✅ V44: watchdog — force-clôture si un trade traîne trop longtemps
-    "signal_validity_seconds": 45,    # ✅ V44: fenêtre de validité d'un signal (réduite de 90s à 45s)
-    "max_rr_degradation_pct": 40,     # ✅ V44: rejette l'entrée si le R/R restant a chuté de plus de 40%
-}
-
-# ==========================================
-# ÉTATS DE TRADE
-# ==========================================
-
-class TradeState(Enum):
-    SIGNAL_SENT     = "SIGNAL_ENVOYÉ"
-    TRADE_OPEN      = "TRADE_OUVERT"
-    TRADE_PARTIAL   = "TP1_PARTIEL_BE"     # 85% fermé, reste en breakeven/trailing
-    TRADE_WIN       = "GAGNÉ"
-    TRADE_LOSS      = "PERDU"
-    CANCELLED       = "ANNULÉ"
-
-# ==========================================
-# LISTES DE PAIRES
-# ==========================================
-
-VOLATILE_PAIRS  = ["V10","V25","V50","V75","V100"]
-COMMODITY_PAIRS = ["XAUUSD","XAGUSD"]
-FOREX_PAIRS     = ["AUDUSD","CADJPY","CHFJPY","EURJPY","USDCAD","AUDJPY",
-                   "EURAUD","EURUSD","AUDCAD","USDCHF","CADCHF","EURCHF",
-                   "USDJPY","GBPUSD"]
-
-ELITE_PAIRS_MT5 = VOLATILE_PAIRS + COMMODITY_PAIRS
-ALL_PAIRS       = VOLATILE_PAIRS + COMMODITY_PAIRS + FOREX_PAIRS
-
-NOMS_AFFICHAGE = {
-    "XAUUSD":"🥇 GOLD","XAGUSD":"🥈 ARGENT",
-    "V10":"🔥 V10","V25":"🔥 V25","V50":"🔥 V50",
-    "V75":"⚡ V75","V100":"💥 V100",
-}
-
-# ==========================================
-# VARIABLES D'ÉTAT GLOBALES
-# ==========================================
-
-user_prefs           = {}
-plateforme_trading   = {}
-utilisateurs_actifs  = set()
+user_prefs = {}
+trades_en_cours = {}
+utilisateurs_actifs = set()
 derniere_alerte_auto = {}
-signaux_cache        = {}
+cooldown_actifs = {} # Le "Silencieux" pour bloquer les paires perdantes
 
-utilisateurs_autorises = {ADMIN_ID: "LIFETIME"}
-cles_generees           = {}
+utilisateurs_autorises = {
+    ADMIN_ID: "LIFETIME"
+}
+cles_generees = {}
 
-# Contrôle granulaire des paires Volatility
-volatility_pairs_active = {
-    "V10": True, "V25": True, "V50": True, "V75": True, "V100": True,
+stats_journee = {
+    'ITM': 0, 
+    'OTM': 0, 
+    'details': []
 }
 
-# Gestion des trades (V38 étendu)
-trades_actifs     = {}   # uid -> dict trade complet
-trades_historique = {}   # uid -> [trades fermés]
-prix_broker       = {}   # cache derniers prix
+bilan_envoye_aujourdhui = False
+transition_nuit_envoyee = False
+transition_jour_envoyee = False
 
-pnl_total  = {}
-win_count  = {}
-loss_count = {}
-
-# Contexte marché mémorisé (cache 2 min)
-contexte_marche_cache = {}
-
-# Risk Management — état par utilisateur
-daily_stats = {}   # uid -> {"date":..., "pnl":0, "trades":0, "consecutive_losses":0,
-                    #         "paused_until": None, "best_trade":0, "worst_trade":0}
-
-lock_trade = Lock()
+CRYPTO_PAIRS = ["BTCUSD", "ETHUSD", "LTCUSD"]
+FOREX_PAIRS = [
+    "AUDUSD", "CADJPY", "CHFJPY", "EURJPY", "USDCAD", 
+    "AUDJPY", "EURAUD", "EURUSD", "AUDCAD", "USDCHF", 
+    "CADCHF", "EURCHF", "USDJPY"
+]
 
 # ==========================================
-# KEEP ALIVE
+# SERVEUR WEB (KEEP ALIVE RENDER)
 # ==========================================
 
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime V46 — Master Class Edition"
+    return "Terminal Prime VIP : Édition GOD MODE DYNAMIQUE (V8 — Confluence)"
 
 def run():
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
-    Thread(target=run, daemon=True).start()
+    t = Thread(target=run)
+    t.start()
 
 # ==========================================
-# UTILITAIRES PRIX (base V38)
+# SYSTÈME DE GESTION DES ACCÈS VIP
 # ==========================================
 
-def prefixer_symbole(s):
-    mapping = {"XAUUSD":"frxXAUUSD","XAGUSD":"frxXAGUSD"}
-    if s in mapping:
-        return mapping[s]
-    if s in VOLATILE_PAIRS:
-        return f"R_{s.replace('V','')}"
-    return f"frx{s}"
-
-# ✅ V44 NEW: cache court (TTL) des bougies pour éviter de re-télécharger les
-# mêmes données plusieurs fois pendant un même cycle de scan (detecter_contexte
-# puis la stratégie choisie demandaient chacune les mêmes bougies H1/H4/M5,
-# doublant inutilement la latence réseau — cause principale des signaux en retard).
-_candles_cache = {}
-_candles_cache_lock = Lock()
-CANDLES_CACHE_TTL = 20  # secondes — assez court pour rester réactif, assez long pour dédupliquer
-
-def _obtenir_donnees_deriv_reseau(symbole_brut, granularite=300):
-    """
-    Fonction réseau brute — timeouts réduits pour échouer plus vite vers le fallback.
-    ✅ V46 FIX #1: chaque bougie FMP recevait auparavant epoch=int(time.time()),
-       c'est-à-dire l'heure ACTUELLE pour TOUTES les bougies (peu importe leur
-       vraie date). Résultat: tout regroupement par date (ex: calcul du CPR
-       journalier) fusionnait 250 bougies en un seul jour et échouait
-       silencieusement. On parse maintenant le vrai champ "date" renvoyé par FMP.
-    ✅ V46 FIX #2: la granularité 900s (15 min) était silencieusement mappée
-       sur "4hour"/14400s aussi bien côté FMP que côté fallback Deriv.
-    """
-    if symbole_brut in ALL_PAIRS:
-        tf_map = {300: "5min", 900: "15min", 3600: "1hour"}
-        tf = tf_map.get(granularite, "4hour")
-        mapping_fmp = {"XAUUSD":"FOREX:XAUUSD","XAGUSD":"FOREX:XAGUSD"}
-        sym_fmp = mapping_fmp.get(symbole_brut, symbole_brut)
-        try:
-            url = (f"https://financialmodelingprep.com/api/v3/historical-chart/"
-                   f"{tf}/{sym_fmp}?apikey={FMP_API_KEY}")
-            res = requests.get(url, timeout=3).json()
-            if isinstance(res, list) and len(res) > 0:
-                bougies = []
-                for idx, b in enumerate(reversed(res[:250])):
-                    epoch_val = None
-                    date_str = b.get("date")
-                    if date_str:
-                        try:
-                            epoch_val = int(datetime.datetime.strptime(
-                                date_str, "%Y-%m-%d %H:%M:%S").timestamp())
-                        except (ValueError, TypeError):
-                            try:
-                                epoch_val = int(datetime.datetime.strptime(
-                                    date_str, "%Y-%m-%d").timestamp())
-                            except (ValueError, TypeError):
-                                epoch_val = None
-                    if epoch_val is None:
-                        # Fallback: approximation par index (préserve au moins un
-                        # étalement réaliste des dates plutôt qu'un timestamp unique)
-                        epoch_val = int(time.time()) - (250 - idx) * granularite
-                    bougies.append({
-                        "open":  float(b["open"]),
-                        "high":  float(b["high"]),
-                        "low":   float(b["low"]),
-                        "close": float(b["close"]),
-                        "epoch": epoch_val
-                    })
-                return bougies
-        except Exception as e:
-            print(f"[FMP Chart - {symbole_brut}] {e}", flush=True)
-
-    sym = prefixer_symbole(symbole_brut)
-    gran_valides = (60, 120, 180, 300, 600, 900, 1800, 3600, 7200, 14400, 28800, 86400)
-    gran_real = granularite if granularite in gran_valides else 14400
-    for _ in range(2):
-        ws = None
-        try:
-            ws = websocket.WebSocket()
-            ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=4)
-            ws.send(json.dumps({"ticks_history": sym, "end": "latest",
-                                "count": 250, "style": "candles",
-                                "granularity": gran_real}))
-            res = json.loads(ws.recv())
-            ws.close()
-            if "candles" in res and "error" not in res:
-                return res["candles"]
-        except:
-            try: ws.close()
-            except: pass
-            time.sleep(0.2)
-    return None
-
-def obtenir_donnees_deriv(symbole_brut, granularite=300):
-    """
-    ✅ V44: version cachée (TTL courte). Même signature, même comportement
-    logique, mais évite les appels réseau redondants dans un même cycle.
-    """
-    cle = (symbole_brut, granularite)
-    now = time.time()
-    with _candles_cache_lock:
-        cached = _candles_cache.get(cle)
-        if cached and (now - cached[0]) < CANDLES_CACHE_TTL:
-            return cached[1]
-
-    data = _obtenir_donnees_deriv_reseau(symbole_brut, granularite)
-
-    if data is not None:
-        with _candles_cache_lock:
-            _candles_cache[cle] = (now, data)
-    return data
-
-def obtenir_donnees_h4(symbole):
-    """Récupère des données 4H en agrégeant 4x les bougies H1 si l'API ne supporte pas 14400 directement"""
-    data = obtenir_donnees_deriv(symbole, 14400)
-    if data and len(data) > 20:
-        return data
-    # Fallback: agréger H1 par groupes de 4
-    h1 = obtenir_donnees_deriv(symbole, 3600)
-    if not h1 or len(h1) < 8:
-        return None
-    agg = []
-    for i in range(0, len(h1) - 3, 4):
-        chunk = h1[i:i+4]
-        agg.append({
-            "open":  float(chunk[0]["open"]),
-            "high":  max(float(c["high"]) for c in chunk),
-            "low":   min(float(c["low"])  for c in chunk),
-            "close": float(chunk[-1]["close"]),
-            "epoch": int(time.time())
-        })
-    return agg
-
-def obtenir_prix_broker_realtime(symbole):
-    try:
-        mapping_fmp = {"XAUUSD":"FOREX:XAUUSD","XAGUSD":"FOREX:XAGUSD"}
-        sym_fmp = mapping_fmp.get(symbole, symbole)
-        url = f"https://financialmodelingprep.com/api/v3/quote/{sym_fmp}?apikey={FMP_API_KEY}"
-        res = requests.get(url, timeout=3).json()
-        if isinstance(res, list) and len(res) > 0:
-            prix = float(res[0]["price"])
-            prix_broker[symbole] = {
-                "price": prix, "source": "FMP", "timestamp": time.time(),
-                "bid": float(res[0].get("bid", prix)),
-                "ask": float(res[0].get("ask", prix))
-            }
-            return prix
-    except Exception as e:
-        print(f"[FMP Real-time {symbole}] {e}", flush=True)
-
-    sym = prefixer_symbole(symbole)
-    for _ in range(2):
-        ws = None
-        try:
-            ws = websocket.WebSocket()
-            ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=3)
-            ws.send(json.dumps({"ticks": sym}))
-            res = json.loads(ws.recv())
-            ws.close()
-            if "tick" in res:
-                prix = float(res["tick"]["quote"])
-                prix_broker[symbole] = {"price": prix, "source": "Deriv",
-                                        "timestamp": time.time()}
-                return prix
-        except:
-            try: ws.close()
-            except: pass
-            time.sleep(0.5)
-    return None
-
-def valider_prix_avant_signal(symbole, prix_bot, tolerance=0.001):
-    prix_real = obtenir_prix_broker_realtime(symbole)
-    if not prix_real:
-        print(f"[Validation {symbole}] Impossible obtenir prix broker", flush=True)
-        return False
-    decalage = abs(prix_bot - prix_real) / prix_real
-    if decalage > tolerance:
-        print(f"[Validation {symbole}] ÉCART {decalage*100:.2f}% — REJETÉ", flush=True)
-        return False
-    return True
-
-# ==========================================
-# ✅ V43 NEW: GESTION DU RISQUE PROFESSIONNELLE
-# ==========================================
-
-def get_today_str():
-    return datetime.datetime.utcnow().strftime("%Y-%m-%d")
-
-def init_daily_stats(uid):
-    """Initialise ou réinitialise les stats du jour si on a changé de date"""
-    today = get_today_str()
-    if uid not in daily_stats or daily_stats[uid]["date"] != today:
-        daily_stats[uid] = {
-            "date": today, "pnl": 0.0, "trades": 0,
-            "wins": 0, "losses": 0,
-            "consecutive_losses": 0,
-            "paused_until": None,
-            "best_trade": 0.0, "worst_trade": 0.0,
-        }
-    return daily_stats[uid]
-
-def utilisateur_en_pause(uid):
-    """Vérifie si l'utilisateur est en pause anti-tilt"""
-    stats = init_daily_stats(uid)
-    if stats["paused_until"] and time.time() < stats["paused_until"]:
-        return True, stats["paused_until"]
-    return False, None
-
-def daily_loss_limit_atteinte(uid):
-    """Vérifie si la limite de perte journalière est atteinte"""
-    stats = init_daily_stats(uid)
-    limite = -(CAPITAL_ACTUEL * RISK_CONFIG["daily_loss_limit_pct"] / 100.0)
-    return stats["pnl"] <= limite
-
-def max_trades_jour_atteint(uid):
-    stats = init_daily_stats(uid)
-    return stats["trades"] >= RISK_CONFIG["max_trades_per_day"]
-
-def utilisateur_peut_trader(uid):
-    """
-    ✅ Circuit breaker complet:
-    - Limite de perte journalière
-    - Pause anti-tilt (pertes consécutives)
-    - Nombre max de trades par jour
-    Retourne (bool_peut_trader, raison_si_non)
-    """
-    stats = init_daily_stats(uid)
-
-    if daily_loss_limit_atteinte(uid):
-        return False, (f"🛑 Limite de perte journalière atteinte "
-                       f"({RISK_CONFIG['daily_loss_limit_pct']}% du capital). "
-                       f"Trading suspendu jusqu'à demain.")
-
-    en_pause, jusqua = utilisateur_en_pause(uid)
-    if en_pause:
-        minutes_restantes = int((jusqua - time.time()) / 60)
-        return False, (f"⏸️ Pause anti-tilt active après "
-                       f"{RISK_CONFIG['max_consecutive_losses']} pertes consécutives.\n"
-                       f"Reprise dans {minutes_restantes} minutes.")
-
-    if max_trades_jour_atteint(uid):
-        return False, (f"🛑 Limite de {RISK_CONFIG['max_trades_per_day']} trades/jour atteinte. "
-                       f"Reviens demain — la discipline fait les gagnants.")
-
-    return True, None
-
-def calculer_position_size(capital, risk_pct, prix_entree, prix_sl, symbole):
-    """
-    ✅ V43 NEW: Calcul RÉEL de la taille de position
-    Au lieu d'un montant fixe arbitraire, calcule selon:
-      - Le capital actuel
-      - Le % de risque accepté
-      - La distance réelle entre entrée et stop loss
-    Retourne le montant en argent risqué + un "lot factor" relatif pour affichage
-    """
-    montant_risque = capital * (risk_pct / 100.0)
-    distance_sl = abs(prix_entree - prix_sl)
-
-    if distance_sl <= 0:
-        return {"montant_risque": montant_risque, "lot_factor": 0, "distance_sl": 0}
-
-    # Lot factor = combien d'unités on peut se permettre pour respecter le risque
-    # (simplifié — sert de guide proportionnel, le lot exact dépend du broker/contract size)
-    lot_factor = montant_risque / distance_sl
-
-    return {
-        "montant_risque": round(montant_risque, 2),
-        "lot_factor": round(lot_factor, 4),
-        "distance_sl": round(distance_sl, 5),
-        "distance_sl_pct": round((distance_sl / prix_entree) * 100, 3) if prix_entree else 0
-    }
-
-def enregistrer_resultat_trade(uid, pnl, win, pnl_pour_bilan=None):
-    """
-    Met à jour les stats journalières + déclenche la pause anti-tilt si besoin.
-    pnl: portion à ajouter à stats["pnl"] (évite double-comptage si un TP
-         partiel avait déjà ajouté sa part avant cet appel).
-    pnl_pour_bilan: P&L TOTAL du trade (portion partielle + finale), utilisé
-         uniquement pour best_trade/worst_trade. Si absent, on utilise pnl.
-
-    ✅ V44 FIX: cette fonction plantait auparavant (TypeError) car appelée
-    avec pnl_pour_bilan= sans que le paramètre existe. Cela empêchait
-    `del trades_actifs[uid]` de s'exécuter dans fermer_trade_complet(),
-    bloquant l'utilisateur DÉFINITIVEMENT après son premier trade fermé
-    (plus aucun signal, plus aucune notification gagné/perdu).
-    """
-    stats = init_daily_stats(uid)
-    stats["pnl"]    += pnl
-    stats["trades"] += 1
-
-    valeur_bilan = pnl_pour_bilan if pnl_pour_bilan is not None else pnl
-
-    if win:
-        stats["wins"] += 1
-        stats["consecutive_losses"] = 0
-        win_count[uid] = win_count.get(uid, 0) + 1
-    else:
-        stats["losses"] += 1
-        stats["consecutive_losses"] += 1
-        loss_count[uid] = loss_count.get(uid, 0) + 1
-
-    if valeur_bilan > stats["best_trade"]:
-        stats["best_trade"] = valeur_bilan
-    if valeur_bilan < stats["worst_trade"]:
-        stats["worst_trade"] = valeur_bilan
-
-    # Déclenchement pause anti-tilt
-    if stats["consecutive_losses"] >= RISK_CONFIG["max_consecutive_losses"]:
-        stats["paused_until"] = time.time() + (RISK_CONFIG["pause_duration_minutes"] * 60)
-        print(f"[Risk] {uid} EN PAUSE anti-tilt ({stats['consecutive_losses']} pertes consécutives)", flush=True)
-
-    return stats
-
-# ==========================================
-# ✅ V43 NEW: PARTIAL TP 85% + BREAKEVEN + TRAILING STOP
-# (Technique exacte observée dans la Stratégie 4: "Prise de profits 85%
-#  puis Break Even")
-# ==========================================
-
-def create_trade_id():
-    return "TRD-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
-
-def ouvrir_trade(uid, symbole, direction, entry_price, sl, tp1, tp_final, strategy, confiance,
-                 label="SIGNAL", strategie_nom_ia="?", ia_score=None, gemini_score=None,
-                 contexte_marche=None):
-    """
-    Ouvre un trade avec gestion complète:
-      - Position sizing réel
-      - TP1 (objectif intermédiaire, 85% de la position)
-      - TP final (15% restant après passage en breakeven)
-
-    ✅ V48: paramètre strategie_nom_ia ("CPR"/"OPEN_DRIVE"/"RSI") ajouté —
-    mémorise quelle stratégie est à l'origine du trade, indispensable pour
-    que ia_enregistrer_resultat() puisse apprendre par (stratégie, symbole)
-    à la clôture.
-    ✅ V49: ia_score, gemini_score et contexte_marche mémorisés sur le trade
-    pour être transmis tels quels à ia_enregistrer_resultat() à la clôture
-    (apprentissage enrichi conforme à la demande).
-    """
-    trade_id = create_trade_id()
-    sizing = calculer_position_size(CAPITAL_ACTUEL, RISK_CONFIG["risk_per_trade_pct"],
-                                    entry_price, sl, symbole)
-
-    trades_actifs[uid] = {
-        "trade_id": trade_id, "symbol": symbole,
-        "direction": direction, "entry_price": entry_price,
-        "sl": sl, "sl_original": sl,
-        "tp1": tp1, "tp_final": tp_final,
-        "strategy": strategy, "confiance": confiance, "label": label,
-        "strategie_nom_ia": strategie_nom_ia,
-        "ia_score": ia_score,
-        "gemini_score": gemini_score,
-        "contexte_marche": contexte_marche,
-        "state": TradeState.TRADE_OPEN,
-        "timestamp_open": time.time(),
-        "exit_price": None, "exit_time": None, "pnl": None,
-        "partial_closed": False,
-        "partial_pnl": 0.0,
-        "breakeven_active": False,
-        "trailing_active": False,
-        "sizing": sizing,
-    }
-    print(f"[Trade Opened] {uid}: {trade_id} {symbole} {direction} @ {entry_price} "
-          f"(Risque: ${sizing['montant_risque']})", flush=True)
-    return trade_id, sizing
-
-def fermer_trade_complet(uid, exit_price, win):
-    """
-    Ferme totalement un trade et enregistre dans l'historique + stats journalières.
-
-    ✅ V44 FIX (protection définitive): tout le corps est protégé par
-    try/finally. Le retrait de trades_actifs[uid] est GARANTI même si une
-    erreur imprévue survient pendant le calcul — plus jamais un utilisateur
-    ne pourra rester bloqué "TRADE ACTIF EN COURS" pour toujours à cause
-    d'une exception. En cas d'erreur, on notifie quand même l'utilisateur
-    au lieu de rester silencieux.
-    """
-    with lock_trade:
-        if uid not in trades_actifs:
-            return None
-        trade    = trades_actifs[uid]
-        trade_id = trade["trade_id"]
-
-        try:
-            risque_initial = trade["sizing"]["montant_risque"]
-
-            # Si une fermeture partielle (85%) a déjà eu lieu, ce closing ne porte
-            # que sur les 15% restants — on proportionne le risque utilisé pour
-            # le calcul du P&L de cette portion finale.
-            portion_restante = (1 - RISK_CONFIG["partial_tp_ratio"]) if trade.get("partial_closed") else 1.0
-            risque_portion    = risque_initial * portion_restante
-
-            if win:
-                gain_ratio = abs(exit_price - trade["entry_price"]) / trade["sizing"]["distance_sl"] if trade["sizing"]["distance_sl"] > 0 else 1
-                pnl_final = risque_portion * gain_ratio
-            else:
-                pnl_final = -risque_portion
-
-            # P&L TOTAL réel du trade = portion déjà sécurisée (85%) + portion finale
-            pnl_trade_total = trade.get("partial_pnl", 0.0) + pnl_final
-
-            trade["state"]      = TradeState.TRADE_WIN if win else TradeState.TRADE_LOSS
-            trade["exit_price"] = exit_price
-            trade["exit_time"]  = time.time()
-            trade["pnl"]        = pnl_trade_total
-            duration_seconds     = trade["exit_time"] - trade["timestamp_open"]
-
-            if uid not in trades_historique:
-                trades_historique[uid] = []
-            trades_historique[uid].append({
-                "trade_id": trade_id, "symbol": trade["symbol"],
-                "direction": trade["direction"], "entry": trade["entry_price"],
-                "exit": exit_price, "pnl": pnl_trade_total, "duration": duration_seconds,
-                "win": win, "timestamp": trade["exit_time"], "label": trade.get("label","")
-            })
-
-            pnl_total[uid] = pnl_total.get(uid, 0) + pnl_final
-            enregistrer_resultat_trade(uid, pnl_final, win, pnl_pour_bilan=pnl_trade_total)
-
-            # ✅ V48/V49: auto-apprentissage IA — enregistre le résultat réel du
-            # trade avec tous les champs enrichis pour affiner les poids futurs
-            # de la stratégie concernée et alimenter les statistiques (/iastats).
-            try:
-                ia_enregistrer_resultat(
-                    symbol=trade["symbol"],
-                    strategie_nom=trade.get("strategie_nom_ia", "?"),
-                    # ✅ V49 FIX: utilise le vrai score du calcul déterministe
-                    # (variable selon le signal) plutôt que la confiance fixe
-                    # de la stratégie (85/90/80), qui ne reflétait pas le
-                    # verdict réel du moteur IA au moment du trade.
-                    score=trade.get("ia_score") if trade.get("ia_score") is not None else trade.get("confiance", 0),
-                    timeframe="H1",
-                    win=win,
-                    tp_atteint=win,
-                    sl_atteint=(not win),
-                    drawdown_pct=0,
-                    avis_ia_score=trade.get("ia_score"),
-                    gemini_score=trade.get("gemini_score"),
-                    sl=trade.get("sl_original"),
-                    tp=trade.get("tp_final"),
-                    duree_secondes=duration_seconds,
-                    contexte_marche=trade.get("contexte_marche"),
-                )
-            except Exception as e:
-                print(f"[IA Learning] Erreur enregistrement: {e}", flush=True)
-
-            print(f"[Trade Closed] {uid}: {trade_id} PnL final={pnl_final:.2f} | "
-                  f"PnL total trade={pnl_trade_total:.2f}", flush=True)
-            return {"trade_id": trade_id, "pnl": pnl_trade_total, "pnl_final_portion": pnl_final,
-                    "win": win, "duration": duration_seconds}
-
-        except Exception as e:
-            # ✅ Filet de sécurité: même en cas de bug imprévu, on notifie
-            # l'utilisateur au lieu de le laisser bloqué en silence.
-            print(f"[Trade Closed] ⚠️ ERREUR pendant la clôture de {uid}/{trade_id}: {e}", flush=True)
-            try:
-                bot.send_message(uid,
-                    f"⚠️ Trade {trade.get('symbol','?')} clôturé (erreur interne lors du calcul détaillé).\n"
-                    f"Consulte /historique pour vérifier. Le trading reprend normalement.",
-                    parse_mode="Markdown")
-            except Exception:
-                pass
-            return {"trade_id": trade_id, "pnl": 0.0, "pnl_final_portion": 0.0,
-                    "win": win, "duration": time.time() - trade.get("timestamp_open", time.time()),
-                    "erreur": True}
-
-        finally:
-            # GARANTIE ABSOLUE: l'utilisateur ne reste jamais bloqué, quoi qu'il arrive.
-            trades_actifs.pop(uid, None)
-
-def fermer_trade_partiel(uid, exit_price):
-    """
-    Ferme 85% de la position au TP1, déplace SL à breakeven pour les 15% restants
-    (Technique exacte de la Stratégie 4).
-    ✅ V44: protégé par lock + try/except (cohérence avec fermer_trade_complet).
-    """
-    with lock_trade:
-        if uid not in trades_actifs:
-            return None
-        trade = trades_actifs[uid]
-        if trade["partial_closed"]:
-            return None
-
-        try:
-            risque_initial = trade["sizing"]["montant_risque"]
-            ratio = RISK_CONFIG["partial_tp_ratio"]
-            gain_ratio = abs(exit_price - trade["entry_price"]) / trade["sizing"]["distance_sl"] if trade["sizing"]["distance_sl"] > 0 else 1
-            pnl_partiel = risque_initial * gain_ratio * ratio
-
-            trade["partial_closed"]   = True
-            trade["partial_pnl"]      = pnl_partiel
-            trade["breakeven_active"] = True
-            trade["state"]            = TradeState.TRADE_PARTIAL
-
-            # Déplacer le SL au point d'entrée (+ petit buffer pour couvrir les frais)
-            buffer = trade["entry_price"] * RISK_CONFIG["breakeven_buffer_pct"]
-            if trade["direction"] == "BUY":
-                trade["sl"] = trade["entry_price"] + buffer
-            else:
-                trade["sl"] = trade["entry_price"] - buffer
-
-            pnl_total[uid] = pnl_total.get(uid, 0) + pnl_partiel
-
-            # Le profit partiel alimente aussi le P&L du jour (circuit breaker + rapport)
-            stats = init_daily_stats(uid)
-            stats["pnl"] += pnl_partiel
-
-            print(f"[Partial TP] {uid}: {trade['trade_id']} 85% fermé (+{pnl_partiel:.2f}), "
-                  f"SL → Breakeven {trade['sl']:.5f}", flush=True)
-
-            return {"pnl_partiel": round(pnl_partiel, 2), "nouveau_sl": trade["sl"]}
-
-        except Exception as e:
-            print(f"[Partial TP] ⚠️ ERREUR pour {uid}: {e}", flush=True)
-            return None
-
-def appliquer_trailing_stop(uid, prix_current):
-    """
-    ✅ V43 NEW: Trailing stop actif uniquement APRÈS le passage en breakeven (15% restants)
-    Sécurise les gains progressivement sur la portion qui continue de courir
-    """
-    if uid not in trades_actifs:
-        return False
-    trade = trades_actifs[uid]
-    if not trade["breakeven_active"]:
-        return False
-
-    distance_trail = prix_current * RISK_CONFIG["trailing_stop_distance_pct"]
-
-    if trade["direction"] == "BUY":
-        nouveau_sl_potentiel = prix_current - distance_trail
-        if nouveau_sl_potentiel > trade["sl"]:
-            trade["sl"] = nouveau_sl_potentiel
-            trade["trailing_active"] = True
+def est_autorise(user_id):
+    if user_id == ADMIN_ID:
+        return True
+    if user_id in utilisateurs_autorises:
+        expiration = utilisateurs_autorises[user_id]
+        if expiration == "LIFETIME":
             return True
-    else:
-        nouveau_sl_potentiel = prix_current + distance_trail
-        if nouveau_sl_potentiel < trade["sl"]:
-            trade["sl"] = nouveau_sl_potentiel
-            trade["trailing_active"] = True
+        if datetime.datetime.now() < expiration:
             return True
+        else:
+            del utilisateurs_autorises[user_id]
+            try: bot.send_message(user_id, "⚠️ **ABONNEMENT EXPIRÉ** ⚠️\n\nVotre accès au Terminal Prime est terminé.", parse_mode="Markdown")
+            except: pass
+            return False
     return False
 
-def utilisateur_a_trade_actif(uid):
-    return uid in trades_actifs and trades_actifs[uid]["state"] in (
-        TradeState.TRADE_OPEN, TradeState.TRADE_PARTIAL
-    )
+def generer_cle():
+    caracteres = string.ascii_uppercase + string.digits
+    aleatoire = ''.join(random.choice(caracteres) for _ in range(8))
+    return f"PRIME-{aleatoire}"
+
+def generer_jauge(pourcentage):
+    if pourcentage >= 99:
+        return "[██████████] 👑 MAX"
+    pleins = int(pourcentage / 10)
+    vides = 10 - pleins
+    return f"[{'█' * pleins}{'░' * vides}] {pourcentage}%"
 
 # ==========================================
-# ✅ V44 NEW: WATCHDOG ANTI-BLOCAGE
-# Filet de sécurité ultime: si jamais un trade reste bloqué anormalement
-# longtemps (bug futur, état incohérent, etc.), on le force-ferme et on
-# prévient l'utilisateur — plus JAMAIS de blocage silencieux permanent.
+# NOUVELLES FONCTIONS PRO (NEWS & H1)
 # ==========================================
 
-def watchdog_trades_bloques():
-    while True:
+def est_heure_de_news_dynamique():
+    if not FMP_API_KEY: return False
+    try:
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        url = f"https://financialmodelingprep.com/api/v3/economic_calendar?from={today}&to={today}&apikey={FMP_API_KEY}"
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            events = response.json()
+            maintenant = datetime.datetime.utcnow()
+            for event in events:
+                if event.get('impact') == 'High':
+                    e_time = datetime.datetime.strptime(event['date'], "%Y-%m-%d %H:%M:%S")
+                    diff = abs((maintenant - e_time).total_seconds() / 60)
+                    if diff <= 30: 
+                        return True
+    except: pass
+    return False
+
+def obtenir_tendance_H1(symbole_brut):
+    symbole = prefixer_symbole(symbole_brut)
+    try:
+        ws = websocket.WebSocket()
+        ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=5)
+        req = {"ticks_history": symbole, "end": "latest", "count": 50, "style": "candles", "granularity": 3600}
+        ws.send(json.dumps(req))
+        res = json.loads(ws.recv())
+        ws.close()
+        if "candles" in res and len(res["candles"]) > 20:
+            df = pd.DataFrame(res['candles'])
+            ema20 = ta.trend.EMAIndicator(close=df['close'].astype(float), window=20).ema_indicator()
+            return "UP" if float(df['close'].iloc[-1]) > ema20.iloc[-1] else "DOWN"
+    except: pass
+    return "NEUTRE"
+
+# ==========================================
+# ROUTEUR API DERIV (FOREX VS CRYPTO)
+# ==========================================
+
+def prefixer_symbole(symbole_brut):
+    if symbole_brut in CRYPTO_PAIRS:
+        return f"cry{symbole_brut}"
+    return f"frx{symbole_brut}"
+
+def obtenir_donnees_deriv(symbole_brut):
+    symbole = prefixer_symbole(symbole_brut)
+    for tentative in range(3):
         try:
-            time.sleep(300)  # vérifie toutes les 5 minutes
-            maintenant = time.time()
-            for uid in list(trades_actifs.keys()):
-                trade = trades_actifs.get(uid)
-                if not trade:
-                    continue
+            ws = websocket.WebSocket()
+            ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=5)
+            req = {"ticks_history": symbole, "end": "latest", "count": 250, "style": "candles", "granularity": 300}
+            ws.send(json.dumps(req))
+            history = json.loads(ws.recv())
+            ws.close()
+            if "error" not in history and "candles" in history:
+                return history['candles']
+        except:
+            time.sleep(1)
+            continue
+    return None
 
-                age_heures = (maintenant - trade.get("timestamp_open", maintenant)) / 3600
-
-                # Cas 1: trade dans un état incohérent (ni OPEN ni PARTIAL) → nettoyage immédiat
-                if trade["state"] not in (TradeState.TRADE_OPEN, TradeState.TRADE_PARTIAL):
-                    print(f"[Watchdog] {uid} état incohérent ({trade['state']}) → nettoyage forcé", flush=True)
-                    trades_actifs.pop(uid, None)
-                    try:
-                        bot.send_message(uid,
-                            "🔧 Un trade bloqué a été nettoyé automatiquement. "
-                            "Tu peux recevoir de nouveaux signaux normalement.",
-                            parse_mode="Markdown")
-                    except Exception:
-                        pass
-                    continue
-
-                # Cas 2: trade ouvert depuis trop longtemps → force-clôture au marché
-                if age_heures >= RISK_CONFIG["max_trade_age_hours"]:
-                    prix_current = obtenir_prix_broker_realtime(trade["symbol"])
-                    if prix_current:
-                        # Déterminer gagnant/perdant selon la position actuelle du prix
-                        # par rapport au prix d'entrée (pas de raccourci arbitraire)
-                        if trade["direction"] == "BUY":
-                            win_watchdog = prix_current >= trade["entry_price"]
-                        else:
-                            win_watchdog = prix_current <= trade["entry_price"]
-
-                        print(f"[Watchdog] {uid} trade {trade['trade_id']} ouvert depuis "
-                              f"{age_heures:.1f}h → clôture forcée", flush=True)
-                        fermer_trade_complet(uid, prix_current, win=win_watchdog)
-                        try:
-                            bot.send_message(uid,
-                                f"⏱️ Trade {trade['symbol']} clôturé automatiquement après "
-                                f"{RISK_CONFIG['max_trade_age_hours']}h (sécurité anti-blocage).\n"
-                                f"Consulte /historique pour le détail.",
-                                parse_mode="Markdown")
-                        except Exception:
-                            pass
-        except Exception as e:
-            print(f"[Watchdog] {e}", flush=True)
-
-
-# ==========================================
-
-PAIRES_SESSION_ASIE    = ["AUDJPY","CADJPY","CHFJPY","USDJPY","EURJPY","AUDUSD","AUDCAD","XAUUSD","XAGUSD"]
-PAIRES_SESSION_LONDRES = ["EURUSD","GBPUSD","EURCHF","USDCHF","CADCHF","EURJPY","EURAUD","XAUUSD","XAGUSD"]
-PAIRES_SESSION_NY      = ["EURUSD","GBPUSD","USDCAD","USDCHF","AUDUSD","XAUUSD","XAGUSD"]
-
-def get_session_active():
-    h = datetime.datetime.utcnow().hour + datetime.datetime.utcnow().minute / 60.0
-    paires, sessions = [], []
-    if 0.0 <= h < 7.0:
-        paires += PAIRES_SESSION_ASIE;    sessions.append("ASIE")
-    if 7.0 <= h < 8.0:
-        paires += PAIRES_SESSION_ASIE + PAIRES_SESSION_LONDRES; sessions.append("ASIE+LONDRES")
-    if 8.0 <= h <= 10.0:
-        paires += PAIRES_SESSION_LONDRES; sessions.append("LONDRES")
-    if 12.0 <= h <= 15.0:
-        paires += PAIRES_SESSION_NY;      sessions.append("NEW_YORK")
-    if not sessions:
-        return None, []
-    return "+".join(sessions), list(dict.fromkeys(paires))
-
-def dans_killzone():
-    session, _ = get_session_active()
-    return session is not None
-
-def nom_killzone():
-    h = datetime.datetime.utcnow().hour + datetime.datetime.utcnow().minute / 60.0
-    if 7.0 <= h < 8.0:   return "🌏🇬🇧 Asie+Londres (07h-08h)"
-    if 0.0 <= h < 7.0:   return "🌏 Asian Killzone (00h-07h)"
-    if 8.0 <= h <= 10.0: return "🇬🇧 London Killzone (08h-10h)"
-    if 12.0 <= h <= 15.0:return "🇺🇸 New York Killzone (12h-15h)"
-    return "⏳ Hors session"
-
-def session_actuelle_v43():
-    """Sessions spécifiques à la Stratégie 4 (heures observées dans la vidéo, en UTC approx)"""
-    h = datetime.datetime.utcnow().hour + datetime.datetime.utcnow().minute / 60.0
-    if 1.0 <= h < 6.0:
-        return "ASIAN_ACCUMULATION"
-    if 6.0 <= h < 8.0:
-        return "PRE_LONDON"
-    if 8.0 <= h <= 11.0:
-        return "LONDON_EXPANSION"
-    if 11.0 <= h < 14.0:
-        return "LONDON_NY_GAP"
-    if 14.0 <= h <= 17.0:
-        return "NY_CONTINUATION"
-    return "OFF_SESSION"
-
-def est_symbole_autorise(symbole):
-    if symbole in VOLATILE_PAIRS:
-        if not volatility_pairs_active.get(symbole, True):
-            return "BLOCAGE_TOTAL", f"{symbole} désactivé"
-        return "AUTORISE", ""
-
-    now     = datetime.datetime.utcnow()
-    j, h    = now.weekday(), now.hour + now.minute / 60.0
-    weekend = (j == 4 and h >= 21) or j == 5 or (j == 6 and h < 21)
-
-    if weekend:
-        return "BLOCAGE_TOTAL", "Week-end"
-    if symbole in COMMODITY_PAIRS:
-        return "AUTORISE", ""
-
-    session, paires_session = get_session_active()
-    if session is None:
-        return "HORS_SESSION", "🔒 Hors Killzone"
-    if symbole in paires_session:
-        return "AUTORISE", ""
-    return "HORS_SESSION", f"🔒 {symbole} inactif en {session}"
-
-# ==========================================
-
-# ==========================================
-# 📘 V46 NEW: STRATÉGIES "MASTER CLASS" (basées sur PDF de trading)
-# Remplace l'ancienne couche (Kasper OTE / OTE Scalping / Zone Trading /
-# Bougie Pivot Session) par 3 stratégies documentées:
-#   1. CPR Pullback & Rejection    (Vikram Prabhu — Price Action)
-#   2. Open Drive Breakout PDH/PDL (Vikram Prabhu — Cassure décisive)
-#   3. RSI Extremes & Exhaustion   (Dr Investors + gestion Smart Raja)
-# ==========================================
-
-def calculer_cpr_journalier(symbole):
-    """
-    Extrait le CPR (Central Pivot Range) de la veille — Pivot, BCPR, TCPR —
-    ainsi que PDH/PDL (Plus Haut/Bas de la veille), à partir des bougies H1
-    agrégées par date réelle (bug d'epoch corrigé en V46 — voir
-    _obtenir_donnees_deriv_reseau).
-    """
-    h1 = obtenir_donnees_deriv(symbole, 3600)
-    if not h1 or len(h1) < 30:
-        return None
-
-    try:
-        df = pd.DataFrame([{
-            "open": float(c["open"]), "high": float(c["high"]),
-            "low": float(c["low"]), "close": float(c["close"]),
-            "epoch": int(c["epoch"])
-        } for c in h1])
-        df['date'] = pd.to_datetime(df['epoch'], unit='s').dt.date
-        daily = df.groupby('date').agg({'open':'first','high':'max',
-                                         'low':'min','close':'last'}).reset_index()
-
-        if len(daily) < 2:
-            return None
-
-        prev_day = daily.iloc[-2]  # dernière journée COMPLÈTE (pas celle en cours)
-        pdh, pdl, pdc = float(prev_day['high']), float(prev_day['low']), float(prev_day['close'])
-
-        pivot = (pdh + pdl + pdc) / 3
-        bcpr  = (pdh + pdl) / 2
-        tcpr  = (pivot - bcpr) + pivot
-        top_cpr = max(bcpr, tcpr)
-        bot_cpr = min(bcpr, tcpr)
-
-        cpr_width_pct = ((top_cpr - bot_cpr) / pivot) * 100 if pivot else 0
-        etat_cpr = "Étroit (Tendance)" if cpr_width_pct < 0.15 else "Large (Range)"
-
-        return {
-            "PDH": pdh, "PDL": pdl, "PIVOT": pivot,
-            "TCPR": top_cpr, "BCPR": bot_cpr,
-            "ETAT": etat_cpr, "WIDTH": cpr_width_pct
-        }
-    except Exception as e:
-        print(f"[CPR/{symbole}] {e}", flush=True)
-        return None
-
-def detecter_chandeliers_pdf(df):
-    """
-    Détecte Pin Bar, Engulfing et Marubozu selon les règles strictes du
-    PDF Candlestick Patterns. Analyse la bougie fraîchement CLÔTURÉE (iloc[-2]),
-    jamais la bougie en formation.
-
-    ✅ V52: seuils légèrement assouplis pour augmenter la fréquence de
-    détection sans dénaturer les patterns (toujours des vrais Pin/Engulfing/
-    Marubozu, juste avec une tolérance un peu plus réaliste sur des bougies
-    imparfaites, ce qui est courant en conditions de marché réelles):
-      - Pin Bar: mèche > 2.0x le corps → > 1.8x le corps
-      - Marubozu: corps > 85% du range → corps > 75% du range
-    """
-    if len(df) < 3:
-        return "NONE", 0
-    try:
-        last = df.iloc[-2]
-        prev = df.iloc[-3]
-
-        o, h, l, c = float(last['open']), float(last['high']), float(last['low']), float(last['close'])
-        po, pc = float(prev['open']), float(prev['close'])
-
-        body  = abs(c - o)
-        rng   = h - l
-        if rng == 0:
-            return "NONE", 0
-
-        upper_wick = h - max(o, c)
-        lower_wick = min(o, c) - l
-
-        # Pin Bar — mèche > 1.8x le corps (✅ V52: 2.0 → 1.8, assoupli)
-        if lower_wick > body * 1.8 and upper_wick < body:
-            return "PIN_BULL", lower_wick
-        if upper_wick > body * 1.8 and lower_wick < body:
-            return "PIN_BEAR", upper_wick
-
-        # Engulfing — avalement complet du corps précédent
-        if pc < po and c > o and c > po and o < pc:
-            return "ENGULFING_BULL", body
-        if pc > po and c < o and c < po and o > pc:
-            return "ENGULFING_BEAR", body
-
-        # Marubozu — corps > 75% du range (✅ V52: 85% → 75%, assoupli)
-        if body > rng * 0.75:
-            return ("MARUBOZU_BULL" if c > o else "MARUBOZU_BEAR"), body
-
-        return "NONE", 0
-    except Exception:
-        return "NONE", 0
-
-# ------------------------------------------
-# ✅ V53 NEW: STRATÉGIE UNIQUE — TREND PULLBACK & CONFLUENCE
-# ------------------------------------------
-# Remplace les 3 anciennes stratégies indépendantes (CPR Pullback, Open
-# Drive Breakout, RSI Exhaustion), qui exigeaient chacune 2-3 conditions
-# rares simultanées (ex: prix exactement sur un pivot journalier + bougie
-# de rejet dans la même bougie) — configuration extrêmement peu fréquente
-# statistiquement, d'où le silence quasi permanent malgré 8 paires scannées.
-#
-# Méthode utilisée par la plupart des systèmes algorithmiques discrétionnaires
-# sérieux ("trend pullback with confluence") — au lieu d'empiler des
-# conditions rares en ET logique strict, on combine des conditions COURANTES
-# mais cohérentes entre elles :
-#
-#   1. TENDANCE MACRO (H1)     — EMA21 vs EMA55 + ADX ≥ 18 → sens autorisé
-#   2. STRUCTURE (H1)          — higher-highs/lows cohérents dans ce sens
-#   3. PULLBACK (M15)          — le prix revient près de l'EMA21 M15
-#      (zone de valeur dynamique, testée en continu, pas un niveau fixe)
-#   4. MOMENTUM SAIN (M15/H1)  — RSI 35-65 (ni extrême ni plat) + MACD
-#      histogram qui pointe dans le sens du trade
-#   5. DÉCLENCHEUR D'ENTRÉE    — bougie de confirmation (Pin/Engulfing/
-#      Marubozu) sur le pullback
-#   6. RISQUE BASÉ SUR L'ATR   — SL = max(1.2×ATR, structure + buffer),
-#      TP = plus proche swing PDH/PDL (référence CPR conservée comme cible
-#      objective) avec R:R minimum 1.6
-#
-# Le score de confluence (0-100, un point par critère rempli plus le degré
-# de qualité) est transmis en "confiance" — le moteur IA déterministe et le
-# second avis Groq restent ensuite la couche de validation finale, inchangée.
-
-def _ema(series, span):
-    return series.ewm(span=span, adjust=False).mean()
-
-# ------------------------------------------
-# ✅ V54 NEW: SUPPORT/RÉSISTANCE + ORDER BLOCKS (Smart Money Concepts)
-# ------------------------------------------
-# Ajoute deux couches de confluence supplémentaires, inspirées des méthodes
-# "Smart Money Concepts" (ICT) utilisées par de nombreux traders algo
-# institutionnels/professionnels :
-#   • Support/Résistance : niveaux issus des swings récents, retenus
-#     seulement s'ils ont été "touchés" au moins 2 fois (zone respectée par
-#     le marché, pas un simple pic isolé).
-#   • Order Block : dernière bougie opposée avant un mouvement impulsif qui
-#     casse la structure — la zone d'où l'argent institutionnel a
-#     "initié" le mouvement, souvent re-testée avant continuation.
-# Ces zones ne remplacent pas la logique de pullback existante (EMA21 M15),
-# elles s'y ajoutent : une entrée est valide si le prix est proche de l'UNE
-# des zones reconnues, et le score de confluence augmente si PLUSIEURS
-# zones se chevauchent au même endroit (confluence réelle, pas coïncidence).
-
-def detecter_swing_points(df, ordre=3):
-    """Détecte les sommets/creux locaux (swing highs/lows) par comparaison
-    avec une fenêtre de part et d'autre — méthode standard, indépendante
-    de toute librairie externe."""
-    highs = df['high'].values
-    lows = df['low'].values
-    n = len(df)
-    swing_highs, swing_lows = [], []
-    for i in range(ordre, n - ordre):
-        fenetre_h = highs[i-ordre:i+ordre+1]
-        fenetre_l = lows[i-ordre:i+ordre+1]
-        if highs[i] == fenetre_h.max():
-            swing_highs.append(float(highs[i]))
-        if lows[i] == fenetre_l.min():
-            swing_lows.append(float(lows[i]))
-    return swing_highs, swing_lows
-
-def detecter_niveaux_cles(df, lookback=80, tolerance_cluster=0.0015):
-    """
-    Regroupe les swings proches en "clusters" et ne retient que les niveaux
-    touchés au moins 2 fois — ce sont les vraies zones de support/résistance
-    respectées par le marché, pas des pics isolés sans signification.
-    Retourne une liste de prix (float).
-    """
-    try:
-        sub = df.iloc[-lookback:] if len(df) > lookback else df
-        swing_highs, swing_lows = detecter_swing_points(sub, ordre=3)
-        tous = sorted(swing_highs + swing_lows)
-        if not tous:
-            return []
-
-        clusters = []
-        for prix in tous:
-            place = False
-            for c in clusters:
-                if abs(prix - c["moyenne"]) / prix < tolerance_cluster * 3:
-                    c["membres"].append(prix)
-                    c["moyenne"] = sum(c["membres"]) / len(c["membres"])
-                    place = True
-                    break
-            if not place:
-                clusters.append({"moyenne": prix, "membres": [prix]})
-
-        return [round(c["moyenne"], 5) for c in clusters if len(c["membres"]) >= 2]
-    except Exception:
-        return []
-
-def detecter_order_blocks(df, lookback=40):
-    """
-    Repère les Order Blocks — la dernière bougie opposée avant une bougie
-    d'impulsion (corps > 1.6x le corps moyen) qui casse la structure locale.
-    Retourne (obs_bull, obs_bear), chacune une liste de zones (bas, haut)
-    triées de la plus récente à la plus ancienne, limitée aux 3 dernières
-    par direction (les plus pertinentes pour un pullback actuel).
-    """
-    try:
-        sub = df.iloc[-lookback:] if len(df) > lookback else df
-        if len(sub) < 6:
-            return [], []
-
-        opens  = sub['open'].values
-        closes = sub['close'].values
-        highs  = sub['high'].values
-        lows   = sub['low'].values
-        corps  = abs(closes - opens)
-        corps_moyen = corps[:-1].mean() if len(corps) > 1 else 0
-        if corps_moyen <= 0:
-            return [], []
-
-        obs_bull, obs_bear = [], []
-        for i in range(2, len(sub) - 1):
-            if corps[i] <= corps_moyen * 1.6:
-                continue  # pas assez impulsif pour marquer un OB
-
-            if closes[i] > opens[i] and closes[i-1] <= opens[i-1]:
-                # bougie d'impulsion haussière → la bougie baissière/neutre
-                # juste avant est l'Order Block haussier (zone de support)
-                top    = max(opens[i-1], closes[i-1], highs[i-1])
-                bottom = float(lows[i-1])
-                obs_bull.append((bottom, round(top, 5)))
-
-            elif closes[i] < opens[i] and closes[i-1] >= opens[i-1]:
-                top    = float(highs[i-1])
-                bottom = min(opens[i-1], closes[i-1], lows[i-1])
-                obs_bear.append((round(bottom, 5), top))
-
-        return obs_bull[-3:], obs_bear[-3:]
-    except Exception:
-        return [], []
-
-def analyser_trend_pullback_confluence(symbole):
-    """
-    ✅ V55: Stratégie de confluence par SCORE CUMULATIF (et non plus par
-    filtres ET stricts). Chaque critère apporte des points ; le signal est
-    émis si le score total dépasse un seuil, même si un critère isolé
-    n'est pas parfait. C'est la méthode utilisée par la majorité des
-    systèmes de confluence professionnels — empiler des conditions ET
-    strictes fait chuter la probabilité combinée de façon exponentielle
-    (ex: 6 conditions à 70% de chance chacune = 12% de chance qu'elles
-    soient TOUTES vraies en même temps), alors qu'un score cumulatif
-    reste sélectif sans devenir statistiquement quasi impossible.
-
-    Logge un diagnostic précis à chaque rejet (V55-DEBUG) pour identifier
-    immédiatement quel(s) critère(s) manquent si le volume de signaux
-    reste insuffisant.
-    """
-    c1h = obtenir_donnees_deriv(symbole, 3600)
-    c15 = obtenir_donnees_deriv(symbole, 900)
-    if not c1h or len(c1h) < 60 or not c15 or len(c15) < 30:
-        print(f"[DEBUG-TP] {symbole} REJET: données insuffisantes "
-              f"(c1h={len(c1h) if c1h else 0}, c15={len(c15) if c15 else 0})", flush=True)
-        return None
-
-    try:
-        df1h = pd.DataFrame([{
-            "open": float(c["open"]), "high": float(c["high"]),
-            "low": float(c["low"]), "close": float(c["close"])
-        } for c in c1h])
-        df15 = pd.DataFrame([{
-            "open": float(c["open"]), "high": float(c["high"]),
-            "low": float(c["low"]), "close": float(c["close"])
-        } for c in c15])
-
-        px = float(df15['close'].iloc[-1])
-        score = 0.0
-
-        # ── 1. TENDANCE MACRO (H1) — score progressif, pas de coupure dure ─
-        ema21_h1 = _ema(df1h['close'], 21)
-        ema55_h1 = _ema(df1h['close'], 55)
-        adx_h1   = calculer_adx(df1h)
-        tendance_bull = ema21_h1.iloc[-2] > ema55_h1.iloc[-2]
-        direction = "BULL" if tendance_bull else "BEAR"
-        score_tendance = min(20, max(0, (adx_h1 - 12) * 1.3))
-        score += score_tendance
-
-        # ── 2. STRUCTURE (H1) — score progressif ─────────────────────────
-        structure_score = evaluer_structure_marche(df1h)
-        score_structure = min(15, max(0, (structure_score - 35) * 0.3))
-        score += score_structure
-
-        # ── 3. ZONE DE PULLBACK — EMA21 M15 / Order Block / S-R clé ─────
-        # ✅ V55: tolérances élargies (EMA 0.6%→1.0%, S/R 0.25%→0.4%,
-        # marge OB 25%→40%). Une zone reste OBLIGATOIRE (on ne veut pas
-        # entrer en pleine impulsion sans aucun retour), mais la proximité
-        # requise est nettement plus réaliste.
-        ema21_m15 = _ema(df15['close'], 21)
-        val_zone  = float(ema21_m15.iloc[-2])
-        distance_ema_pct = abs(px - val_zone) / px if px else 1
-        TOLERANCE_EMA = 0.010
-
-        obs_bull, obs_bear = detecter_order_blocks(df1h)
-        niveaux_cles = detecter_niveaux_cles(df1h)
-        TOLERANCE_NIVEAU = 0.004
-
-        zones_touchees = []
-        score_zone = 0.0
-
-        if distance_ema_pct <= TOLERANCE_EMA:
-            zones_touchees.append("EMA21 M15")
-            score_zone += max(5, 15 * (1 - distance_ema_pct / TOLERANCE_EMA))
-
-        ob_pertinent = None
-        obs_list = obs_bull if direction == "BULL" else obs_bear
-        for bottom, top in obs_list:
-            marge = (top - bottom) * 0.4
-            if (bottom - marge) <= px <= (top + marge):
-                zones_touchees.append(f"Order Block {'haussier' if direction=='BULL' else 'baissier'}")
-                ob_pertinent = (bottom, top)
-                score_zone += 15
-                break
-
-        niveau_pertinent = None
-        for niveau in niveaux_cles:
-            if abs(px - niveau) / px < TOLERANCE_NIVEAU:
-                zones_touchees.append("Support/Résistance clé")
-                niveau_pertinent = niveau
-                score_zone += 12
-                break
-
-        if not zones_touchees:
-            print(f"[DEBUG-TP] {symbole} REJET: aucune zone de pullback proche "
-                  f"(dist EMA21={distance_ema_pct*100:.2f}%, tolérance={TOLERANCE_EMA*100:.1f}%, "
-                  f"{len(obs_list)} OB détectés, {len(niveaux_cles)} niveaux clés détectés)", flush=True)
-            return None
-
-        score += min(25, score_zone)
-
-        # ── 4. MOMENTUM — score progressif (pas de coupure dure) ────────
+def obtenir_prix_actuel_deriv(symbole_brut):
+    symbole = prefixer_symbole(symbole_brut)
+    for tentative in range(3):
         try:
-            rsi_series = ta.momentum.RSIIndicator(close=df15["close"], window=14).rsi()
-            rsi_val = float(rsi_series.iloc[-2])
-        except Exception:
-            rsi_val = 50.0
+            ws = websocket.WebSocket()
+            ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=5)
+            req = {"ticks_history": symbole, "end": "latest", "count": 1, "style": "ticks"}
+            ws.send(json.dumps(req))
+            res = json.loads(ws.recv())
+            ws.close()
+            if "history" in res and "prices" in res["history"]:
+                return float(res["history"]["prices"][0])
+        except:
+            time.sleep(1)
+            continue
+    return None
 
-        score_rsi = 15 if 30 <= rsi_val <= 70 else (8 if 20 <= rsi_val <= 80 else 0)
-        score += score_rsi
+# ==========================================
+# SYSTÈME DE VÉRIFICATION ITM/OTM & COOLDOWN
+# ==========================================
 
-        macd_line, macd_signal, macd_hist = calculer_macd_signal(df15)
-        momentum_ok = (macd_hist > 0) if direction == "BULL" else (macd_hist < 0)
-        score_macd = 10 if momentum_ok else 0
-        score += score_macd
+def relever_prix_entree(chat_id, symbole):
+    prix = obtenir_prix_actuel_deriv(symbole)
+    if prix and chat_id in trades_en_cours and trades_en_cours[chat_id]['symbole'] == symbole:
+        trades_en_cours[chat_id]['prix_entree'] = prix
 
-        # ── 5. DÉCLENCHEUR D'ENTRÉE — pattern fort OU bougie directionnelle
-        # simple en secours (score plus faible mais n'exclut pas le signal) ─
-        pattern, _ = detecter_chandeliers_pdf(df15)
-        patterns_valides_bull = ("PIN_BULL", "ENGULFING_BULL", "MARUBOZU_BULL")
-        patterns_valides_bear = ("PIN_BEAR", "ENGULFING_BEAR", "MARUBOZU_BEAR")
-        bougie_signal = df15.iloc[-2]
-        corps_directionnel = (bougie_signal['close'] > bougie_signal['open']) if direction == "BULL" \
-                             else (bougie_signal['close'] < bougie_signal['open'])
+def verifier_resultat(chat_id):
+    global stats_journee, cooldown_actifs
+    trade = trades_en_cours.get(chat_id)
+    if not trade or not trade.get('prix_entree'): return
 
-        if (direction == "BULL" and pattern in patterns_valides_bull) or \
-           (direction == "BEAR" and pattern in patterns_valides_bear):
-            score_pattern = 20
-        elif corps_directionnel:
-            score_pattern = 8
-            if pattern == "NONE":
-                pattern = "BOUGIE_DIRECTIONNELLE"
-        else:
-            print(f"[DEBUG-TP] {symbole} REJET: bougie de signal contraire à la direction "
-                  f"({direction}, pattern={pattern})", flush=True)
-            return None
+    symbole = trade['symbole']
+    prix_sortie = obtenir_prix_actuel_deriv(symbole)
+    if not prix_sortie: return
 
-        score += score_pattern
+    prix_entree = trade['prix_entree']
+    action = trade['action']
 
-        # ── SCORE MINIMUM POUR ÉMETTRE UN SIGNAL ────────────────────────
-        SEUIL_SCORE_CONFLUENCE = 45  # sur ~100 max, ajustable ici si besoin
-        if score < SEUIL_SCORE_CONFLUENCE:
-            print(f"[DEBUG-TP] {symbole} REJET: score confluence {score:.1f} < seuil {SEUIL_SCORE_CONFLUENCE} "
-                  f"(tendance={score_tendance:.1f} structure={score_structure:.1f} "
-                  f"zone={score_zone:.1f} rsi={score_rsi} macd={score_macd} pattern={score_pattern})", flush=True)
-            return None
-
-        # ── 6. RISQUE BASÉ SUR L'ATR + CIBLE OBJECTIVE (PDH/PDL si dispo) ─
-        atr15 = calculer_atr(df15)
-        if atr15 <= 0:
-            return None
-
-        cpr = calculer_cpr_journalier(symbole)  # référence de cible, plus de filtre d'entrée
-
-        if direction == "BULL":
-            signal_dir = "BUY"
-            sl_structure = float(bougie_signal['low']) - (atr15 * 0.15)
-            sl_atr       = px - (atr15 * 1.2)
-            sl_candidats = [sl_structure, sl_atr]
-            if ob_pertinent:
-                sl_candidats.append(ob_pertinent[0] - (atr15 * 0.1))
-            sl = min(sl_candidats)
-            distance_risque = px - sl
-            if distance_risque <= 0:
-                return None
-            cible_objective = cpr["PDH"] if cpr and cpr["PDH"] > px else px + (distance_risque * 2.0)
-            tp_final = max(cible_objective, px + (distance_risque * 1.4))
-            tp1 = px + (distance_risque * 1.0)
-        else:
-            signal_dir = "SELL"
-            sl_structure = float(bougie_signal['high']) + (atr15 * 0.15)
-            sl_atr       = px + (atr15 * 1.2)
-            sl_candidats = [sl_structure, sl_atr]
-            if ob_pertinent:
-                sl_candidats.append(ob_pertinent[1] + (atr15 * 0.1))
-            sl = max(sl_candidats)
-            distance_risque = sl - px
-            if distance_risque <= 0:
-                return None
-            cible_objective = cpr["PDL"] if cpr and cpr["PDL"] < px else px - (distance_risque * 2.0)
-            tp_final = min(cible_objective, px - (distance_risque * 1.4))
-            tp1 = px - (distance_risque * 1.0)
-
-        risque = abs(px - sl)
-        rr = abs(tp_final - px) / risque if risque > 0 else 0
-        if rr < 1.4:  # ✅ V55: 1.6 → 1.4, cohérent avec le score déjà filtrant
-            print(f"[DEBUG-TP] {symbole} REJET: R/R {rr:.2f} < 1.4 (score confluence "
-                  f"pourtant OK à {score:.1f})", flush=True)
-            return None
-
-        confiance = int(min(97, round(score)))
-        zones_txt = " + ".join(zones_touchees)
-
-        print(f"[DEBUG-TP] {symbole} ✅ SIGNAL ÉMIS — score={score:.1f} direction={direction} "
-              f"zones={zones_txt} pattern={pattern} rr={rr:.2f}", flush=True)
-
-        return {
-            "action": "🟢 ACHAT (BUY)" if signal_dir == "BUY" else "🔴 VENTE (SELL)",
-            "tendance": direction, "force": f"ADX {round(adx_h1,1)} · Structure {structure_score}%",
-            "msg": f"Pullback sur {zones_txt} + {pattern.replace('_',' ')} (score confluence {int(score)})",
-            "sl": round(sl,5), "tp1": round(tp1,5), "tp": round(tp_final,5),
-            "rr": round(rr,2), "px": round(px,5),
-            "strategie": 1, "confiance": confiance,
-            "label": "TREND PULLBACK & CONFLUENCE",
-            "rsi_value": round(rsi_val,1), "adx_value": round(adx_h1,1),
-            "zones_confluence": zones_touchees,
-            "order_block": ob_pertinent, "niveau_cle": niveau_pertinent,
-            "score_confluence_brut": round(score,1),
-        }
-    except Exception as e:
-        print(f"[TrendPullback/{symbole}] EXCEPTION: {type(e).__name__}: {e}", flush=True)
-        return None
-
-# ------------------------------------------
-# ✅ V46 NEW: DÉTECTION DE CONTEXTE (léger, basé sur CPR + RSI)
-# Restaure l'esprit du "cerveau" V44 (une stratégie adaptée au contexte du
-# jour plutôt qu'une cascade aveugle) en s'appuyant sur les nouveaux
-# indicateurs PDF au lieu de l'ancien système EMA/Zones.
-# ------------------------------------------
-
-def detecter_contexte_pdf(symbole):
-    """
-    Retourne un indice de contexte pour prioriser l'ordre des stratégies:
-      "JOUR_TENDANCE" -> CPR étroit: privilégier Open Drive Breakout
-      "JOUR_RANGE"    -> CPR large: privilégier CPR Rejection
-      "INDECIS"       -> pas de CPR disponible, cascade par défaut
-    Mis en cache 2 minutes (même logique que l'ancien V44).
-    """
-    cached = contexte_marche_cache.get(symbole)
-    if cached and (time.time() - cached["ts"]) < 120:
-        return cached["contexte"]
-
-    cpr = calculer_cpr_journalier(symbole)
-    if not cpr:
-        contexte = "INDECIS"
-    elif cpr["ETAT"] == "Étroit (Tendance)":
-        contexte = "JOUR_TENDANCE"
+    gagne = (action == "CALL" and prix_sortie > prix_entree) or (action == "PUT" and prix_sortie < prix_entree)
+    nom_paire = f"{symbole[:3]}/{symbole[3:]}"
+    type_emoji = "🪙" if symbole in CRYPTO_PAIRS else "💱"
+    
+    if gagne:
+        texte = f"✅ **VICTOIRE (ITM)**\n🚀 Signal {nom_paire} ({action})\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`\n👤 Client ID : `{chat_id}`"
+        stats_journee['ITM'] += 1
+        stats_journee['details'].append(f"✅ {type_emoji} {nom_paire} ({action})")
+        if symbole in cooldown_actifs: del cooldown_actifs[symbole]
     else:
-        contexte = "JOUR_RANGE"
-
-    contexte_marche_cache[symbole] = {"contexte": contexte, "ts": time.time()}
-    return contexte
-
+        texte = f"❌ **PERTE (OTM)**\n⚠️ Signal {nom_paire} ({action})\n📈 Entrée : `{prix_entree}`\n📉 Sortie : `{prix_sortie}`\n👤 Client ID : `{chat_id}`"
+        stats_journee['OTM'] += 1
+        stats_journee['details'].append(f"❌ {type_emoji} {nom_paire} ({action})")
+        cooldown_actifs[symbole] = time.time()
+    
+    try: bot.send_message(ADMIN_ID, texte, parse_mode="Markdown")
+    except: pass
+        
+    if chat_id in trades_en_cours: del trades_en_cours[chat_id]
 
 # ==========================================
-# 🤖 V48 NEW: MOTEUR IA DE VALIDATION DES SIGNAUX
+# MOTEUR D'ANALYSE ( GOD MODE ELITE V8 — CONFLUENCE )
 # ==========================================
-# Rôle strict: NE GÉNÈRE JAMAIS de signal. Reçoit un signal déjà détecté par
-# une stratégie (inchangée ci-dessus: analyser_trend_pullback_confluence),
-# l'évalue sur de nombreux
-# critères techniques, retourne un score de confiance 0-100% + justification.
+# ✅ V8: Remplace les conditions en ET strict (prix EXACTEMENT sur la bande
+# Bollinger ET tendance H1 alignée ET EMA200 alignée ET score>=8 dès le
+# départ, ce qui rendait VSA ou FVG quasi-obligatoires) par un SCORE
+# CUMULATIF — chaque critère apporte des points, le signal est émis dès
+# que le score dépasse un seuil raisonnable. C'est la même correction que
+# celle appliquée au moteur MT5 (Terminal Prime V55): empiler des
+# conditions dures fait chuter la probabilité combinée de façon
+# exponentielle, alors qu'un score cumulatif reste sélectif sans devenir
+# statistiquement quasi impossible à déclencher.
 #
-# Architecture en 2 couches:
-#   1) Moteur de calcul déterministe (ADX/RSI/MACD/structure/ATR/...) —
-#      TOUJOURS actif, gratuit, ne dépend d'aucun service externe.
-#   2) Second avis Groq (optionnel) — appelé UNIQUEMENT si le calcul a
-#      déjà accepté le signal, pour confirmer ou invalider. Si Groq est
-#      indésactivé/indisponible, le verdict du calcul déterministe fait foi
-#      seul (aucune dépendance dure à Groq).
+# Diagnostic ajouté ([DEBUG-BIN]) à chaque rejet et à chaque signal émis,
+# pour identifier immédiatement quel critère manque si jamais le volume
+# de signaux reste insuffisant.
 
-IA_CONFIG = {
-    "seuil_acceptation": 55,   # ✅ V53: stratégie unique de confluence — déjà
-                                # plus sélective en amont (6 critères combinés),
-                                # donc le calcul déterministe peut rester à un
-                                # seuil modéré sans sur-filtrer.
-                                # Ajustable en direct via /iaconfig seuil_acceptation <valeur>
-    "groq_active": True,       # bascule ON/OFF du second avis Groq
-    "groq_seuil_veto": 25,     # seuil de veto Groq (score Groq en dessous = rejet)
-    "poids": {                 # Poids relatif de chaque critère dans le score final
-        "tendance_h1":        12,
-        "adx":                10,
-        "rsi_coherence":      10,
-        "macd_coherence":      8,
-        "ema_alignement":      8,
-        "atr_volatilite":      8,
-        "structure_marche":   10,
-        "distance_sr":         8,
-        "qualite_cassure":    10,
-        "spread":              6,
-        "multi_tf_coherence": 10,
-    },
-    "poids_contexte": {        # ✅ V49: pondération de l'ajustement de confiance selon le contexte marché
-        "tendance_forte":      1.10,   # bonus si le contexte va dans le sens du signal
-        "range":               0.90,   # malus léger — les breakouts sont moins fiables en range
-        "tres_volatil":        0.80,   # malus — risque de faux breakout
-        "peu_volatil":         0.95,
-        "consolidation":       0.90,
-        "proche_cassure":      1.05,
-    },
-    "seuil_multi_tf_penalite": 30,  # pénalité (points) si signal contraire à la tendance M15/H1 supérieure
-}
+def analyser_binaire_pro(symbole):
+    if symbole in cooldown_actifs and (time.time() - cooldown_actifs[symbole] < 3600):
+        print(f"[DEBUG-BIN] {symbole} REJET: cooldown actif (perte récente, "
+              f"silencieux encore {int((3600 - (time.time()-cooldown_actifs[symbole]))/60)} min)", flush=True)
+        return f"⚠️ **SILENCIEUX ACTIF** : {symbole} a récemment subi une manipulation (OTM). Radar coupé pendant 1 heure pour protéger le capital.", None, None, None, None, None, None, None
 
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
-GROQ_MODEL   = "llama-3.1-8b-instant"
-GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions"
+    if est_heure_de_news_dynamique() and symbole not in CRYPTO_PAIRS:
+        print(f"[DEBUG-BIN] {symbole} REJET: fenêtre de news à fort impact", flush=True)
+        return "⚠️ ALERTE NEWS : Marché manipulé, radar coupé.", None, None, None, None, None, None, None
 
-# Historique enrichi des scores/résultats pour l'auto-apprentissage (✅ V49:
-# tous les champs demandés — stratégie, timeframe, heure, score déterministe,
-# avis Groq, SL/TP, résultat, drawdown, durée)
-ia_historique = []      # liste de dicts détaillés (voir ia_enregistrer_resultat)
-ia_poids_ajustes = {}   # cache des poids appris par (strategie_nom, symbole)
-
-# ==========================================
-# 🌍 V49 NEW: MODULE CONTEXTE MARCHÉ (indépendant)
-# ==========================================
-# Détermine automatiquement l'état du marché: tendance haussière/baissière,
-# range, très/peu volatil, consolidation, proche d'une cassure. Ce module
-# est appelé par le moteur déterministe pour ajuster le score, et transmis
-# à Groq pour enrichir son analyse contextuelle.
-
-def analyser_contexte_marche(symbole, df1h, df4h):
-    """
-    Retourne un dict décrivant l'état du marché à l'instant présent.
-    Ne génère aucun signal — sert uniquement à contextualiser un signal
-    déjà détecté par une stratégie.
-    """
-    try:
-        ema20_h1 = df1h['close'].ewm(span=20, adjust=False).mean()
-        ema50_h1 = df1h['close'].ewm(span=50, adjust=False).mean()
-        pente_ema20 = (ema20_h1.iloc[-2] - ema20_h1.iloc[-10]) / max(abs(ema20_h1.iloc[-10]), 1e-9)
-
-        adx = calculer_adx(df1h)
-        atr = calculer_atr(df1h)
-        px = float(df1h['close'].iloc[-2])
-        atr_pct = (atr / px * 100) if px else 0
-
-        recent_high = df1h['high'].iloc[-30:].max()
-        recent_low  = df1h['low'].iloc[-30:].min()
-        rng = recent_high - recent_low
-        position_dans_range = (px - recent_low) / rng if rng > 0 else 0.5
-        proche_cassure = position_dans_range > 0.9 or position_dans_range < 0.1
-
-        if adx >= 25 and abs(pente_ema20) > 0.001:
-            tendance = "HAUSSIERE" if ema20_h1.iloc[-2] > ema50_h1.iloc[-2] else "BAISSIERE"
-        elif adx < 18:
-            tendance = "RANGE"
-        else:
-            tendance = "INDECIS"
-
-        if atr_pct > 1.2:
-            volatilite = "TRES_VOLATIL"
-        elif atr_pct < 0.05:
-            volatilite = "PEU_VOLATIL"
-        else:
-            volatilite = "NORMALE"
-
-        consolidation = (adx < 20 and atr_pct < 0.3)
-
-        return {
-            "tendance": tendance,           # HAUSSIERE / BAISSIERE / RANGE / INDECIS
-            "volatilite": volatilite,       # TRES_VOLATIL / PEU_VOLATIL / NORMALE
-            "consolidation": consolidation,
-            "proche_cassure": proche_cassure,
-            "adx": round(adx, 1),
-            "atr_pct": round(atr_pct, 3),
-            "position_dans_range": round(position_dans_range, 2),
-        }
-    except Exception as e:
-        print(f"[Contexte Marché/{symbole}] {e}", flush=True)
-        return {"tendance": "INDECIS", "volatilite": "NORMALE", "consolidation": False,
-                "proche_cassure": False, "adx": 20.0, "atr_pct": 0.3, "position_dans_range": 0.5}
-
-def contexte_vers_facteur_confiance(contexte, direction_signal):
-    """
-    Traduit le contexte marché en un facteur multiplicatif appliqué au score
-    du calcul déterministe. Toujours borné pour ne jamais dominer le score
-    (le contexte ajuste, il ne décide pas).
-    """
-    poids = IA_CONFIG["poids_contexte"]
-    facteur = 1.0
-    justification = []
-
-    if contexte["tendance"] in ("HAUSSIERE", "BAISSIERE"):
-        sens_marche = "BULL" if contexte["tendance"] == "HAUSSIERE" else "BEAR"
-        if sens_marche == direction_signal:
-            facteur *= poids["tendance_forte"]
-            justification.append(f"Tendance {contexte['tendance'].lower()} confirmée")
-        else:
-            facteur *= (2 - poids["tendance_forte"])  # pénalité symétrique
-            justification.append(f"Signal contraire à la tendance {contexte['tendance'].lower()}")
-    elif contexte["tendance"] == "RANGE":
-        facteur *= poids["range"]
-        justification.append("Marché sans tendance claire (range)")
-
-    if contexte["volatilite"] == "TRES_VOLATIL":
-        facteur *= poids["tres_volatil"]
-        justification.append("Volatilité excessive")
-    elif contexte["volatilite"] == "PEU_VOLATIL":
-        facteur *= poids["peu_volatil"]
-        justification.append("Volatilité faible — momentum limité")
-
-    if contexte["consolidation"]:
-        facteur *= poids["consolidation"]
-        justification.append("Marché en consolidation")
-
-    if contexte["proche_cassure"]:
-        facteur *= poids["proche_cassure"]
-        justification.append("Prix proche d'une zone de cassure")
-
-    return round(max(0.6, min(1.15, facteur)), 3), justification
-
-# ==========================================
-# 🚨 V49 NEW: MODULE DÉTECTION DES FAUX SIGNAUX (indépendant)
-# ==========================================
-# Reconnaît les configurations qui échouent fréquemment: faux breakout,
-# retournement brutal, divergence, cassure sans élan, mouvement épuisé.
-
-def detecter_faux_signal(df1h, df5, signal, contexte):
-    """
-    Retourne (risque_detecte: bool, penalite: int, raisons: [str]).
-    La pénalité est soustraite du score final — jamais assez forte pour
-    annuler à elle seule un signal par ailleurs très solide, mais suffisante
-    pour faire basculer un signal limite sous le seuil.
-    """
-    raisons = []
-    penalite = 0
-    direction = signal["tendance"] if signal["tendance"] in ("BULL", "BEAR") else \
-                ("BULL" if "BUY" in signal["action"] else "BEAR")
+    tendance_h1 = obtenir_tendance_H1(symbole)
+    candles = obtenir_donnees_deriv(symbole)
+    if not candles:
+        print(f"[DEBUG-BIN] {symbole} REJET: impossible d'obtenir les bougies Deriv", flush=True)
+        return "⚠️ Impossible de se connecter au marché", None, None, None, None, None, None, None
 
     try:
-        # 1. Cassure sans élan (corps de bougie faible malgré une "cassure")
-        last5 = df5.iloc[-2]
-        corps5 = abs(last5['close'] - last5['open'])
-        range5 = last5['high'] - last5['low']
-        if range5 > 0 and (corps5 / range5) < 0.35:
-            penalite += 8
-            raisons.append("Bougie de cassure au corps faible — élan douteux")
+        df = pd.DataFrame([{'open': float(c['open']), 'close': float(c['close']), 'high': float(c['high']), 'low': float(c['low'])} for c in candles])
 
-        # 2. Mouvement épuisé: 5 bougies consécutives dans le même sens juste avant le signal
-        cinq_dernieres = df5.iloc[-7:-2]
-        if len(cinq_dernieres) == 5:
-            hausses = sum(1 for i in range(len(cinq_dernieres))
-                         if cinq_dernieres.iloc[i]['close'] > cinq_dernieres.iloc[i]['open'])
-            if (direction == "BULL" and hausses >= 5) or (direction == "BEAR" and hausses <= 0):
-                penalite += 10
-                raisons.append("Mouvement déjà étendu — risque d'épuisement")
+        df['corps_bougie'] = abs(df['close'] - df['open'])
 
-        # 3. Divergence RSI simple (prix fait un nouveau extrême, RSI non)
-        try:
-            delta = df1h['close'].diff()
-            gain = delta.clip(lower=0).rolling(14).mean()
-            loss = (-delta.clip(upper=0)).rolling(14).mean()
-            rs = gain / loss.replace(0, 1e-9)
-            rsi_series = 100 - (100 / (1 + rs))
-            px_recent = df1h['close'].iloc[-15:-2]
-            rsi_recent = rsi_series.iloc[-15:-2]
-            if direction == "BULL":
-                prix_nouveau_haut = px_recent.iloc[-1] >= px_recent.max()
-                rsi_pas_confirme = rsi_recent.iloc[-1] < rsi_recent.max() * 0.95
-                if prix_nouveau_haut and rsi_pas_confirme:
-                    penalite += 12
-                    raisons.append("Divergence baissière RSI détectée")
+        indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
+        df['bb_haute'] = indicateur_bb.bollinger_hband()
+        df['bb_basse'] = indicateur_bb.bollinger_lband()
+        df['bb_moy']   = indicateur_bb.bollinger_mavg()
+        df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
+        df['stoch_k'] = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch()
+        df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
+
+        # Calcul ATR pour l'Expiration Dynamique
+        df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
+        atr_actuel = df['atr'].iloc[-1]
+        atr_moyen = df['atr'].rolling(window=20).mean().iloc[-1]
+
+        corps_moyen = df['corps_bougie'].rolling(window=10).mean().iloc[-1]
+        vsa_valide = df['corps_bougie'].iloc[-1] > corps_moyen
+
+        fvg_haussier = df['low'].iloc[-1] > df['high'].iloc[-3]
+        fvg_baissier = df['high'].iloc[-1] < df['low'].iloc[-3]
+
+        last = df.iloc[-1]
+        c = last['close']
+        rsi_val, stoch_val = round(last['rsi'], 1), round(last['stoch_k'], 1)
+        bb_h, bb_b, bb_m = last['bb_haute'], last['bb_basse'], last['bb_moy']
+
+        ema_actuelle = df['ema_200'].iloc[-1]
+        ema_ancienne = df['ema_200'].iloc[-5]
+
+        # ── Alignements directionnels (utilisés comme SCORE, plus comme
+        # coupure dure) ──────────────────────────────────────────────────
+        ema200_pente_haussiere = ema_actuelle >= ema_ancienne
+        ema200_pente_baissiere = ema_actuelle <= ema_ancienne
+        prix_au_dessus_ema200  = c > ema_actuelle
+        prix_en_dessous_ema200 = c < ema_actuelle
+
+        largeur_bb = bb_h - bb_b if (bb_h - bb_b) > 0 else 1e-9
+        position_bb_pct = (c - bb_b) / largeur_bb  # 0 = collé bande basse, 1 = collé bande haute
+
+        # ⏱️ SÉLECTION AUTOMATIQUE DE L'EXPIRATION (inchangée)
+        if atr_actuel > (atr_moyen * 1.5):
+            duree_secondes = 120
+            expiration_texte = "2 MINUTES (Vitesse Élevée ⚡)"
+        elif atr_actuel < (atr_moyen * 0.8):
+            duree_secondes = 600
+            expiration_texte = "10 MINUTES (Marché Lent 🐢)"
+        else:
+            duree_secondes = 300
+            expiration_texte = "5 MINUTES (Standard 💎)"
+
+        # ── SCORE CUMULATIF PAR DIRECTION (0-100 environ) ────────────────
+        def score_direction(direction):
+            """direction: 'CALL' (haussier) ou 'PUT' (baissier)."""
+            s = 0.0
+            raisons = []
+
+            # 1. Position sur les Bollinger — plus proche de la bande
+            #    opposée au sens du trade = meilleur point d'entrée
+            if direction == "CALL":
+                proximite = max(0, 1 - position_bb_pct)  # proche de la bande basse
             else:
-                prix_nouveau_bas = px_recent.iloc[-1] <= px_recent.min()
-                rsi_pas_confirme = rsi_recent.iloc[-1] > rsi_recent.min() * 1.05
-                if prix_nouveau_bas and rsi_pas_confirme:
-                    penalite += 12
-                    raisons.append("Divergence haussière RSI détectée")
-        except Exception:
-            pass
+                proximite = max(0, position_bb_pct)      # proche de la bande haute
+            score_bb = round(proximite * 30, 1)
+            s += score_bb
+            if proximite > 0.6:
+                raisons.append(f"BB proche ({round(proximite*100)}%)")
 
-        # 4. Retournement brutal récent (mèche opposée massive sur la dernière bougie H1)
-        last1h = df1h.iloc[-2]
-        corps1h = abs(last1h['close'] - last1h['open'])
-        if direction == "BULL":
-            meche_opposee = last1h['high'] - max(last1h['open'], last1h['close'])
-        else:
-            meche_opposee = min(last1h['open'], last1h['close']) - last1h['low']
-        if corps1h > 0 and meche_opposee > corps1h * 1.5:
-            penalite += 10
-            raisons.append("Mèche de retournement récente dans le sens opposé")
+            # 2. Tendance H1 — bonus si alignée, neutre si NEUTRE, pénalité si contraire
+            sens_attendu = "UP" if direction == "CALL" else "DOWN"
+            if tendance_h1 == sens_attendu:
+                s += 20; raisons.append("Tendance H1 alignée")
+            elif tendance_h1 == "NEUTRE":
+                s += 8
+            # sinon (tendance H1 contraire) : 0 point, pas de pénalité négative
+            # pour ne pas black-lister un pullback contre-tendance légitime
 
-        # 5. Contexte défavorable déjà identifié par le module contexte
-        if contexte["volatilite"] == "TRES_VOLATIL":
-            penalite += 5
-            raisons.append("Volatilité excessive — risque de faux breakout accru")
-
-    except Exception as e:
-        print(f"[Faux Signal] {e}", flush=True)
-
-    penalite = min(penalite, 35)  # plafond — ne domine jamais le score global
-    return (penalite > 0), penalite, raisons
-
-# ==========================================
-# ⏱️ V49 NEW: MODULE MULTI-TIMEFRAME (M1/M5/M15/H1)
-# ==========================================
-# Compare plusieurs unités de temps pour vérifier la cohérence du contexte
-# général. Un signal allant contre une forte tendance supérieure est pénalisé.
-
-def analyser_coherence_multi_tf(symbole, direction_signal):
-    """
-    Récupère M1, M5, M15 (approximé via cache court) et H1, calcule la
-    tendance EMA20/50 sur chacun, et retourne un score de cohérence 0-100
-    ainsi qu'une pénalité éventuelle si le signal va contre une unité de
-    temps supérieure (H1 pèse plus que M15, qui pèse plus que M5/M1).
-    """
-    tendances = {}
-    poids_tf = {"M1": 1, "M5": 2, "M15": 3, "H1": 4}
-
-    granularites = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600}
-    for tf_nom, gran in granularites.items():
-        try:
-            candles = obtenir_donnees_deriv(symbole, gran)
-            if not candles or len(candles) < 55:
-                continue
-            df = pd.DataFrame([{"close": float(c["close"])} for c in candles])
-            ema20 = df['close'].ewm(span=20, adjust=False).mean().iloc[-2]
-            ema50 = df['close'].ewm(span=50, adjust=False).mean().iloc[-2]
-            tendances[tf_nom] = "BULL" if ema20 > ema50 else "BEAR"
-        except Exception:
-            continue
-
-    if not tendances:
-        return {"score": 50, "penalite": 0, "detail": tendances, "raisons": ["Données multi-TF indisponibles"]}
-
-    total_poids = sum(poids_tf[tf] for tf in tendances)
-    poids_aligne = sum(poids_tf[tf] for tf, t in tendances.items() if t == direction_signal)
-    score_coherence = round((poids_aligne / total_poids) * 100, 1) if total_poids else 50
-
-    penalite = 0
-    raisons = []
-    # Pénalité spécifique si H1 (le plus pesant) est contraire au signal
-    if tendances.get("H1") and tendances["H1"] != direction_signal:
-        penalite += IA_CONFIG["seuil_multi_tf_penalite"]
-        raisons.append("Signal contraire à la tendance H1 (unité supérieure)")
-    elif tendances.get("M15") and tendances["M15"] != direction_signal:
-        penalite += IA_CONFIG["seuil_multi_tf_penalite"] // 2
-        raisons.append("Signal contraire à la tendance M15")
-
-    if score_coherence >= 75:
-        raisons.append(f"Cohérence multi-TF forte ({score_coherence}%)")
-    elif score_coherence < 40:
-        raisons.append(f"Cohérence multi-TF faible ({score_coherence}%)")
-
-    return {"score": score_coherence, "penalite": penalite, "detail": tendances, "raisons": raisons}
-
-# ==========================================
-# 🛡️ V49 NEW: MODULE GESTION INTELLIGENTE DU RISQUE
-# ==========================================
-# Propose un SL/TP/R:R affiné à partir de la volatilité réelle (ATR), mais
-# reste toujours BORNÉ par les niveaux déjà calculés par la stratégie —
-# ne peut jamais élargir le risque au-delà de ce que la stratégie a prévu,
-# seulement l'ajuster à l'intérieur d'une marge de sécurité.
-
-def optimiser_gestion_risque(signal, contexte, df1h):
-    """
-    Retourne {"sl_optimise", "tp_optimise", "rr_optimise", "note"} — ajuste
-    légèrement le SL pour respecter un multiple d'ATR cohérent avec la
-    volatilité actuelle, sans jamais dépasser ±15% des niveaux d'origine
-    (garde-fou dur pour ne pas contredire la stratégie).
-    """
-    try:
-        atr = calculer_atr(df1h)
-        px = signal["px"]
-        sl_origine = signal["sl"]
-        tp_origine = signal["tp"]
-        direction = signal["tendance"] if signal["tendance"] in ("BULL", "BEAR") else \
-                    ("BULL" if "BUY" in signal["action"] else "BEAR")
-
-        distance_sl_origine = abs(px - sl_origine)
-        distance_sl_atr = atr * 1.5  # multiple standard de gestion de risque
-
-        # Ne jamais s'écarter de plus de 15% du SL déjà défini par la stratégie
-        marge = distance_sl_origine * 0.15
-        distance_sl_bornee = max(distance_sl_origine - marge,
-                                 min(distance_sl_origine + marge, distance_sl_atr))
-
-        if direction == "BULL":
-            sl_optimise = round(px - distance_sl_bornee, 5)
-        else:
-            sl_optimise = round(px + distance_sl_bornee, 5)
-
-        distance_tp_origine = abs(tp_origine - px)
-        rr_origine = signal.get("rr", 0)
-        rr_optimise = round(distance_tp_origine / distance_sl_bornee, 2) if distance_sl_bornee > 0 else rr_origine
-
-        if abs(distance_sl_bornee - distance_sl_origine) < distance_sl_origine * 0.02:
-            note = "SL/TP de la stratégie déjà cohérents avec la volatilité (ATR)"
-        else:
-            note = f"SL affiné selon ATR (x1.5) — ajustement {'+' if distance_sl_bornee > distance_sl_origine else '-'}{abs(round((distance_sl_bornee/distance_sl_origine - 1) * 100, 1))}%"
-
-        return {
-            "sl_optimise": sl_optimise, "tp_optimise": tp_origine,  # TP reste celui de la stratégie
-            "rr_optimise": rr_optimise, "note": note,
-        }
-    except Exception as e:
-        print(f"[Gestion Risque] {e}", flush=True)
-        return {"sl_optimise": signal.get("sl"), "tp_optimise": signal.get("tp"),
-               "rr_optimise": signal.get("rr", 0), "note": "Optimisation indisponible — niveaux stratégie conservés"}
-
-def calculer_adx(df, period=14):
-    """ADX calculé manuellement (indépendant de la lib 'ta' pour rester robuste)."""
-    try:
-        high, low, close = df['high'], df['low'], df['close']
-        plus_dm = high.diff()
-        minus_dm = -low.diff()
-        plus_dm[plus_dm < 0] = 0
-        minus_dm[minus_dm < 0] = 0
-        tr = pd.concat([high - low, (high - close.shift()).abs(),
-                        (low - close.shift()).abs()], axis=1).max(axis=1)
-        atr = tr.rolling(period).mean()
-        plus_di = 100 * (plus_dm.rolling(period).mean() / atr.replace(0, 1e-9))
-        minus_di = 100 * (minus_dm.rolling(period).mean() / atr.replace(0, 1e-9))
-        dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, 1e-9)
-        adx = dx.rolling(period).mean()
-        return float(adx.iloc[-2]) if not adx.isna().iloc[-2] else 20.0
-    except Exception:
-        return 20.0
-
-def calculer_macd_signal(df):
-    """Retourne (macd_line, signal_line, histogram) sur la dernière bougie clôturée."""
-    try:
-        ema12 = df['close'].ewm(span=12, adjust=False).mean()
-        ema26 = df['close'].ewm(span=26, adjust=False).mean()
-        macd_line = ema12 - ema26
-        signal_line = macd_line.ewm(span=9, adjust=False).mean()
-        hist = macd_line - signal_line
-        return float(macd_line.iloc[-2]), float(signal_line.iloc[-2]), float(hist.iloc[-2])
-    except Exception:
-        return 0.0, 0.0, 0.0
-
-def calculer_atr(df, period=14):
-    try:
-        high, low, close = df['high'], df['low'], df['close']
-        tr = pd.concat([high - low, (high - close.shift()).abs(),
-                        (low - close.shift()).abs()], axis=1).max(axis=1)
-        return float(tr.rolling(period).mean().iloc[-2])
-    except Exception:
-        return 0.0
-
-def evaluer_structure_marche(df):
-    """Score 0-100: mesure la clarté de la structure (higher highs/lows cohérents)."""
-    try:
-        highs = df['high'].iloc[-20:].values
-        lows = df['low'].iloc[-20:].values
-        if len(highs) < 2 or len(lows) < 2:
-            return 50.0
-        hh = sum(1 for i in range(1, len(highs)) if highs[i] > highs[i-1])
-        hl = sum(1 for i in range(1, len(lows)) if lows[i] > lows[i-1])
-        lh = sum(1 for i in range(1, len(highs)) if highs[i] < highs[i-1])
-        ll = sum(1 for i in range(1, len(lows)) if lows[i] < lows[i-1])
-        coherence_bull = (hh + hl) / (2 * (len(highs) - 1))
-        coherence_bear = (lh + ll) / (2 * (len(lows) - 1))
-        return round(max(coherence_bull, coherence_bear) * 100, 1)
-    except Exception:
-        return 50.0
-
-def calculer_distance_support_resistance(df, px):
-    """Retourne un score 0-100 représentant la proximité relative du prix à un mur SR récent."""
-    try:
-        recent_high = df['high'].iloc[-30:].max()
-        recent_low = df['low'].iloc[-30:].min()
-        rng = recent_high - recent_low
-        if rng <= 0:
-            return 50.0
-        dist_high = abs(recent_high - px) / rng
-        dist_low = abs(px - recent_low) / rng
-        return round(min(dist_high, dist_low) * 100, 1)
-    except Exception:
-        return 50.0
-
-def estimer_spread_relatif(symbole, px):
-    """Approxime le spread relatif attendu par catégorie d'actif."""
-    if symbole in VOLATILE_PAIRS:
-        return 0.02
-    if symbole in COMMODITY_PAIRS:
-        return 0.015
-    return 0.03
-
-def moteur_ia_valider_signal(symbole, signal, strategie_nom):
-    """
-    ✅ Couche 1 (calcul déterministe). Ne génère AUCUN signal — reçoit un
-    signal déjà détecté par une stratégie et l'évalue.
-
-    signal: dict retourné par analyser_trend_pullback_confluence()
-            (structure inchangée)
-    strategie_nom: "TREND_PULLBACK"
-
-    Retourne: {"accepte": bool, "score": float, "justification": [str],
-               "details": {...}} — jamais None, toujours un verdict explicite.
-    """
-    try:
-        c1h = obtenir_donnees_deriv(symbole, 3600)
-        c5  = obtenir_donnees_deriv(symbole, 300)
-        c4h = obtenir_donnees_h4(symbole)
-        if not c1h or not c5:
-            return {"accepte": False, "score": 0, "justification": ["Données insuffisantes"], "details": {}}
-
-        df1h = pd.DataFrame([{"open":float(c["open"]),"high":float(c["high"]),
-                               "low":float(c["low"]),"close":float(c["close"])} for c in c1h])
-        df5  = pd.DataFrame([{"open":float(c["open"]),"high":float(c["high"]),
-                               "low":float(c["low"]),"close":float(c["close"])} for c in c5])
-        df4h = pd.DataFrame([{"open":float(c["open"]),"high":float(c["high"]),
-                               "low":float(c["low"]),"close":float(c["close"])} for c in c4h]) if c4h else df1h
-
-        px = signal["px"]
-        direction = signal["tendance"] if signal["tendance"] in ("BULL", "BEAR") else \
-                    ("BULL" if "BUY" in signal["action"] else "BEAR")
-
-        scores = {}
-        justifs_pos, justifs_neg = [], []
-
-        # 1. Tendance H1 (EMA 20/50)
-        try:
-            ema20 = df1h['close'].ewm(span=20, adjust=False).mean().iloc[-2]
-            ema50 = df1h['close'].ewm(span=50, adjust=False).mean().iloc[-2]
-            tendance_bull = ema20 > ema50
-            aligne = (tendance_bull and direction == "BULL") or (not tendance_bull and direction == "BEAR")
-            scores["tendance_h1"] = 100 if aligne else 30
-            (justifs_pos if aligne else justifs_neg).append(
-                "Tendance H1 alignée avec le signal" if aligne else "Tendance H1 contraire au signal")
-        except Exception:
-            scores["tendance_h1"] = 50
-
-        # 2. ADX (force de la tendance)
-        adx = calculer_adx(df1h)
-        scores["adx"] = min(100, adx * 2.5)
-        if adx >= 25:
-            justifs_pos.append(f"ADX élevé ({adx:.1f}) — tendance forte")
-        else:
-            justifs_neg.append(f"ADX faible ({adx:.1f}) — tendance peu marquée")
-
-        # 3. RSI cohérence
-        try:
-            delta = df1h['close'].diff()
-            gain = delta.clip(lower=0).rolling(14).mean()
-            loss = (-delta.clip(upper=0)).rolling(14).mean()
-            rs = gain / loss.replace(0, 1e-9)
-            rsi_val = float((100 - (100 / (1 + rs))).iloc[-2])
-            if direction == "BULL":
-                coherent = 40 <= rsi_val <= 70
+            # 3. EMA200 — prix du bon côté + pente cohérente (soft, chacun vaut des points)
+            if direction == "CALL":
+                if prix_au_dessus_ema200: s += 12; raisons.append("Prix > EMA200")
+                if ema200_pente_haussiere: s += 8
             else:
-                coherent = 30 <= rsi_val <= 60
-            scores["rsi_coherence"] = 90 if coherent else 40
-            (justifs_pos if coherent else justifs_neg).append(
-                f"RSI cohérent ({rsi_val:.1f})" if coherent else f"RSI incohérent avec le signal ({rsi_val:.1f})")
-        except Exception:
-            scores["rsi_coherence"] = 50
-            rsi_val = 50.0
+                if prix_en_dessous_ema200: s += 12; raisons.append("Prix < EMA200")
+                if ema200_pente_baissiere: s += 8
 
-        # 4. MACD cohérence
-        macd_line, signal_line, hist = calculer_macd_signal(df1h)
-        macd_bull = hist > 0
-        macd_ok = (macd_bull and direction == "BULL") or (not macd_bull and direction == "BEAR")
-        scores["macd_coherence"] = 85 if macd_ok else 35
-        (justifs_pos if macd_ok else justifs_neg).append(
-            "MACD confirme la direction" if macd_ok else "MACD divergent du signal")
+            # 4. RSI / Stochastique — zone extrême cohérente avec la direction
+            if direction == "CALL" and rsi_val < 45:
+                s += 10; raisons.append(f"RSI bas ({rsi_val})")
+            elif direction == "PUT" and rsi_val > 55:
+                s += 10; raisons.append(f"RSI haut ({rsi_val})")
+            if direction == "CALL" and stoch_val < 30:
+                s += 6; raisons.append(f"Stoch survente ({stoch_val})")
+            elif direction == "PUT" and stoch_val > 70:
+                s += 6; raisons.append(f"Stoch surachat ({stoch_val})")
 
-        # 5. Alignement EMA multi-période (M5)
-        try:
-            e9  = df5['close'].ewm(span=9, adjust=False).mean().iloc[-2]
-            e21 = df5['close'].ewm(span=21, adjust=False).mean().iloc[-2]
-            aligne_m5 = (e9 > e21 and direction == "BULL") or (e9 < e21 and direction == "BEAR")
-            scores["ema_alignement"] = 80 if aligne_m5 else 40
-        except Exception:
-            scores["ema_alignement"] = 50
+            # 5. Confirmations optionnelles — bonus, jamais obligatoires
+            if vsa_valide:
+                s += 8; raisons.append("Volume VSA confirmé")
+            if direction == "CALL" and fvg_haussier:
+                s += 6; raisons.append("FVG haussier (SMC)")
+            elif direction == "PUT" and fvg_baissier:
+                s += 6; raisons.append("FVG baissier (SMC)")
 
-        # 6. ATR / volatilité
-        atr = calculer_atr(df1h)
-        atr_pct = (atr / px * 100) if px else 0
-        if 0.05 <= atr_pct <= 1.2:
-            scores["atr_volatilite"] = 90
-            justifs_pos.append("Volatilité favorable (ATR normal)")
-        elif atr_pct > 1.2:
-            scores["atr_volatilite"] = 45
-            justifs_neg.append("Volatilité excessive — risque de faux breakout")
+            return round(min(100, s), 1), raisons
+
+        score_call, raisons_call = score_direction("CALL")
+        score_put,  raisons_put  = score_direction("PUT")
+
+        SEUIL_SIGNAL = 45  # sur ~100 max — ajustable directement ici si besoin
+
+        if score_call < SEUIL_SIGNAL and score_put < SEUIL_SIGNAL:
+            print(f"[DEBUG-BIN] {symbole} REJET: score CALL={score_call} / PUT={score_put} "
+                  f"< seuil {SEUIL_SIGNAL} (BB%={round(position_bb_pct*100,1)} tendanceH1={tendance_h1} "
+                  f"RSI={rsi_val} Stoch={stoch_val} VSA={vsa_valide})", flush=True)
+            return f"⚠️ Marché sans confluence suffisante actuellement. Filtrage actif.", None, None, None, None, None, None, None
+
+        if score_call >= score_put:
+            action = "🟢 ACHAT (CALL)"
+            score_final = score_call
+            bb_status = "Bande Basse" if position_bb_pct < 0.5 else "Zone Médiane"
+            raisons = raisons_call
         else:
-            scores["atr_volatilite"] = 55
-            justifs_neg.append("Marché trop calme — momentum faible")
+            action = "🔴 VENTE (PUT)"
+            score_final = score_put
+            bb_status = "Bande Haute" if position_bb_pct > 0.5 else "Zone Médiane"
+            raisons = raisons_put
 
-        # 7. Structure de marché
-        structure_score = evaluer_structure_marche(df1h)
-        scores["structure_marche"] = structure_score
-        if structure_score >= 60:
-            justifs_pos.append("Structure de marché claire")
-        else:
-            justifs_neg.append("Structure de marché peu lisible")
+        confiance = 99
+        score_algo = int(round(score_final / 10))  # ramené sur une échelle 0-10 pour la jauge existante
 
-        # 8. Distance support/résistance
-        dist_sr = calculer_distance_support_resistance(df1h, px)
-        if strategie_nom == "OPEN_DRIVE":
-            scores["distance_sr"] = 100 - dist_sr if dist_sr < 30 else 50
-        else:
-            scores["distance_sr"] = 100 - dist_sr if dist_sr < 25 else 40
+        print(f"[DEBUG-BIN] {symbole} ✅ SIGNAL ÉMIS — {action} score={score_final} "
+              f"raisons: {', '.join(raisons)}", flush=True)
 
-        # 9. Qualité de la cassure / R:R déjà calculé par la stratégie
-        rr = signal.get("rr", 0)
-        scores["qualite_cassure"] = min(100, rr * 30)
-        if rr >= 2.0:
-            justifs_pos.append(f"R/R solide ({rr}R)")
-        else:
-            justifs_neg.append(f"R/R faible ({rr}R)")
-
-        # 10. Spread estimé
-        spread_pct = estimer_spread_relatif(symbole, px)
-        scores["spread"] = 90 if spread_pct < 0.025 else 60
-
-        # 11. Cohérence multi-timeframe (H1 vs H4)
-        try:
-            ema20_4h = df4h['close'].ewm(span=20, adjust=False).mean().iloc[-2]
-            ema50_4h = df4h['close'].ewm(span=50, adjust=False).mean().iloc[-2]
-            tendance_h4_bull = ema20_4h > ema50_4h
-            coherent_tf = (tendance_h4_bull and direction == "BULL") or (not tendance_h4_bull and direction == "BEAR")
-            scores["multi_tf_coherence"] = 90 if coherent_tf else 35
-            (justifs_pos if coherent_tf else justifs_neg).append(
-                "H1 et H4 alignés" if coherent_tf else "Divergence H1/H4 — prudence")
-        except Exception:
-            scores["multi_tf_coherence"] = 50
-
-        # Score final pondéré (poids éventuellement ajustés par apprentissage)
-        poids = ia_poids_ajustes.get((strategie_nom, symbole), IA_CONFIG["poids"])
-        total_poids = sum(poids.values())
-        score_base = sum(scores.get(k, 50) * v for k, v in poids.items()) / total_poids
-
-        # ── ✅ V49: Module Contexte Marché (ajuste le score, ne décide pas) ──
-        contexte = analyser_contexte_marche(symbole, df1h, df4h)
-        facteur_contexte, justif_contexte = contexte_vers_facteur_confiance(contexte, direction)
-        justifs_pos.extend(j for j in justif_contexte if "confirmée" in j or "cassure" in j)
-        justifs_neg.extend(j for j in justif_contexte if "contraire" in j or "sans tendance" in j
-                           or "excessive" in j or "faible" in j or "consolidation" in j)
-
-        # ── ✅ V49: Module Détection Faux Signaux (pénalité soustractive) ──
-        risque_detecte, penalite_faux_signal, raisons_faux_signal = detecter_faux_signal(
-            df1h, df5, signal, contexte)
-        if risque_detecte:
-            justifs_neg.extend(raisons_faux_signal)
-
-        # ── ✅ V49: Module Multi-Timeframe M1/M5/M15/H1 (pénalité soustractive) ──
-        multi_tf = analyser_coherence_multi_tf(symbole, direction)
-        if multi_tf["penalite"] > 0:
-            justifs_neg.extend(multi_tf["raisons"])
-        else:
-            justifs_pos.extend(r for r in multi_tf["raisons"] if "forte" in r)
-
-        # Score final = (score de base × facteur contexte) − pénalités faux-signal/multi-TF
-        score_final = (score_base * facteur_contexte) - penalite_faux_signal - multi_tf["penalite"]
-        score_final = round(max(0, min(100, score_final)), 1)
-
-        accepte = score_final >= IA_CONFIG["seuil_acceptation"]
-
-        # ── ✅ V49: Module Gestion Intelligente du Risque (SL/TP affinés) ──
-        gestion_risque = optimiser_gestion_risque(signal, contexte, df1h)
-
-        return {
-            "accepte": accepte,
-            "score": score_final,
-            "score_base": round(score_base, 1),
-            "justification": justifs_pos if accepte else (justifs_neg if justifs_neg else justifs_pos),
-            "details": scores,
-            "rsi_val": round(rsi_val, 1),
-            "adx_val": round(adx, 1),
-            "contexte_marche": contexte,
-            "risque_faux_signal": risque_detecte,
-            "penalite_faux_signal": penalite_faux_signal,
-            "raisons_faux_signal": raisons_faux_signal,
-            "multi_tf": multi_tf,
-            "gestion_risque": gestion_risque,
-        }
+        return action, confiance, expiration_texte, duree_secondes, rsi_val, stoch_val, bb_status, score_algo
 
     except Exception as e:
-        print(f"[Moteur IA/{symbole}] {e}", flush=True)
-        return {"accepte": False, "score": 0, "justification": ["Erreur d'analyse IA"], "details": {}}
-
-
-def groq_second_avis(symbole, signal, strategie_nom, verdict_calcul):
-    """
-    ✅ Couche 2 (optionnelle): second avis Groq (llama-3.1-8b-instant).
-    N'est appelé QUE si le calcul déterministe a déjà accepté le signal
-    (verdict_calcul["accepte"] == True) — Groq ne peut jamais faire remonter
-    un signal que le calcul a rejeté, il ne peut que CONFIRMER ou opposer un
-    VETO à un signal déjà validé par le calcul. Robuste: en cas d'erreur
-    réseau/clé absente/quota dépassé, retourne un verdict neutre qui laisse
-    le calcul décider seul.
-
-    Le prompt inclut le contexte marché, les alertes de faux signal et la
-    cohérence multi-timeframe déjà calculés par les modules dédiés — Groq
-    agit comme un analyste qui reçoit un dossier complet plutôt que des
-    chiffres bruts isolés.
-    """
-    if not IA_CONFIG["groq_active"] or not GROQ_API_KEY:
-        return {"disponible": False, "score": None, "veto": False, "avis": "Groq désactivé"}
-
-    try:
-        contexte = verdict_calcul.get("contexte_marche", {})
-        multi_tf = verdict_calcul.get("multi_tf", {})
-        raisons_fs = verdict_calcul.get("raisons_faux_signal", [])
-        gestion_risque = verdict_calcul.get("gestion_risque", {})
-
-        prompt = (
-            "Tu es un analyste de risque expert pour un bot de trading automatisé. "
-            "Un signal a déjà été détecté par une stratégie technique, validé par un moteur "
-            "de calcul déterministe (ADX/RSI/MACD/structure/contexte/multi-timeframe), et une "
-            "gestion de risque a proposé un SL/TP. Ton rôle est de donner un second avis "
-            "indépendant, en confirmant ou en déconseillant, avec une explication précise.\n\n"
-            "Réponds UNIQUEMENT en JSON strict, sans texte autour, format exact:\n"
-            '{"score": <entier 0-100>, "avis": "<2-3 phrases: verdict + raisons principales>"}\n\n'
-            f"=== SIGNAL ===\n"
-            f"Actif: {symbole} | Stratégie: {strategie_nom} | Direction: {signal.get('action')}\n"
-            f"R/R prévu: {signal.get('rr')}\n\n"
-            f"=== CALCUL DÉTERMINISTE ===\n"
-            f"Score: {verdict_calcul.get('score')}% (base avant ajustements: {verdict_calcul.get('score_base','?')}%)\n"
-            f"Justifications: {', '.join(verdict_calcul.get('justification', [])[:4])}\n"
-            f"RSI H1: {verdict_calcul.get('rsi_val', '?')} | ADX H1: {verdict_calcul.get('adx_val', '?')}\n\n"
-            f"=== CONTEXTE MARCHÉ ===\n"
-            f"Tendance: {contexte.get('tendance','?')} | Volatilité: {contexte.get('volatilite','?')}\n"
-            f"Consolidation: {contexte.get('consolidation','?')} | Proche cassure: {contexte.get('proche_cassure','?')}\n\n"
-            f"=== DÉTECTION FAUX SIGNAUX ===\n"
-            f"Alertes: {', '.join(raisons_fs) if raisons_fs else 'Aucune alerte détectée'}\n\n"
-            f"=== MULTI-TIMEFRAME (M1/M5/M15/H1) ===\n"
-            f"Cohérence: {multi_tf.get('score','?')}% | Détail: {multi_tf.get('detail',{})}\n\n"
-            f"=== GESTION DU RISQUE PROPOSÉE ===\n"
-            f"SL optimisé: {gestion_risque.get('sl_optimise','?')} | "
-            f"R:R optimisé: {gestion_risque.get('rr_optimise','?')}\n\n"
-            "Sois sévère si le contexte te semble risqué (faux breakout, marché sans "
-            "direction claire, divergence, volatilité excessive, incohérence multi-TF). "
-            "Réponds uniquement le JSON."
-        )
-
-        payload = {
-            "model": GROQ_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.2,
-            "max_tokens": 200,
-        }
-        resp = requests.post(
-            GROQ_URL,
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-            json=payload, timeout=8,
-        )
-        if resp.status_code != 200:
-            print(f"[Groq] HTTP {resp.status_code}: {resp.text[:200]}", flush=True)
-            return {"disponible": False, "score": None, "veto": False, "avis": "Groq indisponible (HTTP)"}
-
-        data = resp.json()
-        texte = data["choices"][0]["message"]["content"].strip()
-        texte = texte.replace("```json", "").replace("```", "").strip()
-        parsed = json.loads(texte)
-
-        score_groq = float(parsed.get("score", 50))
-        avis_groq  = str(parsed.get("avis", ""))[:300]
-        veto = score_groq < IA_CONFIG["groq_seuil_veto"]
-
-        return {"disponible": True, "score": score_groq, "veto": veto, "avis": avis_groq}
-
-    except Exception as e:
-        print(f"[Groq] Erreur: {e}", flush=True)
-        return {"disponible": False, "score": None, "veto": False, "avis": "Groq indisponible (erreur)"}
-
-def ia_enregistrer_resultat(symbol, strategie_nom, score, timeframe, win,
-                             tp_atteint, sl_atteint, drawdown_pct=0,
-                             avis_ia_score=None, sl=None, tp=None,
-                             duree_secondes=None, gemini_score=None,
-                             contexte_marche=None):
-    """
-    ✅ Auto-apprentissage enrichi (V49): enregistre tous les champs demandés
-    — actif, stratégie, timeframe, heure, score du calcul déterministe, avis
-    Groq, SL/TP, résultat, drawdown, durée du trade — puis réajuste les
-    poids des critères "structurels" pour ce couple (stratégie, symbole)
-    selon le win-rate historique observé. Méthode simple et transparente,
-    bornée, sans boîte noire.
-    """
-    maintenant = datetime.datetime.utcnow()
-    entree = {
-        "symbol": symbol, "strategie": strategie_nom, "score": score,
-        "timeframe": timeframe, "win": win, "tp_atteint": tp_atteint,
-        "sl_atteint": sl_atteint, "drawdown_pct": drawdown_pct, "ts": time.time(),
-        "heure_utc": maintenant.hour,
-        "date": maintenant.strftime("%Y-%m-%d"),
-        "avis_ia_score": avis_ia_score,   # score du calcul déterministe au moment du trade
-        "gemini_score": gemini_score,     # score Groq au moment du trade (None si non consulté)
-        "sl": sl, "tp": tp,
-        "duree_secondes": duree_secondes,
-        "contexte_marche": contexte_marche,  # dict {tendance, volatilite, ...} au moment du signal
-    }
-    ia_historique.append(entree)
-
-    cle = (strategie_nom, symbol)
-    trades_cle = [h for h in ia_historique if (h["strategie"], h["symbol"]) == cle]
-    if len(trades_cle) < 15:
-        return
-
-    winrate = sum(1 for t in trades_cle if t["win"]) / len(trades_cle)
-    poids_base = dict(IA_CONFIG["poids"])
-
-    ajustement = 1.15 if winrate < 0.45 else (0.9 if winrate > 0.65 else 1.0)
-    criteres_structurels = ("tendance_h1", "adx", "structure_marche", "multi_tf_coherence")
-    poids_ajustes = {k: round(v * (ajustement if k in criteres_structurels else 1.0), 2)
-                     for k, v in poids_base.items()}
-    ia_poids_ajustes[cle] = poids_ajustes
-    print(f"[IA Learning] {cle}: winrate={winrate:.0%} sur {len(trades_cle)} trades "
-          f"→ poids ajustés (facteur {ajustement})", flush=True)
+        print(f"[DEBUG-BIN] {symbole} EXCEPTION: {type(e).__name__}: {e}", flush=True)
+        return None, None, None, None, None, None, None, None
 
 # ==========================================
-# 📊 V49 NEW: MODULE STATISTIQUES D'APPRENTISSAGE
-# ==========================================
-# Produit les statistiques demandées à partir de ia_historique: taux de
-# réussite par stratégie, par actif, par timeframe, par tranche de score,
-# par heure de la journée, et comparaison signaux confirmés/non confirmés
-# par Groq. Lecture seule — n'affecte jamais les décisions en direct,
-# sert uniquement à la visibilité (/iastats) et à l'ajustement des poids
-# déjà géré par ia_enregistrer_resultat().
-
-def _winrate(liste):
-    if not liste:
-        return None, 0
-    return round(sum(1 for x in liste if x["win"]) / len(liste) * 100, 1), len(liste)
-
-def stats_par_strategie():
-    groupes = {}
-    for h in ia_historique:
-        groupes.setdefault(h["strategie"], []).append(h)
-    return {k: _winrate(v) for k, v in groupes.items()}
-
-def stats_par_actif():
-    groupes = {}
-    for h in ia_historique:
-        groupes.setdefault(h["symbol"], []).append(h)
-    return {k: _winrate(v) for k, v in groupes.items()}
-
-def stats_par_timeframe():
-    groupes = {}
-    for h in ia_historique:
-        groupes.setdefault(h.get("timeframe", "?"), []).append(h)
-    return {k: _winrate(v) for k, v in groupes.items()}
-
-def stats_par_tranche_score():
-    tranches = {"< 85%": [], "85-90%": [], "90-95%": [], "≥ 95%": []}
-    for h in ia_historique:
-        s = h.get("score", 0)
-        if s < 85: tranches["< 85%"].append(h)
-        elif s < 90: tranches["85-90%"].append(h)
-        elif s < 95: tranches["90-95%"].append(h)
-        else: tranches["≥ 95%"].append(h)
-    return {k: _winrate(v) for k, v in tranches.items()}
-
-def stats_par_heure():
-    groupes = {}
-    for h in ia_historique:
-        heure = h.get("heure_utc")
-        if heure is None:
-            continue
-        tranche = f"{(heure // 4) * 4:02d}h-{(heure // 4) * 4 + 4:02d}h"
-        groupes.setdefault(tranche, []).append(h)
-    return {k: _winrate(v) for k, v in sorted(groupes.items())}
-
-def stats_gemini_vs_sans():
-    """Compare le win-rate des trades où Groq a été consulté vs non consulté."""
-    avec_gemini = [h for h in ia_historique if h.get("gemini_score") is not None]
-    sans_gemini = [h for h in ia_historique if h.get("gemini_score") is None]
-    return {"avec_gemini": _winrate(avec_gemini), "sans_gemini": _winrate(sans_gemini)}
-
-def stats_par_contexte_marche():
-    groupes = {}
-    for h in ia_historique:
-        ctx = h.get("contexte_marche") or {}
-        tendance = ctx.get("tendance", "INCONNU")
-        groupes.setdefault(tendance, []).append(h)
-    return {k: _winrate(v) for k, v in groupes.items()}
-
-# ==========================================
-# 🧠 V48: CERVEAU PRO TRADER — STRATÉGIES INDÉPENDANTES + VALIDATION IA
+# LE SCANNER AUTOMATIQUE DE L'OMBRE
 # ==========================================
 
-def cerveau_pro_trader(symbole):
-    """
-    ✅ V48: Chaque stratégie est évaluée INDÉPENDAMMENT — aucune n'a besoin
-    de l'accord d'une autre pour que son signal soit envoyé. Chaque signal
-    détecté passe par: (1) moteur de calcul déterministe, puis, s'il est
-    accepté, (2) second avis Groq (confirme ou veto). Retourne une LISTE
-    de signaux acceptés (0 à 3). La logique interne de chaque analyser_xxx()
-    n'est jamais modifiée par ce cerveau. ✅ V53: les 3 anciennes stratégies
-    indépendantes (CPR/Open Drive/RSI) ont été remplacées par une stratégie
-    unique de confluence (voir analyser_trend_pullback_confluence) — moins
-    de conditions rares empilées, plus de signaux, qualité maintenue par le
-    cumul de critères courants + validation IA/Groq inchangée en aval.
-
-    🔍 DEBUG: instrumentation de diagnostic conservée — logge explicitement
-    CHAQUE étape même quand rien n'est détecté, pour identifier précisément
-    où le pipeline s'arrête (stratégie ne déclenche vs. rejetée par le
-    calcul vs. rejetée par Groq).
-    """
-    signaux_valides = []
-    print(f"[DEBUG] === Analyse {symbole} — début cycle ===", flush=True)
-
-    for fn, nom_strategie, emoji_ctx in (
-        (analyser_trend_pullback_confluence, "TREND_PULLBACK", "📈 TREND PULLBACK & CONFLUENCE"),
-    ):
-        try:
-            signal_brut = fn(symbole)
-        except Exception as e:
-            print(f"[DEBUG] {symbole}/{nom_strategie} EXCEPTION pendant la détection: "
-                  f"{type(e).__name__}: {e}", flush=True)
-            continue
-
-        if not signal_brut:
-            print(f"[DEBUG] {symbole}/{nom_strategie} → aucune configuration détectée "
-                  f"(fonction a retourné None)", flush=True)
-            continue
-
-        print(f"[DEBUG] {symbole}/{nom_strategie} → SIGNAL BRUT DÉTECTÉ: "
-              f"action={signal_brut.get('action')} rr={signal_brut.get('rr')} "
-              f"px={signal_brut.get('px')}", flush=True)
-
-        try:
-            verdict = moteur_ia_valider_signal(symbole, signal_brut, nom_strategie)
-        except Exception as e:
-            print(f"[DEBUG] {symbole}/{nom_strategie} EXCEPTION dans moteur_ia_valider_signal: "
-                  f"{type(e).__name__}: {e}", flush=True)
-            continue
-
-        print(f"[DEBUG] {symbole}/{nom_strategie} → score calcul = {verdict.get('score')}% "
-              f"(seuil actuel = {IA_CONFIG['seuil_acceptation']}%)", flush=True)
-
-        if not verdict["accepte"]:
-            print(f"[IA] {symbole}/{nom_strategie} REJETÉ (calcul) — score {verdict['score']}% "
-                  f"< seuil {IA_CONFIG['seuil_acceptation']}%", flush=True)
-            continue
-
-        # Second avis Groq — ne peut que confirmer ou opposer un veto à un
-        # signal déjà accepté par le calcul, jamais l'inverse.
-        try:
-            avis_groq = groq_second_avis(symbole, signal_brut, nom_strategie, verdict)
-        except Exception as e:
-            print(f"[DEBUG] {symbole}/{nom_strategie} EXCEPTION dans groq_second_avis: "
-                  f"{type(e).__name__}: {e}", flush=True)
-            continue
-
-        print(f"[DEBUG] {symbole}/{nom_strategie} → Groq disponible={avis_groq.get('disponible')} "
-              f"score={avis_groq.get('score')} veto={avis_groq.get('veto')}", flush=True)
-
-        if avis_groq["veto"]:
-            print(f"[Groq] {symbole}/{nom_strategie} VETO — score Groq "
-                  f"{avis_groq['score']}% < seuil {IA_CONFIG['groq_seuil_veto']}% "
-                  f"({avis_groq['avis']})", flush=True)
-            continue
-
-        print(f"[DEBUG] {symbole}/{nom_strategie} → ✅✅✅ SIGNAL VALIDÉ DE BOUT EN BOUT", flush=True)
-
-        signal_brut["contexte_detecte"]  = emoji_ctx
-        signal_brut["ia_score"]          = verdict["score"]
-        signal_brut["ia_score_base"]     = verdict.get("score_base", verdict["score"])
-        signal_brut["ia_justification"]  = verdict["justification"]
-        signal_brut["ia_accepte"]        = True
-        signal_brut["strategie_nom_ia"]  = nom_strategie
-        # ⚠️ Clés conservées sous le nom "gemini_*" pour compatibilité avec le
-        # reste du bot (affichage scanner, ouvrir_trade, apprentissage,
-        # /iastats gemini) qui lit déjà ces noms de champs — elles contiennent
-        # désormais le résultat du second avis GROQ, pas de régression fonctionnelle.
-        signal_brut["gemini_score"]      = avis_groq["score"]
-        signal_brut["gemini_avis"]       = avis_groq["avis"]
-        signal_brut["gemini_disponible"] = avis_groq["disponible"]
-        # ✅ V49: données des nouveaux modules, propagées pour l'affichage et l'apprentissage
-        signal_brut["contexte_marche"]      = verdict.get("contexte_marche", {})
-        signal_brut["risque_faux_signal"]   = verdict.get("risque_faux_signal", False)
-        signal_brut["raisons_faux_signal"]  = verdict.get("raisons_faux_signal", [])
-        signal_brut["multi_tf"]             = verdict.get("multi_tf", {})
-        signal_brut["gestion_risque"]       = verdict.get("gestion_risque", {})
-
-        signaux_valides.append(signal_brut)
-
-    return signaux_valides
-
-
-# ==========================================
-# ✅ /Volatility GRANULAIRE
-# ==========================================
-
-@bot.message_handler(commands=['Volatility'])
-def gerer_volatility(message):
-    if message.chat.id != ADMIN_ID:
-        return bot.send_message(message.chat.id, "❌ Admin uniquement.")
-
-    parts = message.text.strip().split()
-
-    if len(parts) == 1:
-        lignes = ["🔥 *STATUT VOLATILITY PAIRS:*\n━━━━━━━━━━━━━━━━━━"]
-        for p, actif in volatility_pairs_active.items():
-            lignes.append(f"  {'✅' if actif else '❌'} {p}")
-        lignes.append("\n*Commandes:*")
-        lignes.append("/Volatility V10 ON/OFF")
-        lignes.append("/Volatility ALL ON/OFF")
-        return bot.send_message(message.chat.id, "\n".join(lignes), parse_mode="Markdown")
-
-    if len(parts) < 3:
-        return bot.send_message(message.chat.id,
-            "Usage: /Volatility V10 ON\n/Volatility ALL OFF", parse_mode="Markdown")
-
-    paire  = parts[1].upper()
-    action = parts[2].upper()
-
-    if action not in ("ON","OFF"):
-        return bot.send_message(message.chat.id, "Action invalide: ON ou OFF")
-
-    etat = (action == "ON")
-
-    if paire == "ALL":
-        for p in volatility_pairs_active:
-            volatility_pairs_active[p] = etat
-        msg = ("✅ Toutes les paires Volatility *ACTIVÉES*"
-               if etat else "⛔ Toutes les paires Volatility *DÉSACTIVÉES*")
-        return bot.send_message(message.chat.id, msg, parse_mode="Markdown")
-
-    if paire in volatility_pairs_active:
-        volatility_pairs_active[paire] = etat
-        msg = (f"✅ {paire} *ACTIVÉ*" if etat else f"⛔ {paire} *DÉSACTIVÉ*")
-        return bot.send_message(message.chat.id, msg, parse_mode="Markdown")
-
-    bot.send_message(message.chat.id,
-        f"❌ Paire inconnue: {paire}\nValides: V10, V25, V50, V75, V100, ALL")
-
-# ==========================================
-# ✅ V43 NEW: /risk — Configurer le risque par trade
-# ==========================================
-
-@bot.message_handler(commands=['risk'])
-def gerer_risque(message):
-    if message.chat.id != ADMIN_ID:
-        return bot.send_message(message.chat.id, "❌ Admin uniquement.")
-
-    parts = message.text.strip().split()
-    if len(parts) == 1:
-        txt = (
-            f"⚙️ *PARAMÈTRES DE RISQUE ACTUELS*\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"Risque/trade : {RISK_CONFIG['risk_per_trade_pct']}%\n"
-            f"Limite perte/jour : {RISK_CONFIG['daily_loss_limit_pct']}%\n"
-            f"Pertes consécutives max : {RISK_CONFIG['max_consecutive_losses']}\n"
-            f"Durée pause anti-tilt : {RISK_CONFIG['pause_duration_minutes']} min\n"
-            f"Partial TP : {int(RISK_CONFIG['partial_tp_ratio']*100)}%\n"
-            f"Trades max/jour : {RISK_CONFIG['max_trades_per_day']}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"Usage: /risk <param> <valeur>\n"
-            f"Ex: /risk risk_per_trade_pct 1.5"
-        )
-        return bot.send_message(message.chat.id, txt, parse_mode="Markdown")
-
-    if len(parts) >= 3 and parts[1] in RISK_CONFIG:
-        try:
-            valeur = float(parts[2])
-            RISK_CONFIG[parts[1]] = valeur
-            return bot.send_message(message.chat.id,
-                f"✅ {parts[1]} = {valeur}", parse_mode="Markdown")
-        except ValueError:
-            return bot.send_message(message.chat.id, "❌ Valeur invalide.")
-
-    bot.send_message(message.chat.id, "❌ Paramètre inconnu.")
-
-# ==========================================
-# ✅ V48 NEW: /iaconfig — Configurer le moteur IA
-# ==========================================
-
-@bot.message_handler(commands=['iaconfig'])
-def gerer_ia_config(message):
-    if message.chat.id != ADMIN_ID:
-        return bot.send_message(message.chat.id, "❌ Admin uniquement.")
-
-    parts = message.text.strip().split()
-    if len(parts) == 1:
-        groq_statut = "✅ Actif" if (IA_CONFIG["groq_active"] and GROQ_API_KEY) else \
-                     ("⚠️ Activé mais clé absente" if IA_CONFIG["groq_active"] else "❌ Désactivé")
-        txt = (
-            f"🤖 *PARAMÈTRES MOTEUR IA*\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"Seuil d'acceptation (calcul) : {IA_CONFIG['seuil_acceptation']}%\n"
-            f"Second avis Groq : {groq_statut}\n"
-            f"Seuil de veto Groq : {IA_CONFIG['groq_seuil_veto']}%\n"
-            f"Trades enregistrés (apprentissage) : {len(ia_historique)}\n"
-            f"Couples (stratégie,symbole) ajustés : {len(ia_poids_ajustes)}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"Usage:\n"
-            f"/iaconfig seuil_acceptation 90\n"
-            f"/iaconfig groq_active 0 (ou 1)\n"
-            f"/iaconfig groq_seuil_veto 35"
-        )
-        return bot.send_message(message.chat.id, txt, parse_mode="Markdown")
-
-    if len(parts) >= 3 and parts[1] == "seuil_acceptation":
-        try:
-            valeur = float(parts[2])
-            if not (0 <= valeur <= 100):
-                return bot.send_message(message.chat.id, "❌ Le seuil doit être entre 0 et 100.")
-            IA_CONFIG["seuil_acceptation"] = valeur
-            return bot.send_message(message.chat.id,
-                f"✅ Seuil d'acceptation IA = {valeur}%", parse_mode="Markdown")
-        except ValueError:
-            return bot.send_message(message.chat.id, "❌ Valeur invalide.")
-
-    if len(parts) >= 3 and parts[1] == "groq_active":
-        IA_CONFIG["groq_active"] = parts[2] in ("1", "true", "on", "True")
-        return bot.send_message(message.chat.id,
-            f"✅ Second avis Groq : {'activé' if IA_CONFIG['groq_active'] else 'désactivé'}",
-            parse_mode="Markdown")
-
-    if len(parts) >= 3 and parts[1] == "groq_seuil_veto":
-        try:
-            valeur = float(parts[2])
-            IA_CONFIG["groq_seuil_veto"] = valeur
-            return bot.send_message(message.chat.id,
-                f"✅ Seuil de veto Groq = {valeur}%", parse_mode="Markdown")
-        except ValueError:
-            return bot.send_message(message.chat.id, "❌ Valeur invalide.")
-
-    bot.send_message(message.chat.id, "❌ Paramètre inconnu.")
-
-@bot.message_handler(commands=['testgroq'])
-def test_groq_reel(message):
-    """
-    ✅ Commande de vérification honnête: fait un VRAI appel réseau à l'API
-    Groq (pas un mock) avec un prompt de test, et rapporte EXACTEMENT ce
-    qui se passe — code HTTP, contenu brut de la réponse, erreur précise si
-    échec. Aucune donnée n'est enjolivée: si ça ne marche pas, le message
-    le dit clairement plutôt que de basculer silencieusement en mode dégradé.
-    """
-    uid = message.chat.id
-    if not est_autorise(uid): return
-
-    if not GROQ_API_KEY:
-        return bot.send_message(uid,
-            "❌ *GROQ_API_KEY absente*\n"
-            "Aucune variable d'environnement GROQ_API_KEY configurée sur Render.\n"
-            "Le bot tourne en mode dégradé (calcul seul) — c'est normal, pas un bug.",
-            parse_mode="Markdown")
-
-    bot.send_message(uid, "🔄 Appel réel en cours vers l'API Groq, patiente...")
-
-    debut = time.time()
-    try:
-        prompt_test = (
-            "Réponds UNIQUEMENT ce JSON exact, rien d'autre: "
-            '{"score": 77, "avis": "Ceci est un test de connexion reussi"}'
-        )
-        payload = {
-            "model": GROQ_MODEL,
-            "messages": [{"role": "user", "content": prompt_test}],
-            "temperature": 0.1,
-            "max_tokens": 50,
-        }
-        resp = requests.post(
-            GROQ_URL,
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-            json=payload, timeout=10,
-        )
-        duree = round(time.time() - debut, 2)
-
-        rapport = (
-            f"🔬 *TEST RÉEL API GROQ*\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"Endpoint : `{GROQ_URL}`\n"
-            f"Modèle : `{GROQ_MODEL}`\n"
-            f"Code HTTP : *{resp.status_code}*\n"
-            f"Durée : {duree}s\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        )
-
-        if resp.status_code == 200:
-            try:
-                data = resp.json()
-                texte_brut = data["choices"][0]["message"]["content"]
-                rapport += (
-                    f"✅ *Réponse brute reçue de Groq* :\n"
-                    f"`{texte_brut[:300]}`\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"👉 Ceci est la réponse RÉELLE de Groq, pas une simulation.\n"
-                    f"Si tu vois du texte cohérent ci-dessus, Groq fonctionne."
-                )
-            except Exception as parse_err:
-                rapport += (
-                    f"⚠️ HTTP 200 mais parsing échoué : {parse_err}\n"
-                    f"Réponse brute complète :\n`{resp.text[:500]}`"
-                )
-        else:
-            rapport += (
-                f"❌ *Échec* — Groq a refusé la requête.\n"
-                f"Corps de la réponse :\n`{resp.text[:500]}`\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"Causes possibles : clé invalide, modèle `{GROQ_MODEL}` inexistant/déprécié, "
-                f"quota dépassé, compte suspendu."
-            )
-
-        bot.send_message(uid, rapport, parse_mode="Markdown")
-
-    except requests.exceptions.Timeout:
-        bot.send_message(uid, "❌ *Timeout* — Groq n'a pas répondu en 10s. "
-                              "Le bot basculerait en mode dégradé sur un vrai signal.",
-                         parse_mode="Markdown")
-    except Exception as e:
-        bot.send_message(uid, f"❌ *Erreur réseau réelle* : `{type(e).__name__}: {e}`\n"
-                              f"Le bot basculerait en mode dégradé sur un vrai signal.",
-                         parse_mode="Markdown")
-
-@bot.message_handler(commands=['iastats'])
-def ia_stats(message):
-    """
-    ✅ V49: Statistiques d'apprentissage enrichies — taux de réussite par
-    stratégie, par actif, par tranche de score de confiance, et comparaison
-    Groq consulté vs non consulté. Usage: /iastats [strategie|actif|score|heure|groq|contexte]
-    """
-    uid = message.chat.id
-    if not est_autorise(uid): return
-    if not ia_historique:
-        return bot.send_message(uid, "📭 Aucune donnée d'apprentissage IA pour le moment.")
-
-    parts = message.text.strip().split()
-    vue = parts[1].lower() if len(parts) > 1 else "resume"
-
-    def fmt_stats(d, titre):
-        lignes = [f"*{titre}*"]
-        for k, (wr, n) in d.items():
-            if wr is None:
-                continue
-            lignes.append(f"  {k} : {wr:.0f}% sur {n} trades")
-        return lignes
-
-    if vue == "strategie":
-        lignes = ["🤖 *WIN-RATE PAR STRATÉGIE*\n━━━━━━━━━━━━━━━━━━━━━━"]
-        lignes += fmt_stats(stats_par_strategie(), "Par stratégie")
-
-    elif vue == "actif":
-        lignes = ["🤖 *WIN-RATE PAR ACTIF*\n━━━━━━━━━━━━━━━━━━━━━━"]
-        lignes += fmt_stats(stats_par_actif(), "Par actif")
-
-    elif vue == "score":
-        lignes = ["🤖 *WIN-RATE PAR TRANCHE DE SCORE*\n━━━━━━━━━━━━━━━━━━━━━━"]
-        lignes += fmt_stats(stats_par_tranche_score(), "Par score du calcul déterministe")
-
-    elif vue == "heure":
-        lignes = ["🤖 *WIN-RATE PAR HEURE (UTC)*\n━━━━━━━━━━━━━━━━━━━━━━"]
-        lignes += fmt_stats(stats_par_heure(), "Par tranche horaire")
-
-    elif vue in ("gemini", "groq"):
-        lignes = ["🤖 *WIN-RATE AVEC/SANS GROQ*\n━━━━━━━━━━━━━━━━━━━━━━"]
-        g = stats_gemini_vs_sans()
-        wr_avec, n_avec = g["avec_gemini"]
-        wr_sans, n_sans = g["sans_gemini"]
-        lignes.append(f"  Avec Groq consulté : {wr_avec:.0f}% sur {n_avec} trades" if wr_avec is not None
-                     else "  Avec Groq consulté : pas assez de données")
-        lignes.append(f"  Sans Groq (calcul seul) : {wr_sans:.0f}% sur {n_sans} trades" if wr_sans is not None
-                     else "  Sans Groq (calcul seul) : pas assez de données")
-
-    elif vue == "contexte":
-        lignes = ["🤖 *WIN-RATE PAR CONTEXTE MARCHÉ*\n━━━━━━━━━━━━━━━━━━━━━━"]
-        lignes += fmt_stats(stats_par_contexte_marche(), "Par tendance détectée")
-
-    else:  # résumé combiné (couples stratégie/symbole + poids ajustés)
-        par_couple = {}
-        for h in ia_historique:
-            cle = (h["strategie"], h["symbol"])
-            par_couple.setdefault(cle, []).append(h["win"])
-
-        lignes = ["🤖 *STATISTIQUES D'APPRENTISSAGE IA*\n━━━━━━━━━━━━━━━━━━━━━━",
-                  f"Total trades enregistrés : {len(ia_historique)}\n"]
-        for (strat, sym), resultats in par_couple.items():
-            wr = sum(1 for r in resultats if r) / len(resultats) * 100
-            ajuste = " (poids ajustés)" if (strat, sym) in ia_poids_ajustes else ""
-            lignes.append(f"{strat} / {sym} : {wr:.0f}% sur {len(resultats)} trades{ajuste}")
-        lignes.append("\n*Vues détaillées disponibles:*")
-        lignes.append("/iastats strategie · /iastats actif · /iastats score")
-        lignes.append("/iastats heure · /iastats groq · /iastats contexte")
-
-    bot.send_message(uid, "\n".join(lignes), parse_mode="Markdown")
-
-# ==========================================
-# ✅ V43 NEW: /rapport — Rapport quotidien
-# ==========================================
-
-def generer_rapport_texte(uid):
-    stats = init_daily_stats(uid)
-    total = stats["trades"]
-    winrate = (stats["wins"] / total * 100) if total > 0 else 0
-    return (
-        f"📊 *RAPPORT DU JOUR* ({stats['date']})\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Trades exécutés : {total}/{RISK_CONFIG['max_trades_per_day']}\n"
-        f"✅ Gagnés : {stats['wins']}  |  ❌ Perdus : {stats['losses']}\n"
-        f"🎯 Win Rate : {winrate:.1f}%\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 P&L du jour : {stats['pnl']:+.2f} USD\n"
-        f"🏆 Meilleur trade : {stats['best_trade']:+.2f} USD\n"
-        f"💔 Pire trade : {stats['worst_trade']:+.2f} USD\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🏦 P&L total cumulé : {pnl_total.get(uid,0):+.2f} USD\n"
-        f"📈 Bilan global : {win_count.get(uid,0)}W / {loss_count.get(uid,0)}L"
-    )
-
-@bot.message_handler(commands=['rapport'])
-def rapport_quotidien(message):
-    uid = message.chat.id
-    if not est_autorise(uid): return
-    bot.send_message(uid, generer_rapport_texte(uid), parse_mode="Markdown")
-
-def envoyer_rapports_quotidiens_auto():
-    """Envoie automatiquement le rapport à 22h UTC chaque jour à tous les users actifs"""
-    dernier_envoi = None
+def scanner_marche_auto():
     while True:
         try:
             time.sleep(60)
-            now = datetime.datetime.utcnow()
-            cle_jour = now.strftime("%Y-%m-%d")
-            if now.hour == 22 and dernier_envoi != cle_jour:
-                for uid in list(utilisateurs_actifs):
-                    try:
-                        bot.send_message(uid, "🌙 *Rapport de fin de journée*\n\n" +
-                                         generer_rapport_texte(uid), parse_mode="Markdown")
-                    except:
-                        pass
-                dernier_envoi = cle_jour
-        except Exception as e:
-            print(f"[Rapport Auto] {e}", flush=True)
-
-# ==========================================
-# ✅ V43 NEW: /pause /resume — Circuit breaker manuel
-# ==========================================
-
-@bot.message_handler(commands=['pause'])
-def pause_manuelle(message):
-    uid = message.chat.id
-    if not est_autorise(uid): return
-    stats = init_daily_stats(uid)
-    stats["paused_until"] = time.time() + (12 * 3600)  # pause 12h
-    bot.send_message(uid, "⏸️ Trading mis en pause manuellement pour 12h.\n"
-                          "Utilise /resume pour reprendre.", parse_mode="Markdown")
-
-@bot.message_handler(commands=['resume'])
-def resume_manuel(message):
-    uid = message.chat.id
-    if not est_autorise(uid): return
-    stats = init_daily_stats(uid)
-    stats["paused_until"] = None
-    stats["consecutive_losses"] = 0
-    bot.send_message(uid, "▶️ Trading repris. Bonne chance!", parse_mode="Markdown")
-
-# ==========================================
-# ✅ V44 NEW: /debloquer — Déblocage manuel immédiat (admin ou soi-même)
-# Complète le watchdog automatique (5 min) pour un déblocage instantané.
-# ==========================================
-
-@bot.message_handler(commands=['debloquer'])
-def debloquer_manuel(message):
-    uid = message.chat.id
-    if not est_autorise(uid): return
-
-    parts = message.text.strip().split()
-    cible = uid
-    if len(parts) > 1 and message.chat.id == ADMIN_ID:
-        try:
-            cible = int(parts[1])
-        except ValueError:
-            return bot.send_message(uid, "❌ ID invalide.")
-
-    etait_bloque = cible in trades_actifs
-    trades_actifs.pop(cible, None)
-
-    stats = init_daily_stats(cible)
-    stats["paused_until"] = None
-
-    if etait_bloque:
-        bot.send_message(uid, f"🔓 Utilisateur {cible} débloqué. Trade actif nettoyé.",
-                         parse_mode="Markdown")
-        if cible != uid:
-            try:
-                bot.send_message(cible, "🔓 Ton compte a été débloqué par l'admin. "
-                                        "Tu peux à nouveau recevoir des signaux.",
-                                 parse_mode="Markdown")
-            except: pass
-    else:
-        bot.send_message(uid, f"✅ Aucun blocage détecté pour {cible} — tout est déjà normal.",
-                         parse_mode="Markdown")
-
-@bot.message_handler(commands=['status'])
-def status_technique(message):
-    uid = message.chat.id
-    if not est_autorise(uid): return
-    bloque = "🟠 OUI" if uid in trades_actifs else "🟢 NON"
-    en_pause, jusqua = utilisateur_en_pause(uid)
-    txt = (
-        f"🔧 *STATUS TECHNIQUE*\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Trade actif en cours : {bloque}\n"
-        f"Pause anti-tilt : {'🟠 OUI' if en_pause else '🟢 NON'}\n"
-        f"Cycle scanner : ~15s (parallélisé)\n"
-        f"Validité signal : {RISK_CONFIG['signal_validity_seconds']}s\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Si tu ne reçois plus de signaux malgré tout, "
-        f"utilise /debloquer pour te débloquer immédiatement."
-    )
-    bot.send_message(uid, txt, parse_mode="Markdown")
-
-# ==========================================
-# SCANNER PRINCIPAL V43
-# ==========================================
-
-def _analyser_une_paire(paire):
-    """
-    ✅ V48: cerveau_pro_trader() retourne désormais une LISTE de signaux
-    (0 à 3 — un par stratégie indépendante validée par le moteur IA/Groq).
-    Retourne une liste de tuples (paire, res, px), vide si rien à signaler.
-
-    🔍 V51-DEBUG: instrumentation temporaire — logge le filtre de session et
-    la validation de prix, les deux autres points de silence possibles en
-    plus du pipeline stratégie/calcul/Groq déjà instrumenté dans
-    cerveau_pro_trader(). À retirer une fois le problème résolu.
-    """
-    try:
-        statut, raison = est_symbole_autorise(paire)
-        if statut != "AUTORISE":
-            print(f"[DEBUG] {paire} BLOQUÉ par le filtre de session: {statut} — {raison}", flush=True)
-            return []
-
-        signaux = cerveau_pro_trader(paire)
-        if not signaux:
-            print(f"[DEBUG] {paire} → cerveau_pro_trader n'a produit aucun signal ce cycle", flush=True)
-            return []
-
-        resultats = []
-        for res in signaux:
-            px = obtenir_prix_broker_realtime(paire) or res["px"]
-            if not px:
-                print(f"[DEBUG] {paire}/{res.get('strategie_nom_ia','?')} → "
-                      f"IMPOSSIBLE d'obtenir un prix broker temps réel", flush=True)
-                continue
-            valide = valider_prix_avant_signal(paire, px)
-            print(f"[DEBUG] {paire}/{res.get('strategie_nom_ia','?')} → "
-                  f"validation prix (broker={px}, stratégie={res.get('px')}) = {valide}", flush=True)
-            if valide:
-                resultats.append((paire, res, px))
-        return resultats
-    except Exception as e:
-        print(f"[Analyse/{paire}] EXCEPTION: {type(e).__name__}: {e}", flush=True)
-        return []
-
-def scanner_marche_auto():
-    """
-    Scanner parallélisé (ThreadPoolExecutor). Chaque paire peut désormais
-    générer PLUSIEURS signaux indépendants (un par stratégie CPR/OPEN_DRIVE/
-    RSI, chacune validée séparément par le moteur IA + second avis Groq).
-    """
-    toutes_paires = ELITE_PAIRS_MT5
-
-    while True:
-        try:
-            time.sleep(15)  # cycle plus rapide, rendu possible par la parallélisation
-            libres = [u for u in utilisateurs_actifs if est_autorise(u)]
-            if not libres:
-                continue
-
-            resultats = []
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                futures = {executor.submit(_analyser_une_paire, p): p for p in toutes_paires}
-                for future in as_completed(futures, timeout=25):
-                    try:
-                        r_list = future.result()
-                        resultats.extend(r_list)
-                    except Exception as e:
-                        print(f"[Scanner Parallel] {e}", flush=True)
-
-            # ── Diffusion des signaux trouvés (rapide, pas de réseau lourd ici) ──
-            for paire, res, px in resultats:
-                # ✅ V48: clé de cache différenciée par stratégie — indispensable
-                # pour ne jamais écraser un signal CPR avec un signal Open Drive
-                # détecté indépendamment sur la même paire.
-                cle = f"{paire}_{res.get('strategie_nom_ia', 'PRO')}"
-                signaux_cache[cle] = {
-                    "time":    time.time(),
-                    "action":  res["action"],
-                    "mt5_sl":  res["sl"],
-                    "mt5_tp1": res.get("tp1", res["tp"]),
-                    "mt5_tp":  res["tp"],
-                    "mt5_rr":  res["rr"],
-                    "force":   res["force"],
-                    "msg":     res["msg"],
-                    "confiance": res["confiance"],
-                    "strategie": res["strategie"],
-                    "strategie_nom_ia": res.get("strategie_nom_ia", "?"),
-                    "label":   res["label"],
-                    "contexte":res.get("contexte_detecte",""),
-                    "ia_score": res.get("ia_score", 0),
-                    "ia_justification": res.get("ia_justification", []),
-                    "gemini_score": res.get("gemini_score"),
-                    "gemini_avis": res.get("gemini_avis", ""),
-                    "gemini_disponible": res.get("gemini_disponible", False),
-                    "extra":   res,
-                }
-                derniere_alerte_auto[cle] = time.time()
-
-                nom  = NOMS_AFFICHAGE.get(paire, f"{paire[:3]}/{paire[3:]}")
-                dir_ = "🟢 BUY" if "BUY" in res["action"] else "🔴 SELL"
-
-                for uid in libres:
-                    if utilisateur_a_trade_actif(uid): continue
-
-                    peut_trader, raison = utilisateur_peut_trader(uid)
-                    if not peut_trader: continue
-
-                    markup = InlineKeyboardMarkup().add(
-                        InlineKeyboardButton(f"⚡ Copier {nom}", callback_data=f"set_{cle}")
-                    )
-
-                    # ✅ V54: détails de la stratégie unique Trend Pullback & Confluence
-                    # + zones Smart Money (Order Block / Support-Résistance)
-                    ligne_extra = (f"📈 RSI M15 : {res.get('rsi_value','?')} · "
-                                   f"ADX H1 : {res.get('adx_value','?')}\n")
-                    zones_conf = res.get("zones_confluence", [])
-                    if zones_conf:
-                        ligne_extra += f"🎯 Confluence : {' + '.join(zones_conf)}\n"
-                    ob = res.get("order_block")
-                    if ob:
-                        ligne_extra += f"📦 Order Block : {ob[0]:.5f} - {ob[1]:.5f}\n"
-                    niveau_cle = res.get("niveau_cle")
-                    if niveau_cle:
-                        ligne_extra += f"📏 Niveau clé : {niveau_cle:.5f}\n"
-
-                    sizing = calculer_position_size(CAPITAL_ACTUEL, RISK_CONFIG["risk_per_trade_pct"],
-                                                    px, res["sl"], paire)
-
-                    justif_txt = " · ".join(res.get("ia_justification", [])[:2])
-                    if res.get("gemini_disponible"):
-                        ligne_gemini = (f"🔮 Groq : {res.get('gemini_score','?')}% — "
-                                       f"{res.get('gemini_avis','')}\n")
-                    else:
-                        ligne_gemini = ""
-
-                    # ✅ V49: ligne contexte marché
-                    ctx = res.get("contexte_marche", {})
-                    if ctx:
-                        ligne_contexte_marche = (
-                            f"🌍 Marché : {ctx.get('tendance','?')} · "
-                            f"Vol. {ctx.get('volatilite','?')} · ADX {ctx.get('adx','?')}\n")
-                    else:
-                        ligne_contexte_marche = ""
-
-                    # ✅ V49: alerte faux signal si détectée
-                    if res.get("risque_faux_signal"):
-                        alertes = ", ".join(res.get("raisons_faux_signal", [])[:2])
-                        ligne_alerte = f"🚨 Vigilance : {alertes}\n"
-                    else:
-                        ligne_alerte = ""
-
-                    # ✅ V49: cohérence multi-timeframe
-                    mtf = res.get("multi_tf", {})
-                    if mtf.get("score") is not None:
-                        ligne_mtf = f"⏱️ Cohérence M1-M5-M15-H1 : {mtf['score']}%\n"
-                    else:
-                        ligne_mtf = ""
-
-                    # ✅ V49: gestion de risque optimisée (si un ajustement notable a eu lieu)
-                    gr = res.get("gestion_risque", {})
-                    ligne_risque_ia = f"🛡️ {gr.get('note','')}\n" if gr.get("note") else ""
-
-                    txt = (
-                        f"💼 *TERMINAL PRIME V55*\n"
-                        f"{nom}  {dir_}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🎯 Stratégie : *{res['label']}*\n"
-                        f"📊 Contexte  : {res.get('contexte_detecte','')}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"☁️ Structure : {res['force']}\n"
-                        f"📍 {res['msg']}\n"
-                        f"⏰ {nom_killzone()}\n"
-                        f"{ligne_extra}"
-                        f"{ligne_contexte_marche}"
-                        f"{ligne_mtf}"
-                        f"{ligne_alerte}"
-                        f"{ligne_risque_ia}"
-                        f"⚖️ R/R : {res['rr']}R\n"
-                        f"🎖️ Confiance stratégie : {res['confiance']}%\n"
-                        f"🤖 Score IA (calcul) : *{res.get('ia_score','?')}%* — {justif_txt}\n"
-                        f"{ligne_gemini}"
-                        f"💰 Prix réel : {px:.5f}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"💵 Risque calculé : ${sizing['montant_risque']} "
-                        f"({RISK_CONFIG['risk_per_trade_pct']}% du capital)\n"
-                        f"⏳ Signal valide {RISK_CONFIG['signal_validity_seconds']}s"
-                    )
-                    try:
-                        bot.send_message(uid, txt, reply_markup=markup, parse_mode="Markdown")
-                    except:
-                        pass
-
-        except Exception as e:
-            print(f"[Scanner V44] {e}", flush=True)
-
-# ==========================================
-# ✅ V43 NEW: MONITORING AVANCÉ DES TRADES
-# Gère: TP1 partiel (85%) → Breakeven → Trailing Stop → TP final / SL
-# ==========================================
-
-def monitorer_trades_actifs():
-    while True:
-        try:
-            time.sleep(5)
-            for uid in list(trades_actifs.keys()):
-                if uid not in trades_actifs: continue
-                trade = trades_actifs[uid]
-
-                symbole      = trade["symbol"]
-                prix_current = obtenir_prix_broker_realtime(symbole)
-                if not prix_current: continue
-
-                direction = trade["direction"]
-
-                # ── PHASE 1: Trade encore plein (avant TP1) ─────────────
-                if trade["state"] == TradeState.TRADE_OPEN:
-
-                    hit_tp1 = (direction == "BUY"  and prix_current >= trade["tp1"]) or \
-                              (direction == "SELL" and prix_current <= trade["tp1"])
-                    hit_sl  = (direction == "BUY"  and prix_current <= trade["sl"]) or \
-                              (direction == "SELL" and prix_current >= trade["sl"])
-
-                    if hit_sl:
-                        result = fermer_trade_complet(uid, prix_current, win=False)
-                        if result:
-                            envoyer_message_resultat(uid, trade, result, perte_totale=True)
-                        continue
-
-                    if hit_tp1:
-                        partiel = fermer_trade_partiel(uid, prix_current)
-                        if partiel:
-                            envoyer_message_partiel(uid, trade, partiel, prix_current)
-                        continue
-
-                # ── PHASE 2: 85% fermé, 15% en breakeven + trailing ─────
-                elif trade["state"] == TradeState.TRADE_PARTIAL:
-
-                    # Appliquer le trailing stop (sécurise les gains progressivement)
-                    appliquer_trailing_stop(uid, prix_current)
-
-                    hit_tp_final = (direction == "BUY"  and prix_current >= trade["tp_final"]) or \
-                                   (direction == "SELL" and prix_current <= trade["tp_final"])
-                    hit_be_sl    = (direction == "BUY"  and prix_current <= trade["sl"]) or \
-                                   (direction == "SELL" and prix_current >= trade["sl"])
-
-                    if hit_tp_final:
-                        result = fermer_trade_complet(uid, prix_current, win=True)
-                        if result:
-                            envoyer_message_resultat(uid, trade, result, perte_totale=False,
-                                                     partiel_deja_pris=True)
-                        continue
-
-                    if hit_be_sl:
-                        # Sortie au breakeven ou en trailing stop — jamais une vraie perte
-                        # car le SL ne peut être déplacé que dans le sens favorable après TP1
-                        result = fermer_trade_complet(uid, prix_current, win=True)
-                        if result:
-                            envoyer_message_resultat(uid, trade, result, perte_totale=False,
-                                                     partiel_deja_pris=True, sortie_be=True)
-                        continue
-
-        except Exception as e:
-            print(f"[Monitor] {e}", flush=True)
-
-def envoyer_message_partiel(uid, trade, partiel, prix_current):
-    msg = (
-        f"🟡 *TP1 ATTEINT — 85% SÉCURISÉ!*\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 {trade['symbol']}\n"
-        f"Entrée : {trade['entry_price']:.5f}\n"
-        f"TP1    : {prix_current:.5f}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 *Profit partiel : +{partiel['pnl_partiel']:.2f} USD* (85% fermé)\n"
-        f"🛡️ SL déplacé en *Breakeven* : {partiel['nouveau_sl']:.5f}\n"
-        f"🏃 15% restant continue vers le TP final, *sans risque*\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Technique pro: sécuriser le gain, laisser courir le reste."
-    )
-    try: bot.send_message(uid, msg, parse_mode="Markdown")
-    except: pass
-
-def envoyer_message_resultat(uid, trade, result, perte_totale, partiel_deja_pris=False, sortie_be=False):
-    stats = init_daily_stats(uid)
-
-    if perte_totale:
-        msg = (
-            f"❌ *TRADE PERDU* 😔\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 {trade['symbol']}\n"
-            f"Entrée : {trade['entry_price']:.5f}\n"
-            f"Sortie : {result['pnl']:+.2f} USD (Stop Loss)\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"💔 *Perte : {result['pnl']:.2f} USD*\n"
-            f"⏱️ Durée : {int(result['duration']/60)} min\n"
-            f"🎖️ {trade.get('label','')} (Confiance {trade['confiance']}%)\n"
-        )
-    elif sortie_be:
-        msg = (
-            f"🛡️ *SORTIE EN BREAKEVEN/TRAILING*\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 {trade['symbol']}\n"
-            f"Le 15% restant est sorti au niveau sécurisé.\n"
-            f"💰 Gain sécurisé sur cette portion : {result['pnl']:+.2f} USD\n"
-            f"⏱️ Durée totale : {int(result['duration']/60)} min\n"
-            f"🎖️ {trade.get('label','')}\n"
-        )
-    else:
-        msg = (
-            f"✅ *TP FINAL ATTEINT — TRADE GAGNÉ!* 🎉🎉\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 {trade['symbol']}\n"
-            f"Entrée : {trade['entry_price']:.5f}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"💰 *Profit (15% final) : +{result['pnl']:.2f} USD*\n"
-            f"⏱️ Durée : {int(result['duration']/60)} min\n"
-            f"🎖️ {trade.get('label','')} (Confiance {trade['confiance']}%)\n"
-        )
-
-    msg += (
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 Bilan du jour : {stats['wins']}W / {stats['losses']}L "
-        f"({stats['pnl']:+.2f} USD)\n"
-        f"🏦 P&L total : {pnl_total.get(uid,0):+.2f} USD"
-    )
-
-    # Alerte si circuit breaker se déclenche après ce trade
-    if daily_loss_limit_atteinte(uid):
-        msg += (f"\n\n🛑 *LIMITE DE PERTE JOURNALIÈRE ATTEINTE.*\n"
-                f"Trading suspendu jusqu'à demain — protection du capital.")
-    else:
-        en_pause, _ = utilisateur_en_pause(uid)
-        if en_pause:
-            msg += (f"\n\n⏸️ *PAUSE ANTI-TILT ACTIVÉE* "
-                    f"({RISK_CONFIG['max_consecutive_losses']} pertes consécutives).\n"
-                    f"Reprise dans {RISK_CONFIG['pause_duration_minutes']} minutes.")
-
-    try: bot.send_message(uid, msg, parse_mode="Markdown")
-    except: pass
-
-# ==========================================
-# GESTION DES CLÉS VIP
-# ==========================================
-
-DUREES_VALIDES = {
-    "1s": (7,"1 Semaine"), "2s": (14,"2 Semaines"),
-    "1m": (30,"1 Mois"),   "3m": (90,"3 Mois"),
-    "6m": (180,"6 Mois"),  "1a": (365,"1 An"),
-    "vie": ("LIFETIME","À VIE 👑"),
-}
-
-def est_autorise(uid):
-    if uid == ADMIN_ID: return True
-    if uid in utilisateurs_autorises:
-        exp = utilisateurs_autorises[uid]
-        if exp == "LIFETIME" or datetime.datetime.now() < exp: return True
-        del utilisateurs_autorises[uid]
-        try: bot.send_message(uid, "⚠️ Abonnement expiré. Contacte l'admin.")
+            utilisateurs_a_alerter = [uid for uid in utilisateurs_actifs if est_autorise(uid)]
+            if not utilisateurs_a_alerter: continue
+                
+            maintenant = datetime.datetime.now()
+            jour_semaine = maintenant.weekday() 
+            devises_a_surveiller = CRYPTO_PAIRS if jour_semaine >= 5 else FOREX_PAIRS
+            
+            for actif in devises_a_surveiller:
+                action, confiance, exp, duree, rsi_val, stoch_val, bb_status, score = analyser_binaire_pro(actif)
+                if action and "⚠️" not in action and confiance:
+                    temps_actuel = time.time()
+                    if actif in derniere_alerte_auto and (temps_actuel - derniere_alerte_auto[actif] < 3600): continue
+                    derniere_alerte_auto[actif] = temps_actuel
+                    nom_affiche = f"{actif[:3]}/{actif[3:]}"
+                    
+                    jauge_visuelle = generer_jauge(score * 10)
+                    markup = InlineKeyboardMarkup()
+                    markup.add(InlineKeyboardButton(f"📊 Analyser {nom_affiche}", callback_data=f"set_{actif}"))
+                    
+                    if score >= 9: alerte_msg = f"🔥 **ALERTE GOD MODE** 🔥\n\nConfiguration mathématique lourde\n**CONFIANCE :** {jauge_visuelle}\nCible : **{nom_affiche}**\n\n👇 *Clique sur le bouton pour déclencher la frappe !*"
+                    else: alerte_msg = f"🚨 **OPPORTUNITÉ VIP FILTRÉE** 🚨\n\nLe radar a esquivé les pièges. Signal propre !\n**CONFIANCE :** {jauge_visuelle}\nCible : **{nom_affiche}**\n\n👇 *Clique sur le bouton pour l'analyse !*"
+                        
+                    for chat_id in utilisateurs_a_alerter:
+                        try: bot.send_message(chat_id, alerte_msg, reply_markup=markup, parse_mode="Markdown")
+                        except: pass
         except: pass
-    return False
 
-@bot.message_handler(commands=['keygen'])
-def generer_cle(message):
-    if message.chat.id != ADMIN_ID: return
-    parts = message.text.strip().split()
-    if len(parts) < 2:
-        return bot.send_message(message.chat.id,
-            "⚙️ *GÉNÉRATEUR DE CLÉS VIP*\nUsage : /keygen 1m\n"
-            "1s / 2s / 1m / 3m / 6m / 1a / vie / <jours>", parse_mode="Markdown")
-    arg = parts[1].lower().strip()
-    if arg in DUREES_VALIDES:
-        jours, label = DUREES_VALIDES[arg]
-    else:
+# ==========================================
+# GESTIONNAIRE D'HORAIRES ET DE BILAN (22H00)
+# ==========================================
+
+def gestion_horaires_et_bilan():
+    global stats_journee, bilan_envoye_aujourdhui, transition_nuit_envoyee, transition_jour_envoyee
+    while True:
         try:
-            jours = int(arg)
-            label = f"{jours} jours"
-        except:
-            return bot.send_message(message.chat.id, "❌ Argument invalide.")
-    cle = "VIP-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=10))
-    cles_generees[cle] = jours
-    bot.send_message(message.chat.id,
-        f"✅ *CLÉ VIP GÉNÉRÉE*\n🔑 `{cle}`\n⏳ Durée : {label}\n"
-        f"Activation : `/vip {cle}`", parse_mode="Markdown")
+            maintenant = datetime.datetime.now()
+            heure, minute, jour_semaine = maintenant.hour, maintenant.minute, maintenant.weekday()
+            utilisateurs_a_alerter = [uid for uid in utilisateurs_actifs if est_autorise(uid)]
 
-@bot.message_handler(commands=['vip'])
-def activer_vip(message):
-    cid   = message.chat.id
-    parts = message.text.strip().split()
-    if len(parts) < 2:
-        return bot.send_message(cid, "⚠️ Usage : /vip VOTRE-CLÉ")
-    cle = parts[1].strip()
-    if cle not in cles_generees:
-        return bot.send_message(cid, "❌ Clé invalide ou déjà utilisée.")
-    jours = cles_generees.pop(cle)
-    if jours == "LIFETIME":
-        utilisateurs_autorises[cid] = "LIFETIME"; txt = "À VIE 👑"
-    else:
-        exp = datetime.datetime.now() + datetime.timedelta(days=jours)
-        utilisateurs_autorises[cid] = exp; txt = exp.strftime('%d/%m/%Y à %H:%M')
-    bot.send_message(cid,
-        f"🎉 *ACCÈS DÉVERROUILLÉ !*\n⏳ Expiration : {txt}\n/start pour commencer.",
-        parse_mode="Markdown")
+            if jour_semaine < 5: 
+                if heure == 20 and minute == 0 and not transition_nuit_envoyee:
+                    texte_nuit = "🌉 **TRANSITION DE SESSION : MODE ASIATIQUE ACTIVÉ** 🌉\n\nLes volumes s'effondrent sur l'Europe. Le Terminal Prime bascule ses radars exclusivement sur l'Asie.\n\n*La chasse continue de nuit. Restez concentrés.* 🥷"
+                    for chat_id in utilisateurs_a_alerter:
+                        try: bot.send_message(chat_id, texte_nuit, parse_mode="Markdown")
+                        except: pass
+                    transition_nuit_envoyee, transition_jour_envoyee = True, False
 
-@bot.message_handler(commands=['abonnes'])
-def lister_abonnes(message):
+                elif heure == 8 and minute == 0 and not transition_jour_envoyee:
+                    texte_jour = "☀️ **TRANSITION DE SESSION : MODE EUROPE/US ACTIVÉ** ☀️\n\nOuverture des marchés majeurs. La volatilité est de retour.\n\n*Bonne journée de trading à tous les VIP !* 🚀"
+                    for chat_id in utilisateurs_a_alerter:
+                        try: bot.send_message(chat_id, texte_jour, parse_mode="Markdown")
+                        except: pass
+                    transition_jour_envoyee, transition_nuit_envoyee = True, False
+
+            if heure == 22 and minute == 0 and not bilan_envoye_aujourdhui:
+                total_trades = stats_journee['ITM'] + stats_journee['OTM']
+                if total_trades > 0:
+                    winrate = round((stats_journee['ITM'] / total_trades) * 100)
+                    texte_bilan_admin = f"📊 **BILAN VIP DE LA JOURNÉE** 📊\n──────────────────\n🎯 **Total Signaux :** {total_trades}\n✅ **Victoires (ITM) :** {stats_journee['ITM']}\n❌ **Pertes (OTM) :** {stats_journee['OTM']}\n📈 **Winrate :** {winrate}%\n──────────────────\n"
+                    for detail in stats_journee['details']: texte_bilan_admin += f"{detail}\n"
+                    try: bot.send_message(ADMIN_ID, texte_bilan_admin, parse_mode="Markdown")
+                    except: pass
+                stats_journee, bilan_envoye_aujourdhui = {'ITM': 0, 'OTM': 0, 'details': []}, True
+            elif heure == 23: bilan_envoye_aujourdhui = False
+            time.sleep(30)
+        except: time.sleep(60)
+
+# ==========================================
+# COMMANDES ADMIN ET GÉNÉRATION DE CLÉS
+# ==========================================
+
+@bot.message_handler(commands=['panel'])
+def admin_panel(message):
     if message.chat.id != ADMIN_ID: return
-    now = datetime.datetime.now()
-    lignes = ["👥 *ABONNÉS ACTIFS :*\n──────────────────"]
-    for uid, exp in utilisateurs_autorises.items():
-        if uid == ADMIN_ID: continue
-        if exp == "LIFETIME":       statut = "👑 À vie"
-        elif now < exp:             statut = f"✅ {(exp-now).days}j (exp: {exp.strftime('%d/%m/%Y')})"
-        else:                       statut = "❌ Expiré"
-        lignes.append(f"• {uid} → {statut}")
-    bot.send_message(message.chat.id, "\n".join(lignes), parse_mode="Markdown")
+    bot.send_message(ADMIN_ID, f"Admin Panel 🔥\nCapital actuel : {CAPITAL_ACTUEL}$")
 
-@bot.message_handler(commands=['cles'])
-def lister_cles(message):
+# 💰 AJOUT DE LA COMMANDE CAPITAL SÉPARÉE
+@bot.message_handler(commands=['capital'])
+def voir_capital(message):
     if message.chat.id != ADMIN_ID: return
-    if not cles_generees:
-        return bot.send_message(message.chat.id, "Aucune clé en attente.")
-    lignes = ["🔑 *CLÉS EN ATTENTE :*\n──────────────────"]
-    for cle, jours in cles_generees.items():
-        lignes.append(f"`{cle}` → {'À VIE' if jours=='LIFETIME' else f'{jours}j'}")
-    bot.send_message(message.chat.id, "\n".join(lignes), parse_mode="Markdown")
+    bot.send_message(ADMIN_ID, f"💰 **SOLDE ACTUEL DU COMPTE** 💰\n──────────────────\n💵 Montant : `{CAPITAL_ACTUEL}$`\n──────────────────\n⚖️ *Prêt pour la prochaine session !*", parse_mode="Markdown")
+
+@bot.message_handler(func=lambda m: m.text and m.text.startswith("PRIME-"))
+def activer_cle(message):
+    cle = message.text.strip()
+    if cle in cles_generees:
+        infos_cle = cles_generees[cle]
+        if infos_cle["user_id"] != message.chat.id:
+            bot.send_message(message.chat.id, "❌ **ACCÈS REFUSÉ**", parse_mode="Markdown")
+            return
+        jours = infos_cle["jours"]
+        if jours == 999:
+            utilisateurs_autorises[message.chat.id] = "LIFETIME"
+            duree_texte = "À VIE 👑"
+        else:
+            expiration = datetime.datetime.now() + datetime.timedelta(days=jours)
+            utilisateurs_autorises[message.chat.id] = expiration
+            duree_texte = f"jusqu'au {expiration.strftime('%d/%m/%Y à %H:%M')}"
+        del cles_generees[cle] 
+        bot.send_message(message.chat.id, f"✅ **CLÉ ACCEPTÉE !** 🎉\n\nVotre abonnement est activé {duree_texte}.\n\nTapez /start pour lancer le Terminal Prime.", parse_mode="Markdown")
+    else: bot.send_message(message.chat.id, "❌ **Clé invalide, expirée ou déjà utilisée.**", parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("admin_"))
+def gerer_acces(call):
+    if call.from_user.id != ADMIN_ID: return
+    action, user_id = call.data.split("_")[1], int(call.data.split("_")[2])
+    if action == "accepter":
+        markup = InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            InlineKeyboardButton("1 Semaine", callback_data=f"gen_7_{user_id}"),
+            InlineKeyboardButton("2 Semaines 🔥", callback_data=f"gen_14_{user_id}"),
+            InlineKeyboardButton("1 Mois", callback_data=f"gen_30_{user_id}"),
+            InlineKeyboardButton("2 Mois 💎", callback_data=f"gen_60_{user_id}"),
+            InlineKeyboardButton("3 Mois ✨", callback_data=f"gen_90_{user_id}"),
+            InlineKeyboardButton("À Vie 👑", callback_data=f"gen_999_{user_id}")
+        )
+        bot.edit_message_text(f"✅ Utilisateur `{user_id}` accepté.\nChoisis la durée :", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+    elif action == "refuser": bot.edit_message_text("❌ Demande refusée.", call.message.chat.id, call.message.message_id)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("gen_"))
+def creer_cle(call):
+    if call.from_user.id != ADMIN_ID: return
+    jours, user_id = int(call.data.split("_")[1]), int(call.data.split("_")[2])
+    cle = generer_cle()
+    cles_generees[cle] = {"jours": jours, "user_id": user_id}
+    duree_texte = {7:"1 Semaine", 14:"2 Semaines", 30:"1 Mois", 60:"2 Mois", 90:"3 Mois", 999:"À VIE"}.get(jours, f"{jours} Jours")
+    msg = f"🔑 **CLÉ GÉNÉRÉE** 🔑\n\n⏳ Durée : {duree_texte}\n👤 ID : `{user_id}`\n\nCopie ce message à ton client :\n\n`{cle}`"
+    bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, parse_mode="Markdown")
 
 # ==========================================
-# ✅ V43 NEW: /historique — Derniers trades
+# COMMANDES TÉLÉGRAM ET MENUS VIP
 # ==========================================
 
-@bot.message_handler(commands=['historique'])
-def historique_trades(message):
-    uid = message.chat.id
-    if not est_autorise(uid): return
-    hist = trades_historique.get(uid, [])
-    if not hist:
-        return bot.send_message(uid, "📭 Aucun trade dans l'historique.")
-
-    lignes = ["📜 *HISTORIQUE (10 derniers trades)*\n━━━━━━━━━━━━━━━━━━━━━━"]
-    for t in hist[-10:][::-1]:
-        emoji = "✅" if t["win"] else "❌"
-        date_str = datetime.datetime.fromtimestamp(t["timestamp"]).strftime("%d/%m %H:%M")
-        lignes.append(f"{emoji} {t['symbol']} {t['direction']} | "
-                      f"{t['pnl']:+.2f}$ | {date_str}")
-    bot.send_message(uid, "\n".join(lignes), parse_mode="Markdown")
-
-# ==========================================
-# INTERFACE TELEGRAM PRINCIPALE
-# ==========================================
-
-def obtenir_clavier(uid):
-    # ✅ V44.1: bouton BROKER retiré — mode MT5 (Gold/Argent/Volatility) unique
+def obtenir_clavier():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row(KeyboardButton("📊 CHOISIR UNE CIBLE"),
-               KeyboardButton("🚀 LANCER L'ANALYSE"))
-    markup.row(KeyboardButton("⏰ HEURES DE TRADING"),
-               KeyboardButton("📊 RAPPORT DU JOUR"))
-    markup.row(KeyboardButton("📜 HISTORIQUE"))
+    markup.row(KeyboardButton("📊 CHOISIR UNE DEVISE"), KeyboardButton("🚀 LANCER L'ANALYSE"))
+    markup.row(KeyboardButton("⏰ HEURES DE TRADING"))
     return markup
 
 @bot.message_handler(commands=['start'])
 def bienvenue(message):
-    uid = message.chat.id
-    if not est_autorise(uid):
-        return bot.send_message(uid, "🔒 Accès restreint. /vip VOTRE-CLÉ pour activer.")
-    utilisateurs_actifs.add(uid)
-    init_daily_stats(uid)
+    user_id = message.chat.id
+    if not est_autorise(user_id):
+        markup = InlineKeyboardMarkup(row_width=2)
+        markup.add(InlineKeyboardButton("✅ Accepter", callback_data=f"admin_accepter_{user_id}"), InlineKeyboardButton("❌ Ignorer", callback_data=f"admin_refuser_{user_id}"))
+        try: bot.send_message(ADMIN_ID, f"🚨 **NOUVEAU CLIENT POTENTIEL** 🚨\n\n🆔 `{user_id}`\n\nGénérer un abonnement ?", reply_markup=markup, parse_mode="Markdown")
+        except: pass
+        return bot.send_message(user_id, "🔒 **ACCÈS RESTREINT - TERMINAL PRIVÉ** 🔒\n\nCe système est une intelligence artificielle de trading haute précision sous licence payante.\n\n📲 **Pour obtenir votre clé d'accès (Abonnement), veuillez contacter le fondateur : [@hermann1123](https://t.me/hermann1123)**", parse_mode="Markdown", disable_web_page_preview=True)
 
-    kz  = "🟢 ACTIVE" if dans_killzone() else "🔴 INACTIVE"
-    vol = "\n".join([f"  {'✅' if v else '❌'} {p}"
-                     for p, v in volatility_pairs_active.items()])
-    trade_info = ""
-    if uid in trades_actifs:
-        t = trades_actifs[uid]
-        trade_info = f"\n🟠 *TRADE ACTIF:* {t['symbol']} {t['direction']} @ {t['entry_price']}"
+    utilisateurs_actifs.add(user_id)
+    texte_bienvenue = """🏴‍☠️ **TERMINAL PRIME - ÉDITION GOD MODE DYNAMIQUE (V8)** 🔥
+    
+Bienvenue dans le radar institutionnel. Ce système est doté d'un cerveau de volatilité : il choisit **LUI-MÊME** le meilleur temps d'expiration (2, 5 ou 10 minutes) en fonction du marché.
 
-    bot.send_message(uid,
-        f"💼 *TERMINAL PRIME V55* — ANALYSTE IA MULTI-MODULES (GROQ)\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Stratégie unique par confluence, validée par IA\n"
-        f"🎯 Scan exclusif : 🥇 Gold · 🥈 Argent · 🔥 Volatility\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📈 TREND PULLBACK & CONFLUENCE\n"
-        f"   Tendance H1 + Structure + Momentum sain\n"
-        f"   + Pullback EMA21 M15 / Order Block / S-R clé\n"
-        f"   + Bougie de confirmation + Risque géré ATR\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🤖 *Moteur IA — 5 modules :*\n"
-        f"  • Calcul déterministe (seuil {IA_CONFIG['seuil_acceptation']}%)\n"
-        f"  • 🌍 Contexte marché (tendance/volatilité/range)\n"
-        f"  • 🚨 Détection faux signaux (divergence, épuisement...)\n"
-        f"  • ⏱️ Cohérence multi-timeframe (M1/M5/M15/H1)\n"
-        f"  • 🛡️ Gestion intelligente du risque (SL affiné ATR)\n"
-        f"  • 🔮 Second avis Groq {'actif' if IA_CONFIG['groq_active'] and GROQ_API_KEY else 'inactif'}\n"
-        f"  • Apprend des résultats réels (/iastats)\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🛡️ *Gestion pro intégrée :*\n"
-        f"  • Position sizing réel ({RISK_CONFIG['risk_per_trade_pct']}%/trade)\n"
-        f"  • TP partiel 85% + Breakeven auto\n"
-        f"  • Trailing stop après breakeven\n"
-        f"  • Limite perte/jour {RISK_CONFIG['daily_loss_limit_pct']}%\n"
-        f"  • Pause anti-tilt après {RISK_CONFIG['max_consecutive_losses']} pertes\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🔥 Volatility Pairs :\n{vol}\n"
-        f"⏰ Killzone : {kz}{trade_info}",
-        reply_markup=obtenir_clavier(uid), parse_mode="Markdown")
+📖 **MODE D'EMPLOI :**
+1️⃣ **SÉLECTION :** Clique sur "📊 CHOISIR UNE DEVISE" pour verrouiller un actif.
+2️⃣ **RADAR :** Clique sur "🚀 LANCER L'ANALYSE" pour déclencher le scan Sniper.
+3️⃣ **DISCIPLINE :** N'oublie pas : 2% de mise maximum et stop total après 3 pertes.
+
+⚠️ **ATTENTION : RÉGLEZ SOIGNEUSEMENT L'HORLOGE DE POCKET BROKER SELON LE SIGNAL !** ⏱️"""
+    bot.send_message(message.chat.id, texte_bienvenue, reply_markup=obtenir_clavier(), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "⏰ HEURES DE TRADING")
-def horaires(message):
-    kz  = "🟢 EN COURS" if dans_killzone() else "🔴 INACTIVE"
-    vol = "\n".join([f"  {'✅' if v else '❌'} {p}"
-                     for p, v in volatility_pairs_active.items()])
-    bot.send_message(message.chat.id,
-        f"🕒 *KILLZONES & CPR JOURNALIER*\n\n"
-        f"🌏 Asie    : 00:00 – 07:00 GMT\n"
-        f"🇬🇧 Londres : 08:00 – 11:00 GMT\n"
-        f"🇺🇸 New York: 14:00 – 17:00 GMT\n\n"
-        f"⏰ Statut : {kz}\n"
-        f"🧱 Le CPR (Pivot/BCPR/TCPR) se recalcule chaque jour à partir\n"
-        f"   de la clôture de la veille — actif 24/24 sur Volatility,\n"
-        f"   soumis aux horaires de marché pour Gold/Argent.\n\n"
-        f"🔥 Volatility :\n{vol}\n\n"
-        f"/Volatility V50 OFF → désactiver V50\n"
-        f"/Volatility ALL ON  → tout activer",
-        parse_mode="Markdown")
+def horaires_trading(message):
+    if not est_autorise(message.chat.id): return
+    texte = """🕒 **GUIDE DES HORAIRES DE TRADING (Heure GMT)** 🕒
 
-@bot.message_handler(func=lambda m: m.text == "📊 RAPPORT DU JOUR")
-def rapport_bouton(message):
-    uid = message.chat.id
-    if not est_autorise(uid): return
-    bot.send_message(uid, generer_rapport_texte(uid), parse_mode="Markdown")
+✅ **SESSION SEMAINE 1 (08h00 - 11h00) :** EUR/USD, GBP/USD
+🔥 **SESSION SEMAINE 2 (13h30 - 16h30) :** EUR/USD, AUD/USD
+🌉 **SESSION SEMAINE 3 (20h00 - 08h00) :** AUD/JPY, USD/JPY, EUR/JPY
+🪙 **SESSION WEEK-END (Samedi/Dimanche) :** CRYPTOMONNAIES UNIQUEMENT
 
-@bot.message_handler(func=lambda m: m.text == "📜 HISTORIQUE")
-def historique_bouton(message):
-    historique_trades(message)
+*Rappel de Discipline : Fixe-toi tes 2% de mise max et arrête-toi après 3 pertes !*"""
+    bot.send_message(message.chat.id, texte, parse_mode="Markdown")
 
-@bot.message_handler(func=lambda m: m.text in ["📊 CHOISIR UNE CIBLE",
-                                               "📊 CHOISIR UNE CIBLE ELITE"])
+@bot.message_handler(func=lambda m: m.text == "📊 CHOISIR UNE DEVISE")
 def devises(message):
-    uid = message.chat.id
-    if not est_autorise(uid): return
-    if uid in trades_actifs:
-        return bot.send_message(uid,
-            "🟠 *TRADE ACTIF EN COURS*\n"
-            "Attendez la clôture avant d'ouvrir un autre.",
-            parse_mode="Markdown")
-
-    peut_trader, raison = utilisateur_peut_trader(uid)
-    if not peut_trader:
-        return bot.send_message(uid, raison, parse_mode="Markdown")
-
-    # ✅ V44.1: mode unique — Gold, Argent, Volatility (plus de Forex/POCKET)
+    if not est_autorise(message.chat.id): return
     markup = InlineKeyboardMarkup(row_width=3)
-    btns_vol = [InlineKeyboardButton(
-                    NOMS_AFFICHAGE.get(p, p),
-                    callback_data=f"set_{p}")
-                for p, actif in volatility_pairs_active.items() if actif]
-    if btns_vol:
-        markup.add(*btns_vol)
-    markup.add(InlineKeyboardButton("🥇 GOLD",   callback_data="set_XAUUSD"),
-               InlineKeyboardButton("🥈 ARGENT", callback_data="set_XAGUSD"))
-    bot.send_message(uid, "🎯 Sélectionne ta cible :",
-                     reply_markup=markup, parse_mode="Markdown")
-
-@bot.message_handler(func=lambda m: m.text == "🚀 LANCER L'ANALYSE")
-def lancer(message):
-    uid = message.chat.id
-    if not est_autorise(uid): return
-    if uid in trades_actifs:
-        return bot.send_message(uid, "⚠️ Trade actif en cours.")
-    actif = user_prefs.get(uid)
-    if not actif:
-        return bot.send_message(uid, "⚠️ Choisis d'abord une cible !")
-    fake = type("C", (), {
-        "data": f"set_{actif}",
-        "message": message,
-        "from_user": message.from_user,
-        "id": 0
-    })()
-    save_devise(fake)
+    jour_semaine = datetime.datetime.now().weekday()
+    
+    if jour_semaine >= 5:
+        markup.add(
+            InlineKeyboardButton("🪙 BTC/USD", callback_data="set_BTCUSD"),
+            InlineKeyboardButton("🔷 ETH/USD", callback_data="set_ETHUSD"),
+            InlineKeyboardButton("⚡ LTC/USD", callback_data="set_LTCUSD")
+        )
+        message_texte = "Mode Week-End 🪙 : Les banques sont fermées. Sélectionne la Crypto :"
+    else:
+        markup.add(
+            InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD"), InlineKeyboardButton("🇨🇦 CAD/JPY", callback_data="set_CADJPY"), InlineKeyboardButton("🇨🇭 CHF/JPY", callback_data="set_CHFJPY"),
+            InlineKeyboardButton("🇪🇺 EUR/JPY", callback_data="set_EURJPY"), InlineKeyboardButton("🇺🇸 USD/CAD", callback_data="set_USDCAD"), InlineKeyboardButton("🇦🇺 AUD/JPY", callback_data="set_AUDJPY"),
+            InlineKeyboardButton("🇪🇺 EUR/AUD", callback_data="set_EURAUD"), InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="set_EURUSD"), InlineKeyboardButton("🇦🇺 AUD/CAD", callback_data="set_AUDCAD"),
+            InlineKeyboardButton("🇺🇸 USD/CHF", callback_data="set_USDCHF"), InlineKeyboardButton("🇨🇦 CAD/CHF", callback_data="set_CADCHF"), InlineKeyboardButton("🇪🇺 EUR/CHF", callback_data="set_EURCHF"),
+            InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY")
+        )
+        message_texte = "Mode Semaine 💱 : Arsenal Pocket Broker synchronisé. Sélectionne ta cible :"
+    bot.send_message(message.chat.id, message_texte, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
 def save_devise(call):
-    uid = call.message.chat.id
-    if not est_autorise(uid): return
-
-    if uid in trades_actifs:
-        try: bot.answer_callback_query(call.id,
-                                       "🟠 Trade actif! Attendez la clôture.", show_alert=True)
+    chat_id = call.message.chat.id
+    if not est_autorise(chat_id): return
+    actif = call.data.replace("set_", "")
+    user_prefs[call.from_user.id] = actif
+    nom_affiche = f"{actif[:3]}/{actif[3:]}"
+    
+    try:
+        msg = bot.send_message(chat_id, "⏳ *Initialisation du scan DYNAMIQUE...*", parse_mode="Markdown")
+        time.sleep(1)
+        bot.edit_message_text("⚙️ *Lecture de l'Order Flow et calcul de la Volatilité ATR...*", chat_id, msg.message_id, parse_mode="Markdown")
+        time.sleep(1)
+    except: return
+        
+    action, confiance, exp_texte, duree_secondes, rsi_val, stoch_val, bb_status, score = analyser_binaire_pro(actif)
+    
+    if action and "⚠️" in action:
+        try: bot.edit_message_text(f"{action}", chat_id, msg.message_id)
+        except: pass
+        return
+    elif not action:
+        try: bot.edit_message_text("❌ Échec de la récupération des données Deriv. Relance l'analyse.", chat_id, msg.message_id)
         except: pass
         return
 
-    peut_trader, raison = utilisateur_peut_trader(uid)
-    if not peut_trader:
-        try: bot.answer_callback_query(call.id, raison, show_alert=True)
-        except: pass
-        return
+    maintenant = datetime.datetime.now()
+    secondes_restantes = (60 - maintenant.second) + 60
+    if (60 - maintenant.second) < 15: secondes_restantes += 60
+    heure_entree_dt = maintenant + datetime.timedelta(seconds=secondes_restantes)
+    
+    mise_recommandee = int(CAPITAL_ACTUEL * 0.02)
+    titre_signal = "🔥 SIGNAL VALIDÉ DYNAMIQUE 🔥" if score >= 8 else "⚡ SIGNAL VIP SÉCURISÉ ⚡"
+    jauge_visuelle = generer_jauge(score * 10) 
 
-    cle_brute = call.data.replace("set_", "")
+    signal = f"""{titre_signal}
+──────────────────
+🛰 **ACTIF :** {nom_affiche}
+🎯 **ACTION :** {action}
+⏳ **EXPIRATION :** {exp_texte}
+──────────────────
+🧠 **CONFIANCE :** {jauge_visuelle}
+🛡️ **FILTRE ANTI-PIÈGE :** VALIDÉ ✅
 
-    try: bot.delete_message(uid, call.message.message_id)
+📊 **VALIDATION MULTI-CERVEAU :**
+➤ **RSI :** 🟢 Validé ({rsi_val})
+➤ **Stochastique :** 🟢 Validé ({stoch_val})
+➤ **Volume/Trend :** 🟢 {bb_status}
+──────────────────
+📍 **ORDRE À : {heure_entree_dt.strftime("%H:%M:00")}** 👈
+💵 **MISE RECOMMANDÉE :** {mise_recommandee}$ (2%)
+──────────────────
+⚠️ *Préparez l'ordre sur Pocket Broker avec le temps d'expiration indiqué ci-dessus.*"""
+
+    try:
+        bot.delete_message(chat_id, msg.message_id)
+        bot.send_message(chat_id, signal, parse_mode="Markdown")
     except: pass
 
-    # ✅ V48: la clé peut être soit "SYMBOLE_STRATEGIE" (bouton "Copier" reçu
-    # directement depuis le scanner — référence exacte du signal affiché,
-    # indispensable pour ne jamais mélanger deux signaux indépendants sur la
-    # même paire), soit "SYMBOLE" seul (sélection manuelle via le menu
-    # "CHOISIR UNE CIBLE" — on prend alors le signal le plus récent parmi
-    # les stratégies disponibles pour cette paire).
-    if cle_brute in signaux_cache:
-        cle = cle_brute
-        actif = cle_brute.split("_")[0]
-    else:
-        actif = cle_brute
-        candidats = [k for k in signaux_cache if k.startswith(f"{actif}_")]
-        if not candidats:
-            return bot.send_message(uid,
-                f"⏱️ Aucun signal actif sur {NOMS_AFFICHAGE.get(actif, actif)}\n"
-                f"Attends le prochain scan automatique.", parse_mode="Markdown")
-        cle = max(candidats, key=lambda k: signaux_cache[k]["time"])
+    action_simplifiee = "CALL" if "ACHAT" in action else "PUT"
+    trades_en_cours[chat_id] = {'symbole': actif, 'action': action_simplifiee}
+    Timer(secondes_restantes, relever_prix_entree, args=[chat_id, actif]).start()
+    Timer(secondes_restantes + duree_secondes, verifier_resultat, args=[chat_id]).start()
 
-    user_prefs[uid] = actif
-    cache = signaux_cache.get(cle)
+@bot.message_handler(func=lambda m: m.text == "🚀 LANCER L'ANALYSE")
+def lancer(message):
+    if not est_autorise(message.chat.id): return
+    actif = user_prefs.get(message.from_user.id)
+    if not actif: return bot.send_message(message.chat.id, "⚠️ Choisis d'abord une devise !")
+    save_devise(type('obj', (object,), {'data': f"set_{actif}", 'message': message, 'from_user': message.from_user})())
 
-    # ✅ V44 FIX: fenêtre de validité réduite (45s au lieu de 90s) — un
-    # signal vieux de 90s peut déjà être largement dépassé sur une paire
-    # rapide (Volatility indices).
-    if not cache or (time.time() - cache["time"]) > RISK_CONFIG["signal_validity_seconds"]:
-        return bot.send_message(uid,
-            f"⏱️ Signal expiré sur {NOMS_AFFICHAGE.get(actif, actif)}\n"
-            f"Attends le prochain scan automatique.", parse_mode="Markdown")
+@bot.message_handler(commands=['vision'])
+def vision_marche(message):
+    if not est_autorise(message.chat.id): return
+    commande = message.text.split()
+    if len(commande) < 2: return bot.send_message(message.chat.id, "⚠️ Précise la devise. Exemple : `/vision EURUSD`", parse_mode="Markdown")
+    symbole = commande[1].upper()
+    try: msg = bot.send_message(message.chat.id, f"🔍 *Scan aux rayons X de {symbole}...*", parse_mode="Markdown")
+    except: return
+    
+    candles = obtenir_donnees_deriv(symbole)
+    if not candles: return bot.edit_message_text("⚠️ Impossible de scanner (manque de données).", message.chat.id, msg.message_id)
+        
+    try:
+        df = pd.DataFrame([{'close': float(c['close']), 'high': float(c['high']), 'low': float(c['low'])} for c in candles])
+        indicateur_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
+        bb_haute, bb_basse = indicateur_bb.bollinger_hband().iloc[-1], indicateur_bb.bollinger_lband().iloc[-1]
+        stoch_k = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3).stoch().iloc[-1]
+        rsi = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi().iloc[-1]
+        ema_200 = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator().iloc[-1]
+        prix_actuel = df['close'].iloc[-1]
+        
+        position_bb = "🔴 Au Plafond (Touche la bande haute)" if prix_actuel >= bb_haute else "🟢 Au Plancher (Touche la bande basse)" if prix_actuel <= bb_basse else "⚪ Au Milieu (Zone neutre)"
+        nom_affiche = f"{symbole[:3]}/{symbole[3:]}"
+        
+        rapport = f"""👁️ **VISION RAYONS X : {nom_affiche}** 👁️
+──────────────────
+💰 **Prix actuel :** `{prix_actuel:.5f}`
+🛡️ **EMA 200 (Tendance) :** `{ema_200:.5f}`
+📏 **Position Bollinger :** {position_bb}
 
-    px  = obtenir_prix_broker_realtime(actif) or 0
-    nom = NOMS_AFFICHAGE.get(actif, actif)
-    fmt = ".0f" if actif in VOLATILE_PAIRS else ".5f"
-
-    if px <= 0:
-        return bot.send_message(uid,
-            f"⚠️ Impossible de récupérer le prix actuel de {nom}. Réessaie dans un instant.",
-            parse_mode="Markdown")
-
-    entry_direction = "BUY" if "BUY" in cache["action"] else "SELL"
-    sl_cache, tp1_cache, tp_final_cache = cache["mt5_sl"], cache["mt5_tp1"], cache["mt5_tp"]
-
-    # ✅ V44 FIX NOUVEAU: revalider le marché AVANT d'ouvrir le trade.
-    # Si le prix a déjà dépassé le SL ou le TP1 (ou TP final) prévu pendant
-    # le délai entre le scan et le clic, on REFUSE d'ouvrir — c'est
-    # exactement le scénario "j'entre et j'ai déjà atteint mon TP1".
-    if entry_direction == "BUY":
-        deja_sl  = px <= sl_cache
-        deja_tp1 = px >= tp1_cache
-    else:
-        deja_sl  = px >= sl_cache
-        deja_tp1 = px <= tp1_cache
-
-    if deja_sl:
-        return bot.send_message(uid,
-            f"❌ *Signal annulé* — {nom}\n"
-            f"Le marché a déjà atteint le niveau de Stop Loss prévu "
-            f"({sl_cache:{fmt}}) pendant le délai d'exécution.\n"
-            f"Aucun trade ouvert. Attends le prochain signal.",
-            parse_mode="Markdown")
-
-    if deja_tp1:
-        return bot.send_message(uid,
-            f"❌ *Signal annulé* — {nom}\n"
-            f"Le marché a déjà atteint l'objectif TP1 prévu ({tp1_cache:{fmt}}) "
-            f"avant que tu n'ouvres la position — entrer maintenant capturerait "
-            f"un R/R trop dégradé.\n"
-            f"Aucun trade ouvert. Attends le prochain signal.",
-            parse_mode="Markdown")
-
-    # Recalcul du R/R réellement disponible avec le prix FRAIS d'exécution
-    risque_restant  = abs(px - sl_cache)
-    recomp_restante = abs(tp_final_cache - px)
-    rr_restant = (recomp_restante / risque_restant) if risque_restant > 0 else 0
-    rr_original = cache["mt5_rr"]
-
-    if rr_original > 0:
-        degradation_pct = max(0, (1 - (rr_restant / rr_original)) * 100)
-    else:
-        degradation_pct = 0
-
-    if degradation_pct > RISK_CONFIG["max_rr_degradation_pct"]:
-        return bot.send_message(uid,
-            f"❌ *Signal annulé* — {nom}\n"
-            f"Le R/R restant s'est trop dégradé depuis la détection du signal "
-            f"({rr_original:.2f}R → {rr_restant:.2f}R, -{degradation_pct:.0f}%).\n"
-            f"Aucun trade ouvert pour protéger la qualité de l'entrée.",
-            parse_mode="Markdown")
-
-    trade_id, sizing = ouvrir_trade(uid, actif, entry_direction, px,
-                                    sl_cache, tp1_cache, tp_final_cache,
-                                    cache["strategie"], cache["confiance"],
-                                    label=cache.get("label","SIGNAL"),
-                                    strategie_nom_ia=cache.get("strategie_nom_ia","?"),
-                                    ia_score=cache.get("ia_score"),
-                                    gemini_score=cache.get("gemini_score"),
-                                    contexte_marche=cache.get("extra", {}).get("contexte_marche"))
-
-    signal = (
-        f"💼 *{cache.get('label','SIGNAL')}* — {nom}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"{'🟢 BUY MARKET' if 'BUY' in cache['action'] else '🔴 SELL MARKET'}\n"
-        f"📊 Contexte : {cache.get('contexte','')}\n"
-        f"🤖 Score IA validé : {cache.get('ia_score','?')}%\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 Entrée  : {px:{fmt}}\n"
-        f"🛑 SL      : {sl_cache:{fmt}}\n"
-        f"🎯 TP1 (85%): {tp1_cache:{fmt}}\n"
-        f"🏁 TP Final (15%): {tp_final_cache:{fmt}}\n"
-        f"⚖️ R/R actuel : {rr_restant:.2f}R (prévu {rr_original:.2f}R)\n"
-        f"🎖️ Confiance : {cache.get('confiance',0)}%\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💵 *Risque réel calculé* : ${sizing['montant_risque']}\n"
-        f"   ({RISK_CONFIG['risk_per_trade_pct']}% du capital ${CAPITAL_ACTUEL})\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"✅ *TRADE OUVERT*\n"
-        f"🆔 {trade_id}\n"
-        f"📬 Au TP1: 85% fermé + SL→Breakeven automatique\n"
-        f"🏃 Au TP Final: 15% restant sécurisé par trailing stop"
-    )
-    bot.send_message(uid, signal, parse_mode="Markdown")
-
-# ==========================================
-# LANCEMENT
-# ==========================================
+📊 **Niveau RSI :** `{rsi:.2f}` *(Rappel: >60 = Surchauffe, <40 = Essoufflé)*
+📉 **Niveau Stochastique :** `{stoch_k:.2f}` *(Rappel: >80 = Surachat, <20 = Survente)*
+──────────────────"""
+        rapport += "\n⚠️ *Le prix teste les limites, tiens-toi prêt !*" if position_bb != "⚪ Au Milieu (Zone neutre)" else "\n💤 *Le marché respire tranquillement.*"
+        bot.edit_message_text(rapport, message.chat.id, msg.message_id, parse_mode="Markdown")
+    except Exception as e: bot.edit_message_text(f"❌ Erreur : {e}", message.chat.id, msg.message_id)
 
 if __name__ == "__main__":
     keep_alive()
-    Thread(target=scanner_marche_auto,            daemon=True).start()
-    Thread(target=monitorer_trades_actifs,         daemon=True).start()
-    Thread(target=envoyer_rapports_quotidiens_auto,daemon=True).start()
-    Thread(target=watchdog_trades_bloques,         daemon=True).start()
-    print("💼 TERMINAL PRIME V55 — ANALYSTE IA MULTI-MODULES (GROQ) ACTIF "
-          "(3 stratégies indépendantes assouplies, contexte/faux-signaux/multi-TF/risque, Groq, scanner parallèle, watchdog)", flush=True)
+    Thread(target=scanner_marche_auto, daemon=True).start()
+    Thread(target=gestion_horaires_et_bilan, daemon=True).start()
+    print("⬛ BOÎTE NOIRE : Édition GOD MODE DYNAMIQUE (V8 — Confluence) Démarrée.", flush=True)
     bot.infinity_polling()
