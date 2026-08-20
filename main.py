@@ -18,7 +18,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAEFYQTQ_V4ppVGoyHI7UXnZHnVwqbXJZ_Y"
+TELEGRAM_TOKEN = "8658287331:AAGi1_g1ycH8FpvTI45jJ23pWYd9xw6AHQs"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964 
@@ -35,6 +35,7 @@ MAX_MARTINGALE = 3
 
 user_prefs = {}
 mode_trading = {} 
+filtre_vip_actif = {}  # ✅ V18.5: user_id -> bool — quand actif, ne reçoit QUE les signaux les mieux notés
 trades_en_cours = {}
 utilisateurs_actifs = set()
 derniere_alerte_auto = {}
@@ -624,6 +625,9 @@ def analyser_donchian_cci(df):
 
 
 SEUIL_SIGNAL_PILIER = 45  # sur ~100 max par pilier — ajustable directement ici
+SEUIL_VIP_SCORE_ALGO = 9.0  # ✅ V18.5: sur l'échelle score_algo (5.0-10.0) — en
+                             # mode VIP, seuls les signaux ≥ ce seuil sont envoyés
+                             # (équivaut à un score pilier brut ≥ 80/100)
 
 # ==========================================
 # MOTEUR ULTIMATE V18 (4 PILIERS + KILLSWITCH)
@@ -741,10 +745,37 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
 def obtenir_clavier(user_id):
     mode_actuel = mode_trading.get(user_id, "STANDARD")
     btn_mode = "🛡️ MODE: 4 PILIERS STANDARD" if mode_actuel == "STANDARD" else "🔥 MODE: 4 PILIERS SCALP"
+    vip_actif = filtre_vip_actif.get(user_id, False)
+    btn_vip = "💎 SIGNAUX VIP: ON ✅" if vip_actif else "💎 SIGNAUX VIP: OFF"
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row(KeyboardButton("📊 CHOISIR UNE DEVISE"), KeyboardButton("🚀 LANCER L'ANALYSE"))
     markup.row(KeyboardButton(btn_mode), KeyboardButton("⏰ HEURES DE TRADING"))
+    markup.row(KeyboardButton(btn_vip))
     return markup
+
+@bot.message_handler(func=lambda m: m.text.startswith("💎 SIGNAUX VIP"))
+def toggle_vip(message):
+    """
+    ✅ V18.5 NEW: bouton 5 — bascule le filtre VIP. Quand actif, l'utilisateur
+    ne reçoit (scanner auto ET analyse manuelle) que les signaux dont le
+    score_algo dépasse SEUIL_VIP_SCORE_ALGO (les meilleures confluences,
+    équivalent des signaux qui déclenchent déjà l'exception 10/10).
+    """
+    user_id = message.chat.id
+    if not est_autorise(user_id): return
+    vip_actif = filtre_vip_actif.get(user_id, False)
+    filtre_vip_actif[user_id] = not vip_actif
+    if filtre_vip_actif[user_id]:
+        bot.send_message(user_id,
+            "💎 **MODE SIGNAUX VIP ACTIVÉ** 💎\n\n"
+            "Tu ne recevras désormais QUE les signaux les mieux notés "
+            f"(score ≥ {SEUIL_VIP_SCORE_ALGO}/10) — moins fréquents, mais "
+            "la meilleure confluence des 4 piliers uniquement.",
+            reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
+    else:
+        bot.send_message(user_id,
+            "🔓 **MODE SIGNAUX VIP DÉSACTIVÉ**\n\nTu reçois à nouveau tous les signaux validés (seuil standard).",
+            reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text.startswith("🛡️ MODE:") or m.text.startswith("🔥 MODE:"))
 def toggle_mode(message):
@@ -767,6 +798,7 @@ def bienvenue(message):
     utilisateurs_actifs.add(user_id)
     niveaux_martingale[user_id] = niveaux_martingale.get(user_id, 0)
     mode_trading[user_id] = mode_trading.get(user_id, "STANDARD")
+    filtre_vip_actif[user_id] = filtre_vip_actif.get(user_id, False)
     texte = """🏴‍☠️ **TERMINAL PRIME - V18 ULTIMATE 🛑** 🔥
 
 Moteur remplacé par **4 piliers d'analyse indépendants** :
@@ -775,7 +807,9 @@ Moteur remplacé par **4 piliers d'analyse indépendants** :
 🧩 A Moment When... — CCI(10) + MACD(10,25,5)
 🧩 You Know And... — Donchian Channel(20) + CCI(11)
 
-🛑 **KILLSWITCH ANTI-FUSÉE** toujours actif : l'algorithme annule le tir et désactive la Martingale s'il détecte une explosion directionnelle incontrôlable du marché (3 bougies pleines). Protégez votre capital."""
+🛑 **KILLSWITCH ANTI-FUSÉE** toujours actif : l'algorithme annule le tir et désactive la Martingale s'il détecte une explosion directionnelle incontrôlable du marché (3 bougies pleines). Protégez votre capital.
+
+💎 **NOUVEAU : bouton SIGNAUX VIP** — active-le pour ne recevoir que les meilleures configurations (score ≥ 9/10)."""
     bot.send_message(message.chat.id, texte, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
@@ -801,7 +835,20 @@ def save_devise(call):
     except: return
         
     action, confiance, exp_texte, duree_secondes, rsi_val, stoch_val, bb_status, score = analyser_binaire_pro(actif, mode_actuel)
-    
+
+    # ✅ V18.5: filtre VIP — si actif, on rejette tout signal sous le seuil VIP
+    if action and "⚠️" not in action and filtre_vip_actif.get(chat_id, False):
+        if score is None or score < SEUIL_VIP_SCORE_ALGO:
+            try:
+                bot.edit_message_text(
+                    f"💎 **MODE VIP ACTIF** — aucun signal ne dépasse encore le seuil "
+                    f"({SEUIL_VIP_SCORE_ALGO}/10) sur {nom_affiche} actuellement.\n"
+                    f"Relance l'analyse dans un instant, ou désactive le mode VIP pour "
+                    f"recevoir les signaux standards.",
+                    chat_id, msg.message_id, parse_mode="Markdown")
+            except: pass
+            return
+
     if statut == "HORS_SESSION":
         if score is None or score < 10.0:
             try: bot.edit_message_text(f"{msg_erreur}\n\n*(Le setup n'est pas un 10/10 parfait pour forcer l'entrée)*", chat_id, msg.message_id, parse_mode="Markdown")
@@ -940,10 +987,13 @@ def scanner_marche_auto():
                         
                         prefixe = "👑 **EXCEPTION HORS SESSION** 👑\n" if statut == "HORS_SESSION" else ""
                         for uid in utilisateurs_libres:
-                            if mode_trading.get(uid, "STANDARD") == mode:
-                                msg = f"{prefixe}🔔 **CHASSE AUX STOPS : {nom_affiche}**\n👉 Dégaine !" if mode == "SCALP" else f"{prefixe}🔔 **SIGNAL {exp} : {nom_affiche}**"
-                                try: bot.send_message(uid, msg, reply_markup=markup)
-                                except: pass
+                            if mode_trading.get(uid, "STANDARD") != mode: continue
+                            # ✅ V18.5: filtre VIP par utilisateur — chacun a son propre réglage
+                            if filtre_vip_actif.get(uid, False) and (sc is None or sc < SEUIL_VIP_SCORE_ALGO):
+                                continue
+                            msg = f"{prefixe}🔔 **CHASSE AUX STOPS : {nom_affiche}**\n👉 Dégaine !" if mode == "SCALP" else f"{prefixe}🔔 **SIGNAL {exp} : {nom_affiche}**"
+                            try: bot.send_message(uid, msg, reply_markup=markup)
+                            except: pass
         except Exception as e: pass
 
 # ==========================================
