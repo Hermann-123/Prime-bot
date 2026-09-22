@@ -5,7 +5,6 @@ import sqlite3
 import datetime as dt
 import threading
 from pathlib import Path
-
 import websocket
 import pandas as pd
 import ta
