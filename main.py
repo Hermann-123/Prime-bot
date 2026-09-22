@@ -516,7 +516,7 @@ LAB_CANDLES = int(os.environ.get("LAB_CANDLES", "5000"))
 LAB_MIN_TRADES = int(os.environ.get("LAB_MIN_TRADES", "30"))
 LAB_TF_LIST = (60, 120, 300, 600)
 LAB_EXPIRY_SECONDS = {60: 60, 120: 120, 300: 180, 600: 600}
-DERIV_WS_URL = f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
+DERIV_WS_URL = "wss://ws.binaryws.com/websockets/v3"  # endpoint public documenté pour market data
 
 
 def _deriv_lab_request(ws, payload, req_id, timeout=20):
@@ -540,6 +540,8 @@ def deriv_active_symbol_map():
     ws = None
     try:
         ws = websocket.create_connection(DERIV_WS_URL, timeout=20)
+        # Endpoint public legacy toujours documenté pour les données de marché.
+        # product_type est conservé ici pour compatibilité avec ce endpoint.
         res = _deriv_lab_request(ws, {
             "active_symbols": "brief",
             "product_type": "basic",
@@ -548,10 +550,16 @@ def deriv_active_symbol_map():
             print(f"[DERIV ACTIVE ERROR] {res['error']}")
             return {}
         items = res.get("active_symbols") or []
+        if not items:
+            print(f"[DERIV ACTIVE EMPTY] Réponse active_symbols vide: {res}")
+            return {}
         mapping = {}
         for item in items:
-            sym = str(item.get("symbol", ""))
-            display = str(item.get("display_name", ""))
+            # Deriv expose actuellement deux variantes de noms de champs selon
+            # le endpoint/version: legacy symbol/display_name ou new
+            # underlying_symbol/underlying_symbol_name. On accepte les deux.
+            sym = str(item.get("symbol") or item.get("underlying_symbol") or "")
+            display = str(item.get("display_name") or item.get("underlying_symbol_name") or "")
             if sym:
                 mapping[sym] = {"symbol": sym, "display_name": display}
                 # Clé normalisée : frxEURUSD -> EURUSD, cryBTCUSD -> BTCUSD, etc.
@@ -560,7 +568,8 @@ def deriv_active_symbol_map():
                     if normalized.startswith(prefix):
                         normalized = normalized[len(prefix):]
                 mapping.setdefault(normalized.upper(), {"symbol": sym, "display_name": display})
-        print(f"[DERIV ACTIVE OK] {len(items)} symboles actifs reçus")
+        sample = [str(x.get("symbol") or x.get("underlying_symbol") or "") for x in items[:12]]
+        print(f"[DERIV ACTIVE OK] {len(items)} symboles actifs reçus | sample={sample}")
         return mapping
     except Exception as e:
         print(f"[DERIV ACTIVE CONNECTION ERROR] {type(e).__name__}: {e}")
