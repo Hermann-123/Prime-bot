@@ -190,27 +190,45 @@ def prefixer_symbole(symbole):
 
 
 def obtenir_donnees_deriv(symbole, granularite=300, count=250):
+    """Récupère les bougies historiques via le WebSocket public Deriv.
+    V19.3: ne masque plus les erreurs et n'utilise pas l'App ID pour le market data public.
+    """
     ws = None
     try:
+        # Le flux public de données de marché ne nécessite pas d'authentification.
         ws = websocket.create_connection(
-            f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}", timeout=8
+            "wss://ws.binaryws.com/websockets/v3", timeout=15
         )
-        ws.send(json.dumps({
-            "ticks_history": prefixer_symbole(symbole), "end": "latest",
-            "count": count, "style": "candles", "granularity": granularite
-        }))
-        res = json.loads(ws.recv())
-        if "error" in res or "candles" not in res:
+        req = {
+            "ticks_history": prefixer_symbole(symbole),
+            "end": "latest",
+            "count": int(count),
+            "style": "candles",
+            "granularity": int(granularite),
+            "subscribe": 0,
+            "req_id": 1,
+        }
+        ws.send(json.dumps(req))
+        raw = ws.recv()
+        res = json.loads(raw)
+        if "error" in res:
+            err = res.get("error", {})
+            print(f"[DERIV DATA ERROR] {symbole} TF={granularite}: {err.get('code','?')} - {err.get('message',err)}")
             return None
-        return res["candles"]
-    except Exception:
+        candles = res.get("candles")
+        if not candles:
+            print(f"[DERIV DATA ERROR] {symbole} TF={granularite}: réponse sans candles: {str(res)[:500]}")
+            return None
+        print(f"[DERIV DATA OK] {symbole} TF={granularite}: {len(candles)} bougies reçues")
+        return candles
+    except Exception as e:
+        print(f"[DERIV CONNECTION ERROR] {symbole} TF={granularite}: {type(e).__name__}: {e}")
         return None
     finally:
         try:
             if ws: ws.close()
         except Exception:
             pass
-
 
 def obtenir_prix_actuel_deriv(symbole):
     ws = None
@@ -619,7 +637,7 @@ def send_lab_report(chat_id, text):
         bot.send_message(chat_id, chunk)
 
 def format_lab_telegram(global_report):
-    lines=["🧪 V19.2 — RAPPORT DÉTAILLÉ", "", f"Simulations stratégie/TF : {len(global_report)}", ""]
+    lines=["🧪 V19.3 — RAPPORT DÉTAILLÉ", "", f"Simulations stratégie/TF : {len(global_report)}", ""]
     for asset, tf, name, s in global_report:
         lines += [
             f"📌 {asset} | TF {tf}s | {name}",
@@ -672,7 +690,7 @@ def run_mass_lab(assets, tfs=LAB_TF_LIST, count=LAB_CANDLES):
                     print_lab_report(asset, tf, name, train, "TRAIN 70%")
                     print_lab_report(asset, tf, name, test, "OOS 30%")
     print("\n" + "#"*90)
-    print("V19.2 MASSIVE BACKTEST LAB — FINAL SUMMARY")
+    print("V19.3 MASSIVE BACKTEST LAB — FINAL SUMMARY")
     print("#"*90)
     for asset, tf, name, s in global_report:
         flag = "OK_SAMPLE" if s["trades"] >= LAB_MIN_TRADES else "SMALL_SAMPLE"
@@ -694,12 +712,19 @@ def cmd_lab(message):
     else:
         return bot.send_message(message.chat.id, "Usage : /lab EURUSD ou /lab ALL")
     bot.send_message(message.chat.id,
-                     f"🧪 V19.2 LAB lancé.\nAssets : {len(assets)}\nTF : 60/120/300/600s\nBougies : {LAB_CANDLES}\n\nLes résultats détaillés vont apparaître dans les logs Render.")
+                     f"🧪 V19.2 LAB lancé.\nAssets : {len(assets)}\nTF : 60/120/300/600s\nBougies : {LAB_CANDLES}\n\nLes résultats détaillés apparaîtront dans les logs Render et seront envoyés sur Telegram à la fin. En cas de problème de données, le diagnostic Deriv sera aussi affiché.")
     def worker():
         try:
             report = run_mass_lab(assets)
-            bot.send_message(message.chat.id, f"✅ V19.2 LAB terminé. {len(report)} simulations stratégie/TF analysées.\n\n📋 Je t'envoie maintenant le rapport détaillé en plusieurs messages si nécessaire.")
-            send_lab_report(message.chat.id, format_lab_telegram(report))
+            version = "V19.3"
+            if not report:
+                bot.send_message(message.chat.id,
+                    f"⚠️ {version} LAB terminé mais 0 simulation.\n\n"
+                    "Ce n'est pas un résultat de trading : aucune donnée historique Deriv n'a été reçue.\n"
+                    "Regarde les lignes [DERIV DATA ERROR] / [DERIV CONNECTION ERROR] dans Render et envoie-les-moi.")
+            else:
+                bot.send_message(message.chat.id, f"✅ {version} LAB terminé. {len(report)} simulations stratégie/TF analysées.\n\n📋 Je t'envoie maintenant le rapport détaillé en plusieurs messages si nécessaire.")
+                send_lab_report(message.chat.id, format_lab_telegram(report))
         except Exception as e:
             print(f"[LAB FATAL] {type(e).__name__}: {e}")
             bot.send_message(message.chat.id, f"❌ LAB interrompu : {type(e).__name__}: {e}")
