@@ -58,6 +58,22 @@ cles_generees = {}
 derneire_alerte_auto = {}
 
 # ============================================================
+# V20 — NOUVEAUX RÉGLAGES
+# ============================================================
+MIN_QUALITY_SCORE = float(os.environ.get("MIN_QUALITY_SCORE", "62"))
+MAX_TRADES_PER_DAY = int(os.environ.get("MAX_TRADES_PER_DAY", "20"))
+MAX_CONSECUTIVE_LOSSES = int(os.environ.get("MAX_CONSECUTIVE_LOSSES", "3"))
+MAX_DAILY_LOSSES = int(os.environ.get("MAX_DAILY_LOSSES", "5"))
+COOLDOWN_AFTER_WIN = int(os.environ.get("COOLDOWN_AFTER_WIN", "30"))
+COOLDOWN_AFTER_LOSS = int(os.environ.get("COOLDOWN_AFTER_LOSS", "180"))
+SHOCK_ATR_RATIO = float(os.environ.get("SHOCK_ATR_RATIO", "2.5"))
+AI_VALIDATOR_ENABLED = os.environ.get("AI_VALIDATOR_ENABLED", "0").lower() in ("1", "true", "yes")
+AI_API_KEY = os.environ.get("AI_API_KEY", "").strip()
+AI_BASE_URL = os.environ.get("AI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+AI_MODEL = os.environ.get("AI_MODEL", "gpt-4o-mini")
+
+
+# ============================================================
 # SQLITE — JOURNAL PERSISTANT
 # ============================================================
 
@@ -392,10 +408,131 @@ STRATEGIES = {
 }
 
 # ============================================================
+# V20 — MARKET REGIME ENGINE
+# ============================================================
+
+def moteur_regime_marche(df):
+    """Détermine le contexte sans transformer le régime en consensus obligatoire."""
+    try:
+        ema20 = ta.trend.EMAIndicator(df.close, window=20).ema_indicator()
+        ema50 = ta.trend.EMAIndicator(df.close, window=50).ema_indicator()
+        adx = ta.trend.ADXIndicator(df.high, df.low, df.close, window=14).adx()
+        atr = ta.volatility.AverageTrueRange(df.high, df.low, df.close, window=14).average_true_range()
+        rsi = ta.momentum.RSIIndicator(df.close, window=14).rsi()
+        up, lo = calculer_donchian(df, 20)
+        av=float(adx.iloc[-1]); at=float(atr.iloc[-1]); px=float(df.close.iloc[-1])
+        e20=float(ema20.iloc[-1]); e50=float(ema50.iloc[-1]); rv=float(rsi.iloc[-1])
+        prev_up=float(up.iloc[-2]); prev_lo=float(lo.iloc[-2])
+        candle_range=float(df.high.iloc[-1]-df.low.iloc[-1])
+        atr_ratio=candle_range/max(at,1e-12)
+        series=atr.dropna().tail(80)
+        atr_rank=float((series<=at).mean()*100) if len(series) else 50.0
+        if atr_ratio>=SHOCK_ATR_RATIO or atr_rank>=97:
+            regime="SHOCK"
+        elif px>prev_up and atr_rank>=55:
+            regime="BREAKOUT_UP"
+        elif px<prev_lo and atr_rank>=55:
+            regime="BREAKOUT_DOWN"
+        elif av>=20 and e20>e50:
+            regime="TREND_UP"
+        elif av>=20 and e20<e50:
+            regime="TREND_DOWN"
+        elif av<18 and atr_rank<=60:
+            regime="RANGE"
+        else:
+            regime="NEUTRAL"
+        return {"regime":regime,"adx":av,"atr":at,"atr_ratio":atr_ratio,"atr_rank":atr_rank,"rsi":rv,"ema20":e20,"ema50":e50}
+    except Exception:
+        return None
+
+
+def quality_filter(df, direction, strategy, regime_info, raw_score):
+    """Score qualité 0-100: stratégie, structure, momentum, volatilité, contexte."""
+    try:
+        score=min(40.0, raw_score*0.40); reasons=[]
+        last=df.iloc[-1]; prev=df.iloc[-2]
+        body=abs(float(last.close-last.open)); rng=max(float(last.high-last.low),1e-12)
+        body_ratio=body/rng
+        if direction=="CALL": structure=last.close>=last.open and last.close>prev.close
+        else: structure=last.close<=last.open and last.close<prev.close
+        if structure: score+=18; reasons.append("structure alignée")
+        else: score+=3
+        rv=regime_info["rsi"]
+        if (direction=="CALL" and 50<=rv<=70) or (direction=="PUT" and 30<=rv<=50):
+            score+=12; reasons.append("momentum aligné")
+        elif (direction=="CALL" and rv>78) or (direction=="PUT" and rv<22):
+            score-=10; reasons.append("momentum trop étiré")
+        else: score+=4
+        if body_ratio>=.35: score+=8; reasons.append("bougie exploitable")
+        else: score+=2
+        regime=regime_info["regime"]
+        if regime=="SHOCK": score-=30; reasons.append("marché en choc")
+        elif regime=="TREND_UP": score += 12 if direction=="CALL" else -8; reasons.append("tendance haussière")
+        elif regime=="TREND_DOWN": score += 12 if direction=="PUT" else -8; reasons.append("tendance baissière")
+        elif regime=="BREAKOUT_UP": score += 10 if direction=="CALL" else -10; reasons.append("breakout haussier")
+        elif regime=="BREAKOUT_DOWN": score += 10 if direction=="PUT" else -10; reasons.append("breakout baissier")
+        elif regime=="RANGE" and strategy=="DONCHIAN_CCI": score+=7; reasons.append("range compatible")
+        if regime_info["atr_ratio"]>=SHOCK_ATR_RATIO: score-=25
+        elif regime_info["atr_rank"]>85: score-=8; reasons.append("volatilité élevée")
+        else: score+=5
+        return max(0,min(100,round(score,1))),reasons
+    except Exception:
+        return 0,["erreur filtre qualité"]
+
+
+def risk_gate(user_id):
+    n,w,l=stats_user(user_id)
+    if n>=MAX_TRADES_PER_DAY: return False,f"limite quotidienne {MAX_TRADES_PER_DAY} trades"
+    if l>=MAX_DAILY_LOSSES: return False,f"limite de pertes du jour {MAX_DAILY_LOSSES}"
+    streak=consecutive_losses_user(user_id)
+    if streak>=MAX_CONSECUTIVE_LOSSES: return False,f"pause après {streak} pertes consécutives"
+    if user_id in trades_en_cours: return False,"un trade papier est déjà actif"
+    return True,"OK"
+
+
+def stats_user(user_id):
+    con=db(); r=con.execute("SELECT COUNT(*) n,SUM(result='WIN') w,SUM(result='LOSS') l FROM trades WHERE user_id=? AND result IN ('WIN','LOSS') AND manual_override=0",(user_id,)).fetchone(); con.close()
+    return int(r['n'] or 0),int(r['w'] or 0),int(r['l'] or 0)
+
+
+def consecutive_losses_user(user_id):
+    con=db(); rows=con.execute("SELECT result FROM trades WHERE user_id=? AND result IN ('WIN','LOSS') AND manual_override=0 ORDER BY id DESC LIMIT 20",(user_id,)).fetchall(); con.close()
+    n=0
+    for r in rows:
+        if r['result']=='LOSS': n+=1
+        else: break
+    return n
+
+
+def cooldown_ok_v20(user_id):
+    con=db(); row=con.execute("SELECT result,created_at FROM trades WHERE user_id=? AND result IN ('WIN','LOSS') ORDER BY id DESC LIMIT 1",(user_id,)).fetchone(); con.close()
+    if not row:return True,""
+    try: when=dt.datetime.fromisoformat(row['created_at'])
+    except Exception:return True,""
+    elapsed=(dt.datetime.utcnow()-when).total_seconds(); limit=COOLDOWN_AFTER_WIN if row['result']=='WIN' else COOLDOWN_AFTER_LOSS
+    if elapsed<limit:return False,f"cooldown {int(limit-elapsed)}s"
+    return True,"OK"
+
+
+def ai_validate_signal(payload):
+    """Validateur optionnel OpenAI-compatible. Il ne génère jamais le signal."""
+    if not AI_VALIDATOR_ENABLED or not AI_API_KEY:return True,"IA désactivée"
+    try:
+        prompt=("Tu es un validateur de signal binaire. Tu ne dois pas inventer de direction. "
+                "Réponds uniquement PASS ou REJECT. Rejette les contextes incohérents, choc, conflit ou score faible.\n"+json.dumps(payload,ensure_ascii=False))
+        r=requests.post(f"{AI_BASE_URL}/chat/completions",headers={"Authorization":f"Bearer {AI_API_KEY}","Content-Type":"application/json"},json={"model":AI_MODEL,"temperature":0,"max_tokens":10,"messages":[{"role":"user","content":prompt}]},timeout=12)
+        if r.status_code!=200:return True,"IA indisponible — signal non bloqué"
+        txt=r.json()["choices"][0]["message"]["content"].strip().upper()
+        return (txt.startswith("PASS"),f"IA={txt[:20]}")
+    except Exception:
+        return True,"IA indisponible — signal non bloqué"
+
+# ============================================================
 # ANALYSE V19 — BOUGIES FERMÉES + LOG COMPLET
 # ============================================================
 
 def analyser_binaire_v19(symbole, mode="STANDARD"):
+    """V20: conserve les 4 piliers V19 mais ajoute régime, qualité, risque et IA optionnelle."""
     tfs=[600,300,120] if mode=="STANDARD" else [60]
     for tf in tfs:
         raw=obtenir_donnees_deriv(symbole,tf)
@@ -403,11 +540,8 @@ def analyser_binaire_v19(symbole, mode="STANDARD"):
         df=closed_only(candles_df(raw))
         if len(df)<70: continue
         try:
-            taille=(df.high-df.low); corps=(df.close-df.open).abs()
-            avg_taille=taille.iloc[-4:-1].mean(); avg_corps=corps.iloc[-4:-1].mean()
-            if avg_corps>0 and avg_taille>avg_corps*3.5:
-                continue
-            # Le signal est évalué sur la dernière bougie clôturée uniquement.
+            regime=moteur_regime_marche(df)
+            if not regime or regime["regime"]=="SHOCK": continue
             resultats=[]
             for name,fn in STRATEGIES.items():
                 r=fn(df)
@@ -415,25 +549,34 @@ def analyser_binaire_v19(symbole, mode="STANDARD"):
                 best=max(r["score_call"],r["score_put"])
                 if best<SEUIL_SIGNAL_PILIER: continue
                 direction="CALL" if r["score_call"]>=r["score_put"] else "PUT"
-                resultats.append({
-                    "strategy":name,"label":r["label"],"direction":direction,"score":best,
-                    "raisons":r["raisons_call"] if direction=="CALL" else r["raisons_put"],
-                    "details":r["details_txt"]
-                })
+                quality,reasons_q=quality_filter(df,direction,name,regime,best)
+                reasons=(r["raisons_call"] if direction=="CALL" else r["raisons_put"])+reasons_q
+                resultats.append({"strategy":name,"label":r["label"],"direction":direction,"score":best,"quality":quality,"raisons":reasons,"details":r["details_txt"]})
             if not resultats: continue
-            # Baseline V19 = meilleur pilier, mais TOUS les candidats sont journalisés.
-            best=max(resultats,key=lambda x:x["score"])
-            ok_corr, corr_msg=verifier_correlation(symbole,best["direction"])
+            best=max(resultats,key=lambda x:(x["quality"],x["score"]))
+            if best["quality"]<MIN_QUALITY_SCORE: continue
+            ok_corr,corr_msg=verifier_correlation(symbole,best["direction"])
             if not ok_corr: continue
-            score_algo=round(5+(best["score"]/100)*5,1)
+            # Confirmation MTF légère: on vérifie la tendance sur le TF suivant sans exiger consensus.
+            mtf_note="MTF non vérifié"
+            if mode=="STANDARD":
+                higher_tf=900 if tf!=600 else 1800
+                hraw=obtenir_donnees_deriv(symbole,higher_tf,180)
+                hdf=closed_only(candles_df(hraw)) if hraw else pd.DataFrame()
+                if len(hdf)>=60:
+                    hreg=moteur_regime_marche(hdf)
+                    if hreg:
+                        aligned=(best["direction"]=="CALL" and hreg["regime"] in ("TREND_UP","BREAKOUT_UP")) or (best["direction"]=="PUT" and hreg["regime"] in ("TREND_DOWN","BREAKOUT_DOWN"))
+                        if aligned: best["quality"]=min(100,best["quality"]+6); mtf_note=f"MTF aligné {hreg['regime']}"
+                        elif hreg["regime"] in ("TREND_UP","TREND_DOWN"):
+                            best["quality"]=max(0,best["quality"]-8); mtf_note=f"MTF contraire {hreg['regime']}"
+            if best["quality"]<MIN_QUALITY_SCORE: continue
+            ai_ok,ai_note=ai_validate_signal({"asset":symbole,"tf":tf,"direction":best["direction"],"strategy":best["strategy"],"raw_score":best["score"],"quality":best["quality"],"regime":regime["regime"],"rsi":regime["rsi"]})
+            if not ai_ok: continue
             duration=180 if (mode=="STANDARD" and tf==300) else (tf if mode=="STANDARD" else 60)
-            return {
-                "action":best["direction"],"strategy":best["strategy"],"label":best["label"],
-                "score":best["score"],"score_algo":score_algo,"tf":tf,"duration":duration,
-                "details":best["details"],"reasons":best["raisons"],"correlation":corr_msg,
-                "candidates":resultats,"signal_epoch":int(df.epoch.iloc[-1])
-            }
-        except Exception:
+            return {"action":best["direction"],"strategy":best["strategy"],"label":best["label"],"score":best["score"],"quality":best["quality"],"score_algo":round(5+(best["quality"]/100)*5,1),"tf":tf,"duration":duration,"details":best["details"],"reasons":best["raisons"],"correlation":corr_msg,"regime":regime["regime"],"regime_data":regime,"mtf":mtf_note,"ai":ai_note,"candidates":resultats,"signal_epoch":int(df.epoch.iloc[-1])}
+        except Exception as e:
+            print(f"[ANALYSE V20] {symbole}/{tf}: {e}",flush=True)
             continue
     return None
 
@@ -442,6 +585,14 @@ def analyser_binaire_v19(symbole, mode="STANDARD"):
 # ============================================================
 
 def planifier_paper(chat_id,symbole,analysis):
+    ok,why=risk_gate(chat_id)
+    if not ok:
+        bot.send_message(chat_id,f"🛑 Risk Engine: {why}")
+        return
+    ok,why=cooldown_ok_v20(chat_id)
+    if not ok:
+        bot.send_message(chat_id,f"⏳ {why}")
+        return
     now=dt.datetime.utcnow(); wait=60-now.second
     if wait<10: wait+=60
     entry_at=now+dt.timedelta(seconds=wait)
@@ -492,172 +643,43 @@ def terminer_paper(chat_id):
     bot.send_message(chat_id,f"{emoji} **PAPER {result}**\nEntrée : `{entry}`\nSortie : `{px}`\nStratégie : `{trade['analysis']['strategy']}`",parse_mode="Markdown")
 
 # ============================================================
-# BACKTEST LAB V19.1 — SIMULATION HISTORIQUE MASSIVE
+# BACKTEST — CHAQUE PILIER INDÉPENDAMMENT
 # ============================================================
 
-LAB_CANDLES = int(os.environ.get("LAB_CANDLES", "5000"))
-LAB_MIN_TRADES = int(os.environ.get("LAB_MIN_TRADES", "30"))
-LAB_TF_LIST = (60, 120, 300, 600)
-LAB_EXPIRY_SECONDS = {60: 60, 120: 120, 300: 180, 600: 600}
-
-
-def lab_duration_bars(tf):
-    """Approximation propre de l'expiration en bougies du timeframe testé."""
-    sec = LAB_EXPIRY_SECONDS.get(tf, tf)
-    # Pour 300s/180s, une sortie exacte nécessite des données 60s.
-    # Ici on conserve une simulation conservatrice d'au moins 1 bougie.
-    return max(1, round(sec / tf))
-
-
-def backtest_strategy(df, strategy_name, duration_bars=1):
-    """Backtest sans look-ahead : le signal ne voit que les bougies déjà closes."""
-    fn = STRATEGIES[strategy_name]
-    rows = []
-    min_history = 70
-    last_i = len(df) - duration_bars
-    for i in range(min_history, last_i):
-        sample = df.iloc[:i].copy()
-        try:
-            r = fn(sample)
-        except Exception:
-            r = None
-        if not r:
-            continue
-        score_call = float(r.get("score_call", 0))
-        score_put = float(r.get("score_put", 0))
-        score = max(score_call, score_put)
-        if score < SEUIL_SIGNAL_PILIER:
-            continue
-        direction = "CALL" if score_call >= score_put else "PUT"
-        entry = float(df.close.iloc[i-1])
-        exit_px = float(df.close.iloc[i-1+duration_bars])
-        win = (direction == "CALL" and exit_px > entry) or (direction == "PUT" and exit_px < entry)
-        result = "WIN" if win else "LOSS"
-        rows.append({
-            "epoch": int(df.epoch.iloc[i-1]),
-            "direction": direction,
-            "score": score,
-            "score_bucket": int(min(100, max(0, score)) // 5 * 5),
-            "entry": entry,
-            "exit": exit_px,
-            "result": result,
-        })
+def backtest_strategy(df,strategy_name,duration_bars):
+    fn=STRATEGIES[strategy_name]
+    rows=[]
+    # i est le dernier point connu. Le signal utilise i-1 (bougie clôturée),
+    # puis le prix de sortie est pris dans les bougies futures.
+    for i in range(70,len(df)-duration_bars-1):
+        sample=df.iloc[:i].copy()
+        try:r=fn(sample)
+        except Exception:r=None
+        if not r:continue
+        score=max(r["score_call"],r["score_put"])
+        if score<SEUIL_SIGNAL_PILIER:continue
+        direction="CALL" if r["score_call"]>=r["score_put"] else "PUT"
+        entry=float(df.close.iloc[i-1])
+        exit_px=float(df.close.iloc[i-1+duration_bars])
+        win=(direction=="CALL" and exit_px>entry) or (direction=="PUT" and exit_px<entry)
+        rows.append({"epoch":int(df.epoch.iloc[i-1]),"direction":direction,"score":score,"entry":entry,"exit":exit_px,"result":"WIN" if win else "LOSS"})
     return rows
 
 
-def summarize_rows(rows):
-    n = len(rows)
-    wins = sum(x["result"] == "WIN" for x in rows)
-    losses = n - wins
-    calls = [x for x in rows if x["direction"] == "CALL"]
-    puts = [x for x in rows if x["direction"] == "PUT"]
-    def wr(a):
-        return (sum(x["result"] == "WIN" for x in a) / len(a) * 100) if a else 0.0
-    # Séries de pertes/gains pour repérer les phases instables.
-    max_loss_streak = max_win_streak = cur_loss = cur_win = 0
-    for x in rows:
-        if x["result"] == "LOSS":
-            cur_loss += 1; cur_win = 0
-            max_loss_streak = max(max_loss_streak, cur_loss)
-        else:
-            cur_win += 1; cur_loss = 0
-            max_win_streak = max(max_win_streak, cur_win)
-    return {
-        "trades": n, "wins": wins, "losses": losses,
-        "winrate": wr(rows), "call_trades": len(calls), "call_wr": wr(calls),
-        "put_trades": len(puts), "put_wr": wr(puts),
-        "max_loss_streak": max_loss_streak, "max_win_streak": max_win_streak,
-        "rows": rows,
-    }
-
-
-def print_lab_report(asset, tf, name, summary, split_name="ALL"):
-    print("\n" + "="*78)
-    print(f"V19.1 LAB | {asset} | TF={tf}s | {name} | {split_name}")
-    print("-"*78)
-    print(f"Trades={summary['trades']} | WIN={summary['wins']} | LOSS={summary['losses']} | Winrate={summary['winrate']:.2f}%")
-    print(f"CALL={summary['call_trades']} ({summary['call_wr']:.2f}%) | PUT={summary['put_trades']} ({summary['put_wr']:.2f}%)")
-    print(f"Max loss streak={summary['max_loss_streak']} | Max win streak={summary['max_win_streak']}")
-    print("="*78)
-
-
-def run_backtest(asset, tf, only_strategy=None, count=LAB_CANDLES):
-    raw = obtenir_donnees_deriv(asset, tf, count=count)
-    if not raw:
-        return None
-    df = closed_only(candles_df(raw))
-    duration_bars = lab_duration_bars(tf)
-    names = [only_strategy] if only_strategy else list(STRATEGIES)
-    output = {}
+def run_backtest(asset,tf,only_strategy=None):
+    raw=obtenir_donnees_deriv(asset,tf,count=250)
+    if not raw:return None
+    df=closed_only(candles_df(raw))
+    # 1 barre d'expiration pour 60s, 3 pour 180s, etc.
+    duration_bars=max(1,round(180/tf)) if tf>=60 else 1
+    names=[only_strategy] if only_strategy else list(STRATEGIES)
+    output={}
     for name in names:
-        if name not in STRATEGIES:
-            continue
-        rows = backtest_strategy(df, name, duration_bars)
-        output[name] = summarize_rows(rows)
+        if name not in STRATEGIES:continue
+        rows=backtest_strategy(df,name,duration_bars)
+        n=len(rows);w=sum(x["result"]=="WIN" for x in rows)
+        output[name]={"trades":n,"wins":w,"losses":n-w,"winrate":w/n*100 if n else 0.0}
     return output
-
-
-def run_mass_lab(assets, tfs=LAB_TF_LIST, count=LAB_CANDLES):
-    """Lance toutes les simulations et écrit un rapport exploitable dans Render."""
-    print("\n" + "#"*90)
-    print("V19.1 MASSIVE BACKTEST LAB — START")
-    print(f"Assets={len(assets)} | Timeframes={list(tfs)} | Candles/request={count}")
-    print("Martingale=OFF | Manual WIN=OFF | Look-ahead=OFF")
-    print("#"*90)
-    global_report = []
-    for asset in assets:
-        for tf in tfs:
-            try:
-                res = run_backtest(asset, tf, None, count=count)
-            except Exception as e:
-                print(f"[LAB ERROR] {asset} TF={tf}: {type(e).__name__}: {e}")
-                continue
-            if not res:
-                print(f"[LAB DATA] {asset} TF={tf}: données indisponibles")
-                continue
-            for name, summary in res.items():
-                print_lab_report(asset, tf, name, summary)
-                global_report.append((asset, tf, name, summary))
-                # Découpage chronologique 70/30 pour vérifier la stabilité temporelle.
-                rows = summary["rows"]
-                cut = int(len(rows) * 0.70)
-                if len(rows) >= LAB_MIN_TRADES and cut > 0 and len(rows)-cut > 0:
-                    train = summarize_rows(rows[:cut])
-                    test = summarize_rows(rows[cut:])
-                    print_lab_report(asset, tf, name, train, "TRAIN 70%")
-                    print_lab_report(asset, tf, name, test, "OOS 30%")
-    print("\n" + "#"*90)
-    print("V19.1 MASSIVE BACKTEST LAB — FINAL SUMMARY")
-    print("#"*90)
-    for asset, tf, name, s in global_report:
-        flag = "OK_SAMPLE" if s["trades"] >= LAB_MIN_TRADES else "SMALL_SAMPLE"
-        print(f"{asset:8} TF={tf:3}s {name:14} trades={s['trades']:4} winrate={s['winrate']:6.2f}% {flag} maxLS={s['max_loss_streak']:2}")
-    print("#"*90 + "\n")
-    return global_report
-
-
-@bot.message_handler(commands=["lab"])
-def cmd_lab(message):
-    if not est_autorise(message.chat.id):
-        return
-    p = message.text.split()
-    asset_arg = p[1].upper() if len(p) > 1 else "EURUSD"
-    if asset_arg == "ALL":
-        assets = ALL_PAIRS
-    elif asset_arg in ALL_PAIRS:
-        assets = [asset_arg]
-    else:
-        return bot.send_message(message.chat.id, "Usage : /lab EURUSD ou /lab ALL")
-    bot.send_message(message.chat.id,
-                     f"🧪 V19.1 LAB lancé.\nAssets : {len(assets)}\nTF : 60/120/300/600s\nBougies : {LAB_CANDLES}\n\nLes résultats détaillés vont apparaître dans les logs Render.")
-    def worker():
-        try:
-            report = run_mass_lab(assets)
-            bot.send_message(message.chat.id, f"✅ V19.1 LAB terminé. {len(report)} simulations stratégie/TF ont été enregistrées dans les logs Render.")
-        except Exception as e:
-            print(f"[LAB FATAL] {type(e).__name__}: {e}")
-            bot.send_message(message.chat.id, f"❌ LAB interrompu : {type(e).__name__}: {e}")
-    threading.Thread(target=worker, daemon=True).start()
 
 # ============================================================
 # RAPPORTS
@@ -679,19 +701,15 @@ def cmd_stats(message):
 def cmd_backtest(message):
     if not est_autorise(message.chat.id):return
     p=message.text.split(); asset=p[1].upper() if len(p)>1 else "EURUSD"; tf=int(p[2]) if len(p)>2 else 300; strat=p[3].upper() if len(p)>3 else None
-    if asset not in ALL_PAIRS or tf not in LAB_TF_LIST:
+    if asset not in ALL_PAIRS or tf not in (60,120,300,600):
         return bot.send_message(message.chat.id,"Usage : /backtest EURUSD 300 [AROON_RSI]")
-    bot.send_message(message.chat.id,"🧪 Backtest V19.1 en cours...")
-    res=run_backtest(asset,tf,strat,count=LAB_CANDLES)
+    bot.send_message(message.chat.id,"🧪 Backtest en cours...")
+    res=run_backtest(asset,tf,strat)
     if res is None:return bot.send_message(message.chat.id,"❌ Données Deriv indisponibles.")
-    txt=f"🧪 **BACKTEST V19.1 — {asset} / {tf}s**\n──────────────\n"
+    txt=f"🧪 **BACKTEST V19 — {asset} / {tf}s**\n──────────────\n"
     for name,s in res.items():
-        txt+=f"**{name}**\nTrades: {s['trades']} · WIN: {s['wins']} · LOSS: {s['losses']} · Winrate: {s['winrate']:.2f}% · Max LS: {s['max_loss_streak']}\n"
-        if s['trades'] >= LAB_MIN_TRADES:
-            rows=s['rows']; cut=int(len(rows)*0.70); test=summarize_rows(rows[cut:]) if len(rows)-cut else None
-            if test: txt+=f"OOS 30%: {test['trades']} trades · {test['winrate']:.2f}%\n"
-        txt+="\n"
-    txt+="⚠️ Historique simulé, pas une garantie future. Le payout broker n'est pas inclus."
+        txt+=f"**{name}**\nTrades: {s['trades']} · WIN: {s['wins']} · LOSS: {s['losses']} · Winrate: {s['winrate']:.2f}%\n\n"
+    txt+="⚠️ Résultat historique sur l'échantillon téléchargé, pas une garantie future."
     bot.send_message(message.chat.id,txt,parse_mode="Markdown")
 
 # ============================================================
@@ -712,10 +730,10 @@ def start(message):
     if not est_autorise(message.chat.id):return bot.send_message(message.chat.id,"🔒 Accès restreint.")
     utilisateurs_actifs.add(message.chat.id); mode_trading.setdefault(message.chat.id,"STANDARD"); filtre_vip_actif.setdefault(message.chat.id,False)
     bot.send_message(message.chat.id,
-        "🧪 **TERMINAL PRIME V19 — LABORATOIRE**\n\n"
-        "4 piliers conservés : Aroon+RSI, ADX+STC, CCI+MACD, Donchian+CCI.\n\n"
+        "🧠 **TERMINAL PRIME V20 — BINARY ENGINE**\n\n"
+        "4 piliers conservés + Market Regime + Quality + MTF + Risk Engine.\n\n"
         "✅ Bougies clôturées uniquement\n✅ Journal SQLite persistant\n✅ Backtest individuel\n✅ Paper trading\n🚫 Martingale désactivée\n🚫 WIN manuel désactivé\n🚫 Fausse confiance en %\n\n"
-        "Commandes : `/stats`, `/backtest EURUSD 300 AROON_RSI`, `/lab EURUSD` ou `/lab ALL`",
+        "Commandes : `/stats`, `/risk` et `/backtest EURUSD 300 AROON_RSI`",
         reply_markup=clavier(message.chat.id),parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m:m.text=="📊 CHOISIR UNE DEVISE")
@@ -753,13 +771,27 @@ def stats_btn(message):
 
 @bot.message_handler(func=lambda m:m.text=="🧪 BACKTEST")
 def backtest_btn(message):
-    if est_autorise(message.chat.id):bot.send_message(message.chat.id,"Exemple : `/lab EURUSD`, `/lab ALL` ou `/backtest EURUSD 300 ADX_STC`",parse_mode="Markdown")
+    if est_autorise(message.chat.id):bot.send_message(message.chat.id,"Exemple : `/backtest EURUSD 300` ou `/backtest EURUSD 300 ADX_STC`",parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m:m.text.startswith("💎 SIGNAUX VIP"))
 def toggle_vip(message):
     if not est_autorise(message.chat.id):return
     uid=message.chat.id;filtre_vip_actif[uid]=not filtre_vip_actif.get(uid,False)
     bot.send_message(uid,"💎 VIP ON — score ≥ 9/10" if filtre_vip_actif[uid] else "🔓 VIP OFF — seuil standard",reply_markup=clavier(uid))
+
+# ============================================================
+# V20 — STATUS RISQUE
+# ============================================================
+
+@bot.message_handler(commands=["risk"])
+def cmd_risk(message):
+    if not est_autorise(message.chat.id): return
+    n,w,l=stats_user(message.chat.id); streak=consecutive_losses_user(message.chat.id)
+    bot.send_message(message.chat.id,
+        f"🛡️ <b>RISK ENGINE V20</b>\n\nTrades jour: <b>{n}/{MAX_TRADES_PER_DAY}</b>\n"
+        f"Wins: <b>{w}</b> | Loss: <b>{l}</b>\nSérie pertes: <b>{streak}/{MAX_CONSECUTIVE_LOSSES}</b>\n"
+        f"Limite pertes jour: <b>{MAX_DAILY_LOSSES}</b>\nCooldown loss: <b>{COOLDOWN_AFTER_LOSS}s</b>\n"
+        f"Qualité minimale: <b>{MIN_QUALITY_SCORE}/100</b>\nIA: <b>{'ON' if AI_VALIDATOR_ENABLED and AI_API_KEY else 'OFF'}</b>")
 
 # ============================================================
 # SCANNER AUTO — PAPER UNIQUEMENT
@@ -774,6 +806,10 @@ def scanner_auto():
                 asset=user_prefs.get(uid)
                 if not asset:continue
                 mode=mode_trading.get(uid,"STANDARD")
+                ok,_=risk_gate(uid)
+                if not ok: continue
+                ok,_=cooldown_ok_v20(uid)
+                if not ok: continue
                 a=analyser_binaire_v19(asset,mode)
                 if not a:continue
                 if filtre_vip_actif.get(uid,False) and a["score_algo"]<SEUIL_VIP_SCORE_ALGO:continue
