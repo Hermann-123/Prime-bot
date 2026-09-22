@@ -5,6 +5,7 @@ import sqlite3
 import datetime as dt
 import threading
 from pathlib import Path
+
 import websocket
 import pandas as pd
 import ta
@@ -472,7 +473,7 @@ def planifier_paper(chat_id,symbole,analysis):
         details=json.dumps(analysis,ensure_ascii=False)
     )
     trades_en_cours[chat_id]={"trade_id":trade_id,"symbole":symbole,"analysis":analysis,"entry_at":entry_at,"duration":analysis["duration"]}
-    msg=(f"🧪 **PAPER SIGNAL V19**\n──────────────\n"
+    msg=(f"🧪 **PAPER SIGNAL V20**\n──────────────\n"
          f"🌐 {symbole}\n👉 **{analysis['action']}**\n"
          f"🧩 {analysis['label']}\n📊 Score technique : {analysis['score']:.1f}/100\n"
          f"📐 Timeframe : {analysis['tf']}s\n⏱ Entrée test : `{entry_at.strftime('%H:%M:%S')} UTC`\n"
@@ -510,33 +511,210 @@ def terminer_paper(chat_id):
     bot.send_message(chat_id,f"{emoji} **PAPER {result}**\nEntrée : `{entry}`\nSortie : `{px}`\nStratégie : `{trade['analysis']['strategy']}`",parse_mode="Markdown")
 
 # ============================================================
-# BACKTEST LAB V19.2 — SIMULATION HISTORIQUE MASSIVE
+# V20 DATA ENGINE + MASSIVE BACKTEST
 # ============================================================
-
 LAB_CANDLES = int(os.environ.get("LAB_CANDLES", "5000"))
 LAB_MIN_TRADES = int(os.environ.get("LAB_MIN_TRADES", "30"))
 LAB_TF_LIST = (60, 120, 300, 600)
 LAB_EXPIRY_SECONDS = {60: 60, 120: 120, 300: 180, 600: 600}
+DERIV_WS_URL = f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
 
 
-def lab_duration_bars(tf):
-    """Approximation propre de l'expiration en bougies du timeframe testé."""
-    sec = LAB_EXPIRY_SECONDS.get(tf, tf)
-    # Pour 300s/180s, une sortie exacte nécessite des données 60s.
-    # Ici on conserve une simulation conservatrice d'au moins 1 bougie.
-    return max(1, round(sec / tf))
+def _deriv_lab_request(ws, payload, req_id, timeout=20):
+    """Envoie une requête et attend précisément son req_id."""
+    data = dict(payload)
+    data["req_id"] = req_id
+    ws.send(json.dumps(data))
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        raw = ws.recv()
+        if not raw:
+            continue
+        res = json.loads(raw)
+        if res.get("req_id") == req_id:
+            return res
+    raise TimeoutError(f"Timeout req_id={req_id}")
 
 
-def backtest_strategy(df, strategy_name, duration_bars=1):
-    """Backtest sans look-ahead : le signal ne voit que les bougies déjà closes."""
-    fn = STRATEGIES[strategy_name]
-    rows = []
-    min_history = 70
-    last_i = len(df) - duration_bars
-    for i in range(min_history, last_i):
-        sample = df.iloc[:i].copy()
+def deriv_active_symbol_map():
+    """Récupère les symboles actuellement disponibles au lieu de supposer les anciens codes."""
+    ws = None
+    try:
+        ws = websocket.create_connection(DERIV_WS_URL, timeout=20)
+        res = _deriv_lab_request(ws, {
+            "active_symbols": "brief",
+            "product_type": "basic",
+        }, 900001)
+        if "error" in res:
+            print(f"[DERIV ACTIVE ERROR] {res['error']}")
+            return {}
+        items = res.get("active_symbols") or []
+        mapping = {}
+        for item in items:
+            sym = str(item.get("symbol", ""))
+            display = str(item.get("display_name", ""))
+            if sym:
+                mapping[sym] = {"symbol": sym, "display_name": display}
+                # Clé normalisée : frxEURUSD -> EURUSD, cryBTCUSD -> BTCUSD, etc.
+                normalized = sym
+                for prefix in ("frx", "cry", "R_", "1HZ", "stp"):
+                    if normalized.startswith(prefix):
+                        normalized = normalized[len(prefix):]
+                mapping.setdefault(normalized.upper(), {"symbol": sym, "display_name": display})
+        print(f"[DERIV ACTIVE OK] {len(items)} symboles actifs reçus")
+        return mapping
+    except Exception as e:
+        print(f"[DERIV ACTIVE CONNECTION ERROR] {type(e).__name__}: {e}")
+        return {}
+    finally:
         try:
-            r = fn(sample)
+            if ws:
+                ws.close()
+        except Exception:
+            pass
+
+
+def resolve_lab_symbol(asset, active_map):
+    """Résout EURUSD -> frxEURUSD, BTCUSD -> cryBTCUSD, etc."""
+    if asset in active_map and "symbol" in active_map[asset]:
+        return active_map[asset]["symbol"]
+    candidates = []
+    target = asset.upper()
+    for key, info in active_map.items():
+        sym = str(info.get("symbol", ""))
+        if sym.upper().endswith(target):
+            candidates.append(sym)
+    # Préférer les préfixes classiques des marchés concernés.
+    for pref in ("frx", "cry"):
+        for sym in candidates:
+            if sym.lower().startswith(pref.lower()):
+                return sym
+    return candidates[0] if candidates else None
+
+
+def fetch_lab_60s(asset, count=LAB_CANDLES, active_map=None):
+    """Télécharge une seule série 60s par actif, réutilisable pour tous les TF."""
+    active_map = active_map or deriv_active_symbol_map()
+    symbol = resolve_lab_symbol(asset, active_map)
+    if not symbol:
+        print(f"[DERIV SYMBOL ERROR] {asset}: symbole actif introuvable")
+        return None
+
+    ws = None
+    try:
+        ws = websocket.create_connection(DERIV_WS_URL, timeout=30)
+        # Premier petit test : permet d'obtenir une erreur exploitable avant une grosse réponse.
+        probe = _deriv_lab_request(ws, {
+            "ticks_history": symbol,
+            "end": "latest",
+            "count": 20,
+            "style": "candles",
+            "granularity": 60,
+            "subscribe": 0,
+        }, 910001)
+        if "error" in probe:
+            print(f"[DERIV PROBE ERROR] {asset} ({symbol}): {probe['error']}")
+            return None
+        probe_candles = probe.get("candles") or []
+        print(f"[DERIV PROBE OK] {asset} -> {symbol}: {len(probe_candles)} bougies 60s")
+
+        res = _deriv_lab_request(ws, {
+            "ticks_history": symbol,
+            "end": "latest",
+            "count": int(count),
+            "style": "candles",
+            "granularity": 60,
+            "subscribe": 0,
+        }, 910002, timeout=45)
+        if "error" in res:
+            print(f"[DERIV DATA ERROR] {asset} ({symbol}) : {res['error']}")
+            return None
+        candles = res.get("candles") or []
+        if len(candles) < 100:
+            print(f"[DERIV DATA ERROR] {asset} ({symbol}) : seulement {len(candles)} bougies reçues")
+            return None
+        print(f"[DERIV DATA OK] {asset} -> {symbol}: {len(candles)} bougies 60s reçues")
+        return candles
+    except Exception as e:
+        print(f"[DERIV CONNECTION ERROR] {asset} ({symbol}) : {type(e).__name__}: {e}")
+        return None
+    finally:
+        try:
+            if ws:
+                ws.close()
+        except Exception:
+            pass
+
+
+def lab_df(candles):
+    rows = []
+    for c in candles or []:
+        try:
+            rows.append({
+                "epoch": int(c["epoch"]),
+                "open": float(c["open"]),
+                "high": float(c["high"]),
+                "low": float(c["low"]),
+                "close": float(c["close"]),
+            })
+        except (KeyError, TypeError, ValueError):
+            continue
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    return df.sort_values("epoch").drop_duplicates("epoch").reset_index(drop=True)
+
+
+def aggregate_tf_from_60s(base60, tf):
+    """Construit des bougies TF à partir des bougies 60s, sans données futures."""
+    if tf == 60:
+        return base60.copy()
+    if tf % 60 != 0:
+        return pd.DataFrame()
+    n = tf // 60
+    d = base60.copy()
+    # On ne garde que des groupes complets et alignés sur l'époque Unix.
+    d["bucket"] = (d["epoch"] // tf) * tf
+    grouped = d.groupby("bucket", sort=True)
+    rows = []
+    for bucket, g in grouped:
+        if len(g) != n:
+            continue
+        g = g.sort_values("epoch")
+        rows.append({
+            "epoch": int(bucket + tf),
+            "open": float(g.open.iloc[0]),
+            "high": float(g.high.max()),
+            "low": float(g.low.min()),
+            "close": float(g.close.iloc[-1]),
+        })
+    return pd.DataFrame(rows).reset_index(drop=True)
+
+
+def backtest_strategy_v20(base60, strategy_name, tf):
+    """Backtest à partir de 60s : entrée à la clôture du TF, sortie après l'expiration exacte."""
+    tf_df = aggregate_tf_from_60s(base60, tf)
+    if len(tf_df) < 100:
+        return []
+    fn = STRATEGIES[strategy_name]
+    expiry = LAB_EXPIRY_SECONDS[tf]
+    min_history = 70
+    rows = []
+
+    # Mapping epoch -> close 60s pour l'exit exact.
+    closes60 = dict(zip(base60.epoch.astype(int), base60.close.astype(float)))
+    epochs60 = sorted(closes60)
+
+    def close_at_or_after(epoch):
+        for e in epochs60:
+            if e >= epoch:
+                return closes60[e], e
+        return None, None
+
+    for i in range(min_history, len(tf_df)):
+        signal_df = tf_df.iloc[:i].copy()  # uniquement les TF déjà clôturés
+        try:
+            r = fn(signal_df)
         except Exception:
             r = None
         if not r:
@@ -547,18 +725,21 @@ def backtest_strategy(df, strategy_name, duration_bars=1):
         if score < SEUIL_SIGNAL_PILIER:
             continue
         direction = "CALL" if score_call >= score_put else "PUT"
-        entry = float(df.close.iloc[i-1])
-        exit_px = float(df.close.iloc[i-1+duration_bars])
-        win = (direction == "CALL" and exit_px > entry) or (direction == "PUT" and exit_px < entry)
-        result = "WIN" if win else "LOSS"
+        entry_epoch = int(tf_df.epoch.iloc[i-1])
+        entry = float(tf_df.close.iloc[i-1])
+        exit_price, exit_epoch = close_at_or_after(entry_epoch + expiry)
+        if exit_price is None:
+            continue
+        win = (direction == "CALL" and exit_price > entry) or (direction == "PUT" and exit_price < entry)
         rows.append({
-            "epoch": int(df.epoch.iloc[i-1]),
+            "epoch": entry_epoch,
             "direction": direction,
             "score": score,
             "score_bucket": int(min(100, max(0, score)) // 5 * 5),
             "entry": entry,
-            "exit": exit_px,
-            "result": result,
+            "exit": float(exit_price),
+            "exit_epoch": int(exit_epoch),
+            "result": "WIN" if win else "LOSS",
         })
     return rows
 
@@ -571,7 +752,6 @@ def summarize_rows(rows):
     puts = [x for x in rows if x["direction"] == "PUT"]
     def wr(a):
         return (sum(x["result"] == "WIN" for x in a) / len(a) * 100) if a else 0.0
-    # Séries de pertes/gains pour repérer les phases instables.
     max_loss_streak = max_win_streak = cur_loss = cur_win = 0
     for x in rows:
         if x["result"] == "LOSS":
@@ -590,14 +770,13 @@ def summarize_rows(rows):
         "winrate": wr(rows), "call_trades": len(calls), "call_wr": wr(calls),
         "put_trades": len(puts), "put_wr": wr(puts),
         "max_loss_streak": max_loss_streak, "max_win_streak": max_win_streak,
-        "score_buckets": score_buckets,
-        "rows": rows,
+        "score_buckets": score_buckets, "rows": rows,
     }
 
 
 def print_lab_report(asset, tf, name, summary, split_name="ALL"):
     print("\n" + "="*78)
-    print(f"V19.2 LAB | {asset} | TF={tf}s | {name} | {split_name}")
+    print(f"V20 LAB | {asset} | TF={tf}s | {name} | {split_name}")
     print("-"*78)
     print(f"Trades={summary['trades']} | WIN={summary['wins']} | LOSS={summary['losses']} | Winrate={summary['winrate']:.2f}%")
     print(f"CALL={summary['call_trades']} ({summary['call_wr']:.2f}%) | PUT={summary['put_trades']} ({summary['put_wr']:.2f}%)")
@@ -605,92 +784,49 @@ def print_lab_report(asset, tf, name, summary, split_name="ALL"):
     print("="*78)
 
 
-def run_backtest(asset, tf, only_strategy=None, count=LAB_CANDLES):
-    raw = obtenir_donnees_deriv(asset, tf, count=count)
-    if not raw:
-        return None
-    df = closed_only(candles_df(raw))
-    duration_bars = lab_duration_bars(tf)
-    names = [only_strategy] if only_strategy else list(STRATEGIES)
-    output = {}
-    for name in names:
-        if name not in STRATEGIES:
-            continue
-        rows = backtest_strategy(df, name, duration_bars)
-        output[name] = summarize_rows(rows)
-    return output
-
-
-def _telegram_chunks(text, limit=3900):
-    chunks=[]
-    current=""
-    for line in text.splitlines(True):
-        if len(current)+len(line) > limit and current:
-            chunks.append(current.rstrip())
-            current=""
-        current += line
-    if current.strip(): chunks.append(current.rstrip())
-    return chunks
-
-def send_lab_report(chat_id, text):
-    for chunk in _telegram_chunks(text):
-        bot.send_message(chat_id, chunk)
-
-def format_lab_telegram(global_report):
-    lines=["🧪 V19.3 — RAPPORT DÉTAILLÉ", "", f"Simulations stratégie/TF : {len(global_report)}", ""]
-    for asset, tf, name, s in global_report:
-        lines += [
-            f"📌 {asset} | TF {tf}s | {name}",
-            f"Trades: {s['trades']} | WIN: {s['wins']} | LOSS: {s['losses']}",
-            f"Winrate: {s['winrate']:.2f}%",
-            f"CALL: {s['call_trades']} ({s['call_wr']:.2f}%) | PUT: {s['put_trades']} ({s['put_wr']:.2f}%)",
-            f"Max pertes consécutives: {s['max_loss_streak']} | Max gains: {s['max_win_streak']}",
-        ]
-        rows=s.get('rows',[])
-        cut=int(len(rows)*0.70)
-        if len(rows)>=LAB_MIN_TRADES and len(rows)-cut:
-            test=summarize_rows(rows[cut:])
-            lines.append(f"OOS 30%: {test['trades']} trades | {test['winrate']:.2f}%")
-        if s.get('score_buckets'):
-            bucket_txt=[]
-            for b,v in s['score_buckets'].items():
-                bucket_txt.append(f"{b}-{min(100,b+4)}: {v['trades']} / {v['winrate']:.1f}%")
-            lines.append("Scores: " + " · ".join(bucket_txt))
-        lines.append("")
-    lines += ["⚠️ Simulation historique directionnelle. Payout, spread, slippage et exécution réelle non inclus.", "⚠️ Aucun ordre réel / Martingale."]
-    return "\n".join(lines)
-
-def run_mass_lab(assets, tfs=LAB_TF_LIST, count=LAB_CANDLES):
-    """Lance toutes les simulations et écrit un rapport exploitable dans Render."""
+def run_mass_lab_v20(assets, count=LAB_CANDLES):
+    """Un seul téléchargement 60s par actif, puis tous les TF/stratégies localement."""
     print("\n" + "#"*90)
-    print("V19.2 MASSIVE BACKTEST LAB — START")
-    print(f"Assets={len(assets)} | Timeframes={list(tfs)} | Candles/request={count}")
+    print("V20 MASSIVE BACKTEST LAB — START")
+    print(f"Assets={len(assets)} | TF={list(LAB_TF_LIST)} | Base candles={count} | Base granularity=60s")
+    print("Expiry exacts: 60s, 120s, 180s, 600s")
     print("Martingale=OFF | Manual WIN=OFF | Look-ahead=OFF")
     print("#"*90)
+
+    active_map = deriv_active_symbol_map()
+    if not active_map:
+        print("[LAB FATAL DATA] Impossible de récupérer active_symbols.")
+        return []
+
     global_report = []
     for asset in assets:
-        for tf in tfs:
-            try:
-                res = run_backtest(asset, tf, None, count=count)
-            except Exception as e:
-                print(f"[LAB ERROR] {asset} TF={tf}: {type(e).__name__}: {e}")
+        try:
+            base = fetch_lab_60s(asset, count=count, active_map=active_map)
+            if base is None:
+                print(f"[LAB DATA] {asset}: données indisponibles")
                 continue
-            if not res:
-                print(f"[LAB DATA] {asset} TF={tf}: données indisponibles")
+            base_df = lab_df(base)
+            if len(base_df) < 100:
+                print(f"[LAB DATA] {asset}: historique insuffisant ({len(base_df)} bougies)")
                 continue
-            for name, summary in res.items():
-                print_lab_report(asset, tf, name, summary)
-                global_report.append((asset, tf, name, summary))
-                # Découpage chronologique 70/30 pour vérifier la stabilité temporelle.
-                rows = summary["rows"]
-                cut = int(len(rows) * 0.70)
-                if len(rows) >= LAB_MIN_TRADES and cut > 0 and len(rows)-cut > 0:
-                    train = summarize_rows(rows[:cut])
-                    test = summarize_rows(rows[cut:])
-                    print_lab_report(asset, tf, name, train, "TRAIN 70%")
-                    print_lab_report(asset, tf, name, test, "OOS 30%")
+            for tf in LAB_TF_LIST:
+                for name in STRATEGIES:
+                    try:
+                        rows = backtest_strategy_v20(base_df, name, tf)
+                        summary = summarize_rows(rows)
+                        print_lab_report(asset, tf, name, summary)
+                        global_report.append((asset, tf, name, summary))
+                        cut = int(len(rows) * 0.70)
+                        if len(rows) >= LAB_MIN_TRADES and cut > 0 and len(rows)-cut > 0:
+                            print_lab_report(asset, tf, name, summarize_rows(rows[:cut]), "TRAIN 70%")
+                            print_lab_report(asset, tf, name, summarize_rows(rows[cut:]), "OOS 30%")
+                    except Exception as e:
+                        print(f"[LAB STRATEGY ERROR] {asset} TF={tf} {name}: {type(e).__name__}: {e}")
+        except Exception as e:
+            print(f"[LAB ASSET ERROR] {asset}: {type(e).__name__}: {e}")
+
     print("\n" + "#"*90)
-    print("V19.3 MASSIVE BACKTEST LAB — FINAL SUMMARY")
+    print("V20 MASSIVE BACKTEST LAB — FINAL SUMMARY")
     print("#"*90)
     for asset, tf, name, s in global_report:
         flag = "OK_SAMPLE" if s["trades"] >= LAB_MIN_TRADES else "SMALL_SAMPLE"
@@ -699,8 +835,49 @@ def run_mass_lab(assets, tfs=LAB_TF_LIST, count=LAB_CANDLES):
     return global_report
 
 
+def _telegram_chunks(text, limit=3900):
+    chunks=[]; current=""
+    for line in text.splitlines(True):
+        if len(current)+len(line) > limit and current:
+            chunks.append(current.rstrip()); current=""
+        current += line
+    if current.strip(): chunks.append(current.rstrip())
+    return chunks
+
+
+def send_lab_report(chat_id, text):
+    for chunk in _telegram_chunks(text):
+        bot.send_message(chat_id, chunk)
+
+
+def format_lab_telegram(global_report):
+    lines=["🧪 V20 — RAPPORT DÉTAILLÉ", "", f"Simulations stratégie/TF : {len(global_report)}", ""]
+    for asset, tf, name, s in global_report:
+        lines += [
+            f"📌 {asset} | TF {tf}s | {name}",
+            f"Trades: {s['trades']} | WIN: {s['wins']} | LOSS: {s['losses']}",
+            f"Winrate: {s['winrate']:.2f}%",
+            f"CALL: {s['call_trades']} ({s['call_wr']:.2f}%) | PUT: {s['put_trades']} ({s['put_wr']:.2f}%)",
+            f"Max pertes: {s['max_loss_streak']} | Max gains: {s['max_win_streak']}",
+        ]
+        rows=s.get('rows',[]); cut=int(len(rows)*0.70)
+        if len(rows)>=LAB_MIN_TRADES and len(rows)-cut:
+            test=summarize_rows(rows[cut:])
+            lines.append(f"OOS 30%: {test['trades']} trades | {test['winrate']:.2f}%")
+        if s.get('score_buckets'):
+            bucket_txt=[f"{b}-{min(100,b+4)}: {v['trades']}/{v['winrate']:.1f}%" for b,v in s['score_buckets'].items()]
+            lines.append("Scores: " + " · ".join(bucket_txt))
+        lines.append("")
+    lines += [
+        "⚠️ Simulation historique directionnelle.",
+        "Payout, spread, slippage et exécution réelle non inclus.",
+        "⚠️ Aucun ordre réel / Martingale.",
+    ]
+    return "\n".join(lines)
+
+
 @bot.message_handler(commands=["lab"])
-def cmd_lab(message):
+def cmd_lab_v20(message):
     if not est_autorise(message.chat.id):
         return
     p = message.text.split()
@@ -712,22 +889,25 @@ def cmd_lab(message):
     else:
         return bot.send_message(message.chat.id, "Usage : /lab EURUSD ou /lab ALL")
     bot.send_message(message.chat.id,
-                     f"🧪 V19.2 LAB lancé.\nAssets : {len(assets)}\nTF : 60/120/300/600s\nBougies : {LAB_CANDLES}\n\nLes résultats détaillés apparaîtront dans les logs Render et seront envoyés sur Telegram à la fin. En cas de problème de données, le diagnostic Deriv sera aussi affiché.")
+        f"🧪 V20 LAB lancé.\nAssets : {len(assets)}\nBase : 60s\nTF : 60/120/300/600s\nBougies : {LAB_CANDLES}\n\n"
+        "Le moteur vérifie d'abord les symboles actifs Deriv, puis télécharge une seule série 60s par actif. "
+        "Les résultats détaillés arriveront sur Telegram et dans Render.")
+
     def worker():
         try:
-            report = run_mass_lab(assets)
-            version = "V19.3"
+            report = run_mass_lab_v20(assets)
             if not report:
                 bot.send_message(message.chat.id,
-                    f"⚠️ {version} LAB terminé mais 0 simulation.\n\n"
-                    "Ce n'est pas un résultat de trading : aucune donnée historique Deriv n'a été reçue.\n"
-                    "Regarde les lignes [DERIV DATA ERROR] / [DERIV CONNECTION ERROR] dans Render et envoie-les-moi.")
-            else:
-                bot.send_message(message.chat.id, f"✅ {version} LAB terminé. {len(report)} simulations stratégie/TF analysées.\n\n📋 Je t'envoie maintenant le rapport détaillé en plusieurs messages si nécessaire.")
-                send_lab_report(message.chat.id, format_lab_telegram(report))
+                    "⚠️ V20 LAB terminé sans simulation.\n\n"
+                    "Ce n'est pas un résultat de trading. Le moteur n'a pas obtenu un historique exploitable.\n"
+                    "Cherche dans Render les lignes [DERIV ACTIVE], [DERIV PROBE], [DERIV DATA] ou [DERIV CONNECTION] et envoie-les-moi.")
+                return
+            bot.send_message(message.chat.id,
+                f"✅ V20 LAB terminé. {len(report)} blocs stratégie/TF analysés.\n\n📋 Rapport détaillé ci-dessous.")
+            send_lab_report(message.chat.id, format_lab_telegram(report))
         except Exception as e:
             print(f"[LAB FATAL] {type(e).__name__}: {e}")
-            bot.send_message(message.chat.id, f"❌ LAB interrompu : {type(e).__name__}: {e}")
+            bot.send_message(message.chat.id, f"❌ V20 LAB interrompu : {type(e).__name__}: {e}")
     threading.Thread(target=worker, daemon=True).start()
 
 # ============================================================
@@ -736,7 +916,7 @@ def cmd_lab(message):
 
 def stats_message(asset=None,strategy=None):
     s=stats_db(asset,strategy)
-    return (f"🧪 **V19 — STATISTIQUES RÉELLES DU LAB**\n──────────────\n"
+    return (f"🧪 **V20 — STATISTIQUES RÉELLES DU LAB**\n──────────────\n"
             f"Trades : **{s['trades']}**\nWIN : **{s['wins']}**\nLOSS : **{s['losses']}**\n"
             f"Winrate directionnel : **{s['winrate']:.2f}%**\n\n"
             f"⚠️ Ce chiffre mesure seulement la direction prix. Le payout réel du broker n'est pas inclus.")
@@ -746,16 +926,35 @@ def cmd_stats(message):
     if not est_autorise(message.chat.id):return
     bot.send_message(message.chat.id,stats_message(),parse_mode="Markdown")
 
+def run_backtest(asset, tf, only_strategy=None, count=LAB_CANDLES):
+    """Compatibilité avec /backtest : même moteur V20, base 60s et expiration exacte."""
+    active_map = deriv_active_symbol_map()
+    raw = fetch_lab_60s(asset, count=count, active_map=active_map)
+    if not raw:
+        return None
+    base = lab_df(raw)
+    if len(base) < 100:
+        return None
+    names = [only_strategy] if only_strategy else list(STRATEGIES)
+    out = {}
+    for name in names:
+        if name not in STRATEGIES:
+            continue
+        rows = backtest_strategy_v20(base, name, tf)
+        out[name] = summarize_rows(rows)
+    return out
+
+
 @bot.message_handler(commands=["backtest"])
 def cmd_backtest(message):
     if not est_autorise(message.chat.id):return
     p=message.text.split(); asset=p[1].upper() if len(p)>1 else "EURUSD"; tf=int(p[2]) if len(p)>2 else 300; strat=p[3].upper() if len(p)>3 else None
     if asset not in ALL_PAIRS or tf not in LAB_TF_LIST:
         return bot.send_message(message.chat.id,"Usage : /backtest EURUSD 300 [AROON_RSI]")
-    bot.send_message(message.chat.id,"🧪 Backtest V19.2 en cours...")
+    bot.send_message(message.chat.id,"🧪 Backtest V20 en cours...")
     res=run_backtest(asset,tf,strat,count=LAB_CANDLES)
     if res is None:return bot.send_message(message.chat.id,"❌ Données Deriv indisponibles.")
-    txt=f"🧪 **BACKTEST V19.2 — {asset} / {tf}s**\n──────────────\n"
+    txt=f"🧪 **BACKTEST V20 — {asset} / {tf}s**\n──────────────\n"
     for name,s in res.items():
         txt+=f"**{name}**\nTrades: {s['trades']} · WIN: {s['wins']} · LOSS: {s['losses']} · Winrate: {s['winrate']:.2f}% · Max LS: {s['max_loss_streak']}\n"
         if s['trades'] >= LAB_MIN_TRADES:
@@ -783,7 +982,7 @@ def start(message):
     if not est_autorise(message.chat.id):return bot.send_message(message.chat.id,"🔒 Accès restreint.")
     utilisateurs_actifs.add(message.chat.id); mode_trading.setdefault(message.chat.id,"STANDARD"); filtre_vip_actif.setdefault(message.chat.id,False)
     bot.send_message(message.chat.id,
-        "🧪 **TERMINAL PRIME V19 — LABORATOIRE**\n\n"
+        "🧪 **TERMINAL PRIME V20 — LABORATOIRE**\n\n"
         "4 piliers conservés : Aroon+RSI, ADX+STC, CCI+MACD, Donchian+CCI.\n\n"
         "✅ Bougies clôturées uniquement\n✅ Journal SQLite persistant\n✅ Backtest individuel\n✅ Paper trading\n🚫 Martingale désactivée\n🚫 WIN manuel désactivé\n🚫 Fausse confiance en %\n\n"
         "Commandes : `/stats`, `/backtest EURUSD 300 AROON_RSI`, `/lab EURUSD` ou `/lab ALL`",
@@ -811,7 +1010,7 @@ def lancer(message):
     if uid in trades_en_cours:return bot.send_message(uid,"⚠️ Un paper trade est déjà en cours.")
     asset=user_prefs.get(uid)
     if not asset:return bot.send_message(uid,"Choisis d'abord une devise.")
-    bot.send_message(uid,"🔬 Analyse V19 des bougies clôturées...")
+    bot.send_message(uid,"🔬 Analyse V20 des bougies clôturées...")
     a=analyser_binaire_v19(asset,mode_trading.get(uid,"STANDARD"))
     if not a:return bot.send_message(uid,"⏳ Aucun setup validé par le laboratoire actuellement.")
     if filtre_vip_actif.get(uid,False) and a["score_algo"]<SEUIL_VIP_SCORE_ALGO:
