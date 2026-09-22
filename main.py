@@ -39,6 +39,7 @@ SEUIL_SIGNAL_PILIER = 45.0
 SEUIL_VIP_SCORE_ALGO = 9.0
 DB_PATH = os.environ.get("LAB_DB_PATH", "v19_laboratoire.sqlite3")
 DERIV_APP_ID = os.environ.get("DERIV_APP_ID", "1089")
+LAB_CANDLES = int(os.environ.get("LAB_CANDLES", "5000"))
 
 CRYPTO_PAIRS = ["BTCUSD", "ETHUSD", "LTCUSD"]
 FOREX_PAIRS = [
