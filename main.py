@@ -38,11 +38,13 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAGJdGx_qaacvKlx8R7XR5A5l_Aa6zOJ0i4"
+TELEGRAM_TOKEN = "8658287331:AAGN49DmdhfHN_2bZ1jmV83zMBg9O5CUvyg"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
+
 ADMIN_ID = 5968288964
-CAPITAL_ACTUEL = 40650
+CAPITAL_ACTUEL = 12000
 FMP_API_KEY = os.environ.get("FMP_API_KEY", "D0srw6sB3otYTc00UdBE9otPIbhkKV8X")
+
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 GROQ_MODEL = "llama-3.1-8b-instant"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -1158,7 +1160,7 @@ def bienvenue(message):
 Architecture à 5 couches indépendantes :
 🧭 **Market Regime** — TREND / RANGE / BREAKOUT / CHAOTIC
 🧩 **8 Stratégies** — 4 piliers baseline + 4 verrouillées par régime
-📊 **Confluence Engine** — score additif, bandes NO_TRADE/OBSERVATION/POTENTIEL/QUALIFIÉ
+📊 **Confluence Engine** — score additif, bandes NO TRADE/OBSERVATION/POTENTIEL/QUALIFIÉ
 🤖 **AI Validator** — Groq en APPROVE/REJECT, jamais générateur
 🛡️ **Risk Engine** — limite perte/jour, pause après pertes consécutives, cooldown gagné/perdu
 
