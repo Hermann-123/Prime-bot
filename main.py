@@ -38,12 +38,12 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAHSVaQRoPcE1ake0a-lkxdpjtVCjHQzj_Q"
+TELEGRAM_TOKEN = ""
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964
-CAPITAL_ACTUEL = 40650
-FMP_API_KEY = os.environ.get("FMP_API_KEY", "D0srw6sB3otYTc00UdBE9otPIbhkKV8X")
+CAPITAL_ACTUEL = 10000
+FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 GROQ_MODEL = "llama-3.1-8b-instant"
