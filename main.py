@@ -38,7 +38,7 @@ from threading import Thread, Timer
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
 # ==========================================
 
-TELEGRAM_TOKEN = "8658287331:AAGN49DmdhfHN_2bZ1jmV83zMBg9O5CUvyg"
+TELEGRAM_TOKEN = "8658287331:AAEqwqzc_FiV5mcBUQO9tX0nEI04DsFpM2w"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 ADMIN_ID = 5968288964
