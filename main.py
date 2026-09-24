@@ -41,6 +41,56 @@ from threading import Thread, Timer
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
+# ==========================================
+# ✅ FILET DE SÉCURITÉ TELEGRAM — évite les réponses "silencieuses" perdues
+# ==========================================
+# Certains emoji composés (drapeaux, ZWJ...) cassent le parseur Markdown
+# "legacy" de Telegram quand ils précèdent du texte en gras/italique
+# ("Can't find end of the entity..."). Sans ce filet, l'exception est
+# levée par bot.send_message, remonte jusqu'au handler, et l'utilisateur
+# ne reçoit RIEN, sans aucun message d'erreur visible côté Telegram (on
+# ne voit l'erreur que dans les logs Render). Ce wrapper retente en texte
+# brut si le Markdown échoue, pour ce message précis et pour tous ceux à
+# venir.
+
+_original_send_message = bot.send_message
+def _envoi_securise(chat_id, text, *args, **kwargs):
+    try:
+        return _original_send_message(chat_id, text, *args, **kwargs)
+    except Exception as e:
+        message_erreur = str(e).lower()
+        if "can't parse entities" in message_erreur or "can't find end of the entity" in message_erreur:
+            print(f"[TELEGRAM] Markdown invalide pour {chat_id}, renvoi en texte brut. Détail : {e}", flush=True)
+            texte_brut = text.replace("**", "").replace("__", "").replace("`", "")
+            kwargs.pop("parse_mode", None)
+            try:
+                return _original_send_message(chat_id, texte_brut, *args, **kwargs)
+            except Exception as e2:
+                print(f"[TELEGRAM] Échec définitif de l'envoi à {chat_id} : {e2}", flush=True)
+                return None
+        print(f"[TELEGRAM] Erreur d'envoi à {chat_id} : {e}", flush=True)
+        return None
+bot.send_message = _envoi_securise
+
+_original_edit_message_text = bot.edit_message_text
+def _edition_securisee(text, *args, **kwargs):
+    try:
+        return _original_edit_message_text(text, *args, **kwargs)
+    except Exception as e:
+        message_erreur = str(e).lower()
+        if "can't parse entities" in message_erreur or "can't find end of the entity" in message_erreur:
+            print(f"[TELEGRAM] Markdown invalide (édition), renvoi en texte brut. Détail : {e}", flush=True)
+            texte_brut = text.replace("**", "").replace("__", "").replace("`", "")
+            kwargs.pop("parse_mode", None)
+            try:
+                return _original_edit_message_text(texte_brut, *args, **kwargs)
+            except Exception as e2:
+                print(f"[TELEGRAM] Échec définitif de l'édition : {e2}", flush=True)
+                return None
+        print(f"[TELEGRAM] Erreur d'édition : {e}", flush=True)
+        return None
+bot.edit_message_text = _edition_securisee
+
 ADMIN_ID = 5968288964
 CAPITAL_ACTUEL = 40650
 FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
