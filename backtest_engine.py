@@ -16,14 +16,41 @@ import datetime
 import websocket
 import pandas as pd
 
-from bot_v19_updated import (
-    CRYPTO_PAIRS, FOREX_PAIRS, prefixer_symbole,
-    detecter_regime_marche, marche_choc_detecte,
-    analyser_aroon_rsi, analyser_adx_stc, analyser_cci_macd, analyser_donchian_cci,
-    strategie_trend_pullback, strategie_breakout_retest,
-    strategie_momentum_expansion, strategie_range_reversion,
-    moteur_confluence,
-)
+# ✅ Le nom du fichier principal du bot varie selon comment tu l'as déployé
+# (main.py, bot.py, bot_v19_updated.py...). On essaie les noms courants
+# dans l'ordre, pour éviter un "No module named ..." si le nom ne
+# correspond pas exactement.
+_ERREURS_IMPORT = []
+_module_bot = None
+for _nom_module in ("main", "bot_v19_updated", "bot", "app"):
+    try:
+        _module_bot = __import__(_nom_module)
+        break
+    except ImportError as _e:
+        _ERREURS_IMPORT.append(f"{_nom_module}: {_e}")
+
+if _module_bot is None:
+    raise ImportError(
+        "Impossible de trouver le fichier principal du bot pour importer ses fonctions "
+        "d'analyse. Noms essayés : main.py, bot_v19_updated.py, bot.py, app.py. "
+        "Si ton fichier a un autre nom, ajoute-le dans la liste _nom_module de backtest_engine.py.\n"
+        + "\n".join(_ERREURS_IMPORT)
+    )
+
+CRYPTO_PAIRS = _module_bot.CRYPTO_PAIRS
+FOREX_PAIRS = _module_bot.FOREX_PAIRS
+prefixer_symbole = _module_bot.prefixer_symbole
+detecter_regime_marche = _module_bot.detecter_regime_marche
+marche_choc_detecte = _module_bot.marche_choc_detecte
+analyser_aroon_rsi = _module_bot.analyser_aroon_rsi
+analyser_adx_stc = _module_bot.analyser_adx_stc
+analyser_cci_macd = _module_bot.analyser_cci_macd
+analyser_donchian_cci = _module_bot.analyser_donchian_cci
+strategie_trend_pullback = _module_bot.strategie_trend_pullback
+strategie_breakout_retest = _module_bot.strategie_breakout_retest
+strategie_momentum_expansion = _module_bot.strategie_momentum_expansion
+strategie_range_reversion = _module_bot.strategie_range_reversion
+moteur_confluence = _module_bot.moteur_confluence
 
 DERIV_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089"
 
