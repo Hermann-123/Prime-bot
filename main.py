@@ -1475,6 +1475,21 @@ def commande_diagnostic(message):
         except Exception as e:
             resultats.append(f"❌ HTTPS vers google.com — ÉCHEC : {type(e).__name__}: {e}")
 
+        # ✅ La vraie requête que fait le bot pour analyser une paire —
+        # montre directement la réponse brute de Deriv ou l'exception
+        # exacte, sans avoir besoin d'aller chercher dans Render > Logs.
+        try:
+            ws = websocket.WebSocket()
+            ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=8)
+            req = {"ticks_history": "frxEURUSD", "end": "latest", "count": 5,
+                   "style": "candles", "granularity": 300}
+            ws.send(json.dumps(req))
+            brut = ws.recv()
+            ws.close()
+            resultats.append(f"🔎 Requête réelle ticks_history frxEURUSD — réponse brute :\n{brut[:400]}")
+        except Exception as e:
+            resultats.append(f"❌ Requête réelle ticks_history frxEURUSD — ÉCHEC : {type(e).__name__}: {e}")
+
         texte = "🔍 RÉSULTAT DIAGNOSTIC RÉSEAU\n" + "\n".join(resultats)
         print("[DIAGNOSTIC] " + texte.replace("\n", " | "), flush=True)
         try:
