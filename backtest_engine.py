@@ -80,6 +80,14 @@ def est_symbole_autorise_epoch(symbole, epoch_utc):
 
 
 def fetch_history(symbole_brut, granularity_sec, jours, max_par_appel=5000):
+    """
+    ⚠️ Throttlé volontairement : le premier backtest a ouvert trop de
+    connexions WebSocket trop rapidement (surtout en mode ALL/BOTH) et a
+    probablement fait bloquer temporairement l'IP de Render par Cloudflare
+    (protection anti-bot devant les serveurs Deriv) — ce qui a aussi cassé
+    le bot en direct pendant un moment, la même IP étant partagée. Cette
+    version est volontairement plus lente pour ne jamais reproduire ça.
+    """
     symbole = prefixer_symbole(symbole_brut)
     fin = int(time.time())
     debut_cible = fin - jours * 86400
@@ -101,16 +109,13 @@ def fetch_history(symbole_brut, granularity_sec, jours, max_par_appel=5000):
                 if "candles" in res:
                     bougies = res["candles"]
                 elif premiere_tentative:
-                    # ✅ Pas d'exception, mais pas de bougies non plus : Deriv a
-                    # répondu avec autre chose (souvent un champ "error"). On
-                    # l'imprime une seule fois par paire pour voir la vraie cause.
                     print(f"[BACKTEST][{symbole_brut}] Réponse Deriv sans 'candles' : {json.dumps(res)[:500]}", flush=True)
             except Exception as e:
                 essais += 1
                 if premiere_tentative:
                     print(f"[BACKTEST][{symbole_brut}] Échec connexion/requête Deriv (essai {essais}/3) : {type(e).__name__}: {e}", flush=True)
-                time.sleep(1)
-        premiere_tentative = False
+                time.sleep(3)  # ✅ pause longue avant de retenter (était 1s)
+            premiere_tentative = False
         if not bougies:
             break
         toutes_bougies = bougies + toutes_bougies
@@ -118,7 +123,7 @@ def fetch_history(symbole_brut, granularity_sec, jours, max_par_appel=5000):
         if nouvel_end >= end:
             break
         end = nouvel_end
-        time.sleep(0.3)
+        time.sleep(2.0)  # ✅ pause entre chaque page (était 0.3s)
 
     vus, resultat = set(), []
     for c in toutes_bougies:
@@ -335,6 +340,7 @@ def lancer_backtest_texte(pairs_str, jours, mode, limite_cible=15):
             signaux, compteurs = backtester_paire(paire, jours, m)
             tous_signaux += signaux
             tous_compteurs.append(compteurs)
+            time.sleep(2.0)  # ✅ pause entre chaque paire/mode pour rester loin de tout seuil d'abus
 
     rapport = _rapport_texte(tous_signaux, tous_compteurs, jours, limite_cible)
     print("[BACKTEST] Terminé.\n" + rapport, flush=True)
