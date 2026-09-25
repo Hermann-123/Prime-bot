@@ -665,7 +665,7 @@ def strategie_trend_pullback(df15, df5, regime):
         if regime["adx"] >= 22: score += 20; raisons.append(f"ADX {regime['adx']}")
         if confirmation: score += 20; raisons.append(f"Bougie de confirmation ({pattern})")
 
-        if score < 45: return None
+        if score < 35: return None
         return {"nom": "TREND_PULLBACK", "label": "Trend Pullback", "direction": direction,
                 "score": round(score, 1), "raisons": raisons,
                 "details_txt": f"Dist EMA20 {dist_ema20_pct*100:.2f}% · RSI {rsi_val:.1f}",
