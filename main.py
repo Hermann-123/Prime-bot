@@ -1441,6 +1441,50 @@ def commande_backtest(message):
     Thread(target=tache, daemon=True).start()
 
 
+# ==========================================
+# COMMANDE /diagnostic — teste la connectivité réseau depuis l'app elle-même
+# (utile sur Render Free, où l'onglet Shell n'est pas disponible)
+# ==========================================
+
+@bot.message_handler(commands=['diagnostic'])
+def commande_diagnostic(message):
+    if message.chat.id != ADMIN_ID:
+        return
+    bot.send_message(message.chat.id, "🔍 Diagnostic réseau en cours (quelques secondes)...")
+
+    def tache():
+        import socket
+        resultats = []
+
+        try:
+            s = socket.create_connection(("ws.derivws.com", 443), timeout=8)
+            s.close()
+            resultats.append("✅ TCP brut vers ws.derivws.com:443 — OK")
+        except Exception as e:
+            resultats.append(f"❌ TCP brut vers ws.derivws.com:443 — ÉCHEC : {type(e).__name__}: {e}")
+
+        try:
+            r = requests.get("https://deriv.com", timeout=8)
+            resultats.append(f"✅ HTTPS vers deriv.com — statut {r.status_code}")
+        except Exception as e:
+            resultats.append(f"❌ HTTPS vers deriv.com — ÉCHEC : {type(e).__name__}: {e}")
+
+        try:
+            r2 = requests.get("https://www.google.com", timeout=8)
+            resultats.append(f"✅ HTTPS vers google.com (test réseau général) — statut {r2.status_code}")
+        except Exception as e:
+            resultats.append(f"❌ HTTPS vers google.com — ÉCHEC : {type(e).__name__}: {e}")
+
+        texte = "🔍 RÉSULTAT DIAGNOSTIC RÉSEAU\n" + "\n".join(resultats)
+        print("[DIAGNOSTIC] " + texte.replace("\n", " | "), flush=True)
+        try:
+            bot.send_message(message.chat.id, texte)
+        except Exception:
+            pass
+
+    Thread(target=tache, daemon=True).start()
+
+
 if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
