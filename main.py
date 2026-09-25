@@ -318,20 +318,51 @@ def prefixer_symbole(symbole_brut):
     if symbole_brut in CRYPTO_PAIRS: return f"cry{symbole_brut}"
     return f"frx{symbole_brut}"
 
+# ✅ Deriv a introduit un nouvel endpoint WebSocket public en 2026
+# (wss://api.derivws.com/trading/v1/options/ws/public), en plus de
+# l'ancien endpoint historique (wss://ws.derivws.com/websockets/v3?app_id=...).
+# On ne sait pas encore lequel accepte ticks_history de façon fiable dans la
+# durée, donc on essaie les deux dans l'ordre et on garde celui qui marche
+# — le bot s'auto-adapte au lieu de dépendre d'une seule URL figée.
+DERIV_ENDPOINTS = [
+    "wss://ws.derivws.com/websockets/v3?app_id=1089",
+    "wss://api.derivws.com/trading/v1/options/ws/public",
+]
+_derniere_url_deriv_ok = {"url": None}
+
+def _connecter_deriv(timeout=5):
+    """Essaie chaque endpoint Deriv connu dans l'ordre, retourne (ws, url)
+    du premier qui accepte la connexion WebSocket. Lève la dernière
+    exception si aucun ne fonctionne."""
+    derniere_erreur = None
+    urls = DERIV_ENDPOINTS
+    # Si un endpoint a déjà marché récemment, on l'essaie en premier.
+    if _derniere_url_deriv_ok["url"] in urls:
+        urls = [_derniere_url_deriv_ok["url"]] + [u for u in urls if u != _derniere_url_deriv_ok["url"]]
+    for url in urls:
+        try:
+            ws = websocket.WebSocket()
+            ws.connect(url, timeout=timeout)
+            _derniere_url_deriv_ok["url"] = url
+            return ws, url
+        except Exception as e:
+            derniere_erreur = e
+            continue
+    raise derniere_erreur if derniere_erreur else ConnectionError("Aucun endpoint Deriv disponible")
+
 def obtenir_donnees_deriv(symbole_brut, granularite=300, count=250):
     symbole = prefixer_symbole(symbole_brut)
     for _ in range(3):
         try:
-            ws = websocket.WebSocket()
-            ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=5)
+            ws, url = _connecter_deriv(timeout=5)
             req = {"ticks_history": symbole, "end": "latest", "count": count, "style": "candles", "granularity": granularite}
             ws.send(json.dumps(req))
             history = json.loads(ws.recv())
             ws.close()
             if "error" not in history and "candles" in history: return history['candles']
-            print(f"[DERIV] {symbole_brut} — réponse sans 'candles' : {str(history)[:300]}", flush=True)
+            print(f"[DERIV] {symbole_brut} via {url} — réponse sans 'candles' : {str(history)[:300]}", flush=True)
         except Exception as e:
-            print(f"[DERIV] {symbole_brut} — échec connexion : {type(e).__name__}: {e}", flush=True)
+            print(f"[DERIV] {symbole_brut} — échec connexion (tous endpoints) : {type(e).__name__}: {e}", flush=True)
             time.sleep(1)
             continue
     return None
@@ -340,16 +371,15 @@ def obtenir_prix_actuel_deriv(symbole_brut):
     symbole = prefixer_symbole(symbole_brut)
     for _ in range(3):
         try:
-            ws = websocket.WebSocket()
-            ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=5)
+            ws, url = _connecter_deriv(timeout=5)
             req = {"ticks_history": symbole, "end": "latest", "count": 1, "style": "ticks"}
             ws.send(json.dumps(req))
             res = json.loads(ws.recv())
             ws.close()
             if "history" in res and "prices" in res["history"]: return float(res["history"]["prices"][0])
-            print(f"[DERIV] {symbole_brut} — réponse sans prix : {str(res)[:300]}", flush=True)
+            print(f"[DERIV] {symbole_brut} via {url} — réponse sans prix : {str(res)[:300]}", flush=True)
         except Exception as e:
-            print(f"[DERIV] {symbole_brut} — échec connexion (prix) : {type(e).__name__}: {e}", flush=True)
+            print(f"[DERIV] {symbole_brut} — échec connexion (prix, tous endpoints) : {type(e).__name__}: {e}", flush=True)
             time.sleep(1)
             continue
     return None
@@ -1476,19 +1506,19 @@ def commande_diagnostic(message):
             resultats.append(f"❌ HTTPS vers google.com — ÉCHEC : {type(e).__name__}: {e}")
 
         # ✅ La vraie requête que fait le bot pour analyser une paire —
-        # montre directement la réponse brute de Deriv ou l'exception
-        # exacte, sans avoir besoin d'aller chercher dans Render > Logs.
-        try:
-            ws = websocket.WebSocket()
-            ws.connect("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=8)
-            req = {"ticks_history": "frxEURUSD", "end": "latest", "count": 5,
-                   "style": "candles", "granularity": 300}
-            ws.send(json.dumps(req))
-            brut = ws.recv()
-            ws.close()
-            resultats.append(f"🔎 Requête réelle ticks_history frxEURUSD — réponse brute :\n{brut[:400]}")
-        except Exception as e:
-            resultats.append(f"❌ Requête réelle ticks_history frxEURUSD — ÉCHEC : {type(e).__name__}: {e}")
+        # testée sur CHAQUE endpoint Deriv connu, pour voir lequel répond.
+        for url in DERIV_ENDPOINTS:
+            try:
+                ws = websocket.WebSocket()
+                ws.connect(url, timeout=8)
+                req = {"ticks_history": "frxEURUSD", "end": "latest", "count": 5,
+                       "style": "candles", "granularity": 300}
+                ws.send(json.dumps(req))
+                brut = ws.recv()
+                ws.close()
+                resultats.append(f"🔎 {url}\n   → réponse : {brut[:250]}")
+            except Exception as e:
+                resultats.append(f"❌ {url}\n   → ÉCHEC : {type(e).__name__}: {e}")
 
         texte = "🔍 RÉSULTAT DIAGNOSTIC RÉSEAU\n" + "\n".join(resultats)
         print("[DIAGNOSTIC] " + texte.replace("\n", " | "), flush=True)
