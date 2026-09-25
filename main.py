@@ -133,7 +133,17 @@ BAREME_CONFLUENCE = {
 }
 SEUIL_NO_TRADE = 40
 SEUIL_OBSERVATION = 55
-SEUIL_POTENTIEL = 60
+SEUIL_POTENTIEL = 80
+# < 40 NO_TRADE | 40-54 OBSERVATION (jamais envoyé) | 55-79 POTENTIEL | 80+ QUALIFIÉ
+
+# ✅ NOUVEAU — seuil minimum qu'une stratégie individuelle doit atteindre
+# (sur 100) pour même être proposée au Confluence Engine. C'était le vrai
+# goulot d'étranglement : à 45, presque aucune stratégie ne l'atteignait,
+# donc baisser SEUIL_OBSERVATION seul n'avait aucun effet (le Confluence
+# Engine n'était jamais consulté, faute de candidat). Baissé à 25 par
+# défaut — remonte-le si tu reçois trop de signaux de mauvaise qualité,
+# baisse-le encore (ex. 15) si tu es toujours à 0.
+SEUIL_MIN_STRATEGIE = 25
 # < 55 NO_TRADE | 55-69 OBSERVATION (jamais envoyé) | 70-79 POTENTIEL | 80+ QUALIFIÉ
 
 # ==========================================
@@ -319,7 +329,9 @@ def obtenir_donnees_deriv(symbole_brut, granularite=300, count=250):
             history = json.loads(ws.recv())
             ws.close()
             if "error" not in history and "candles" in history: return history['candles']
-        except:
+            print(f"[DERIV] {symbole_brut} — réponse sans 'candles' : {str(history)[:300]}", flush=True)
+        except Exception as e:
+            print(f"[DERIV] {symbole_brut} — échec connexion : {type(e).__name__}: {e}", flush=True)
             time.sleep(1)
             continue
     return None
@@ -335,7 +347,9 @@ def obtenir_prix_actuel_deriv(symbole_brut):
             res = json.loads(ws.recv())
             ws.close()
             if "history" in res and "prices" in res["history"]: return float(res["history"]["prices"][0])
-        except:
+            print(f"[DERIV] {symbole_brut} — réponse sans prix : {str(res)[:300]}", flush=True)
+        except Exception as e:
+            print(f"[DERIV] {symbole_brut} — échec connexion (prix) : {type(e).__name__}: {e}", flush=True)
             time.sleep(1)
             continue
     return None
@@ -525,7 +539,7 @@ def analyser_aroon_rsi(df15):
         sc, rc = score("CALL"); sp, rp = score("PUT")
         direction = "CALL" if sc >= sp else "PUT"
         meilleur, raisons = (sc, rc) if direction == "CALL" else (sp, rp)
-        if meilleur < 45: return None
+        if meilleur < SEUIL_MIN_STRATEGIE: return None
         return {"nom": "AROON_RSI", "label": "Show The Direction", "direction": direction,
                 "score": meilleur, "raisons": raisons,
                 "details_txt": f"Aroon Up {au:.0f}/Down {ad:.0f} · RSI(6) {rsi_val:.1f}",
@@ -559,7 +573,7 @@ def analyser_adx_stc(df15):
         sc, rc = score("CALL"); sp, rp = score("PUT")
         direction = "CALL" if sc >= sp else "PUT"
         meilleur, raisons = (sc, rc) if direction == "CALL" else (sp, rp)
-        if meilleur < 45: return None
+        if meilleur < SEUIL_MIN_STRATEGIE: return None
         return {"nom": "ADX_STC", "label": "Identifies Reversal Points", "direction": direction,
                 "score": meilleur, "raisons": raisons,
                 "details_txt": f"STC {stc_val:.0f} · ADX {adx_val:.0f}", "regime_natif": None}
@@ -591,7 +605,7 @@ def analyser_cci_macd(df15):
         sc, rc = score("CALL"); sp, rp = score("PUT")
         direction = "CALL" if sc >= sp else "PUT"
         meilleur, raisons = (sc, rc) if direction == "CALL" else (sp, rp)
-        if meilleur < 45: return None
+        if meilleur < SEUIL_MIN_STRATEGIE: return None
         return {"nom": "CCI_MACD", "label": "A Moment When...", "direction": direction,
                 "score": meilleur, "raisons": raisons,
                 "details_txt": f"CCI(10) {cci_val:.0f} · MACD hist {hist_val:.5f}", "regime_natif": None}
@@ -628,7 +642,7 @@ def analyser_donchian_cci(df15):
         sc, rc = score("CALL"); sp, rp = score("PUT")
         direction = "CALL" if sc >= sp else "PUT"
         meilleur, raisons = (sc, rc) if direction == "CALL" else (sp, rp)
-        if meilleur < 45: return None
+        if meilleur < SEUIL_MIN_STRATEGIE: return None
         return {"nom": "DONCHIAN_CCI", "label": "You Know And...", "direction": direction,
                 "score": meilleur, "raisons": raisons,
                 "details_txt": f"Position canal {position_pct*100:.0f}% · CCI(11) {cci_val:.0f}",
@@ -665,7 +679,7 @@ def strategie_trend_pullback(df15, df5, regime):
         if regime["adx"] >= 22: score += 20; raisons.append(f"ADX {regime['adx']}")
         if confirmation: score += 20; raisons.append(f"Bougie de confirmation ({pattern})")
 
-        if score < 35: return None
+        if score < SEUIL_MIN_STRATEGIE: return None
         return {"nom": "TREND_PULLBACK", "label": "Trend Pullback", "direction": direction,
                 "score": round(score, 1), "raisons": raisons,
                 "details_txt": f"Dist EMA20 {dist_ema20_pct*100:.2f}% · RSI {rsi_val:.1f}",
@@ -702,7 +716,7 @@ def strategie_breakout_retest(df15, df5, regime):
         if regime["atr_pct"] > 1.1: score += 15; raisons.append("Volatilité en expansion")
         if regime["structure_score"] >= 55: score += 15; raisons.append("Structure claire")
 
-        if score < 45: return None
+        if score < SEUIL_MIN_STRATEGIE: return None
         return {"nom": "BREAKOUT_RETEST", "label": "Breakout + Retest", "direction": direction,
                 "score": round(score, 1), "raisons": raisons,
                 "details_txt": f"Niveau cassé {niveau:.5f} · retest {dist_retest*100:.2f}%",
@@ -730,7 +744,7 @@ def strategie_momentum_expansion(df15, regime):
         if regime["adx"] >= 22: score += 20; raisons.append(f"ADX {regime['adx']}")
         if regime["structure_score"] >= 55: score += 15
 
-        if score < 45: return None
+        if score < SEUIL_MIN_STRATEGIE: return None
         return {"nom": "MOMENTUM_EXPANSION", "label": "Momentum Expansion", "direction": direction,
                 "score": round(score, 1), "raisons": raisons,
                 "details_txt": f"ROC {roc_val:.2f} (prev {roc_prev:.2f}) · ATR x{regime['atr_pct']}",
@@ -765,7 +779,7 @@ def strategie_range_reversion(df15, regime):
         if regime["adx"] < 18: score += 20; raisons.append("Range confirmé (ADX faible)")
         if regime["largeur_canal_pct"] < 1.2: score += 10
 
-        if score < 45: return None
+        if score < SEUIL_MIN_STRATEGIE: return None
         return {"nom": "RANGE_REVERSION", "label": "Range Reversion", "direction": direction,
                 "score": round(score, 1), "raisons": raisons,
                 "details_txt": f"Position canal {position_pct*100:.0f}% · CCI {cci_val:.0f}",
