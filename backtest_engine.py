@@ -85,6 +85,7 @@ def fetch_history(symbole_brut, granularity_sec, jours, max_par_appel=5000):
     debut_cible = fin - jours * 86400
     toutes_bougies = []
     end = fin
+    premiere_tentative = True
 
     while end > debut_cible:
         essais, bougies = 0, None
@@ -99,9 +100,17 @@ def fetch_history(symbole_brut, granularity_sec, jours, max_par_appel=5000):
                 ws.close()
                 if "candles" in res:
                     bougies = res["candles"]
-            except Exception:
+                elif premiere_tentative:
+                    # ✅ Pas d'exception, mais pas de bougies non plus : Deriv a
+                    # répondu avec autre chose (souvent un champ "error"). On
+                    # l'imprime une seule fois par paire pour voir la vraie cause.
+                    print(f"[BACKTEST][{symbole_brut}] Réponse Deriv sans 'candles' : {json.dumps(res)[:500]}", flush=True)
+            except Exception as e:
                 essais += 1
+                if premiere_tentative:
+                    print(f"[BACKTEST][{symbole_brut}] Échec connexion/requête Deriv (essai {essais}/3) : {type(e).__name__}: {e}", flush=True)
                 time.sleep(1)
+        premiere_tentative = False
         if not bougies:
             break
         toutes_bougies = bougies + toutes_bougies
