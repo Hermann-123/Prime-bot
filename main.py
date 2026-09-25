@@ -1520,7 +1520,20 @@ def commande_diagnostic(message):
             except Exception as e:
                 resultats.append(f"❌ {url}\n   → ÉCHEC : {type(e).__name__}: {e}")
 
-        texte = "🔍 RÉSULTAT DIAGNOSTIC RÉSEAU\n" + "\n".join(resultats)
+        # ✅ Test avec un indice synthétique (R_100) — coté 24/7, jamais
+        # fermé, donc si LUI aussi revient vide sur le nouvel endpoint,
+        # ce n'est pas un problème d'heure de marché mais de symbole/API.
+        try:
+            ws = websocket.WebSocket()
+            ws.connect("wss://api.derivws.com/trading/v1/options/ws/public", timeout=8)
+            req = {"ticks_history": "R_100", "end": "latest", "count": 5,
+                   "style": "candles", "granularity": 300}
+            ws.send(json.dumps(req))
+            brut = ws.recv()
+            ws.close()
+            resultats.append(f"🔎 Nouvel endpoint + symbole R_100 (synthétique, 24/7)\n   → réponse : {brut[:250]}")
+        except Exception as e:
+            resultats.append(f"❌ Nouvel endpoint + symbole R_100 — ÉCHEC : {type(e).__name__}: {e}")
         print("[DIAGNOSTIC] " + texte.replace("\n", " | "), flush=True)
         try:
             bot.send_message(message.chat.id, texte)
