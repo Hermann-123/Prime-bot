@@ -52,7 +52,27 @@ strategie_momentum_expansion = _module_bot.strategie_momentum_expansion
 strategie_range_reversion = _module_bot.strategie_range_reversion
 moteur_confluence = _module_bot.moteur_confluence
 
-DERIV_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089"
+DERIV_ENDPOINTS = [
+    "wss://ws.derivws.com/websockets/v3?app_id=1089",
+    "wss://api.derivws.com/trading/v1/options/ws/public",
+]
+_derniere_url_deriv_ok = {"url": None}
+
+def _connecter_deriv(timeout=10):
+    derniere_erreur = None
+    urls = DERIV_ENDPOINTS
+    if _derniere_url_deriv_ok["url"] in urls:
+        urls = [_derniere_url_deriv_ok["url"]] + [u for u in urls if u != _derniere_url_deriv_ok["url"]]
+    for url in urls:
+        try:
+            ws = websocket.WebSocket()
+            ws.connect(url, timeout=timeout)
+            _derniere_url_deriv_ok["url"] = url
+            return ws, url
+        except Exception as e:
+            derniere_erreur = e
+            continue
+    raise derniere_erreur if derniere_erreur else ConnectionError("Aucun endpoint Deriv disponible")
 
 
 def est_symbole_autorise_epoch(symbole, epoch_utc):
@@ -99,8 +119,7 @@ def fetch_history(symbole_brut, granularity_sec, jours, max_par_appel=5000):
         essais, bougies = 0, None
         while essais < 3 and bougies is None:
             try:
-                ws = websocket.WebSocket()
-                ws.connect(DERIV_URL, timeout=10)
+                ws, url_utilisee = _connecter_deriv(timeout=10)
                 req = {"ticks_history": symbole, "end": end, "count": max_par_appel,
                        "style": "candles", "granularity": granularity_sec}
                 ws.send(json.dumps(req))
@@ -109,7 +128,7 @@ def fetch_history(symbole_brut, granularity_sec, jours, max_par_appel=5000):
                 if "candles" in res:
                     bougies = res["candles"]
                 elif premiere_tentative:
-                    print(f"[BACKTEST][{symbole_brut}] Réponse Deriv sans 'candles' : {json.dumps(res)[:500]}", flush=True)
+                    print(f"[BACKTEST][{symbole_brut}] Réponse Deriv ({url_utilisee}) sans 'candles' : {json.dumps(res)[:500]}", flush=True)
             except Exception as e:
                 essais += 1
                 if premiere_tentative:
