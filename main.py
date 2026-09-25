@@ -131,9 +131,9 @@ BAREME_CONFLUENCE = {
     "setup_max": 15,
     "contexte_defavorable": -30,
 }
-SEUIL_NO_TRADE = 55
-SEUIL_OBSERVATION = 70
-SEUIL_POTENTIEL = 80
+SEUIL_NO_TRADE = 40
+SEUIL_OBSERVATION = 55
+SEUIL_POTENTIEL = 60
 # < 55 NO_TRADE | 55-69 OBSERVATION (jamais envoyé) | 70-79 POTENTIEL | 80+ QUALIFIÉ
 
 # ==========================================
