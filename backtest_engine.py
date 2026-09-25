@@ -129,13 +129,21 @@ def _vers_df(candles):
 
 def backtester_paire(symbole, jours, mode="STANDARD"):
     duree_option = 60 if mode == "SCALP" else 300
+    compteurs = {
+        "bougies_m15": 0, "bougies_m5": 0,
+        "barres_examinees": 0, "hors_session": 0, "cooldown_scanner": 0,
+        "data_m5_insuffisante": 0, "choc_marche": 0, "regime_chaotic": 0,
+        "aucun_candidat": 0, "bande_trop_basse": 0, "pas_de_cloture_future": 0,
+        "signaux": 0,
+    }
     print(f"[BACKTEST] {symbole}/{mode} — téléchargement historique...", flush=True)
 
     c15 = fetch_history(symbole, 900, jours + 3)
     c5 = fetch_history(symbole, 300, jours + 3)
+    compteurs["bougies_m15"], compteurs["bougies_m5"] = len(c15), len(c5)
     if len(c15) < 70 or len(c5) < 50:
-        print(f"[BACKTEST] {symbole} — historique insuffisant, ignoré.", flush=True)
-        return []
+        print(f"[BACKTEST] {symbole}/{mode} — historique insuffisant (M15={len(c15)}, M5={len(c5)}), ignoré.", flush=True)
+        return [], compteurs
 
     df15, df5 = _vers_df(c15), _vers_df(c5)
     signaux, derniere_alerte = [], 0
@@ -145,20 +153,27 @@ def backtester_paire(symbole, jours, mode="STANDARD"):
         epoch_decision = int(df15["epoch"].iloc[i])
         if epoch_decision < borne_min_epoch:
             continue
+        compteurs["barres_examinees"] += 1
+
         if not est_symbole_autorise_epoch(symbole, epoch_decision):
+            compteurs["hors_session"] += 1
             continue
         if epoch_decision - derniere_alerte < 300:
+            compteurs["cooldown_scanner"] += 1
             continue
 
         d15 = df15.iloc[: i + 1].reset_index(drop=True)
         d5 = df5[df5["epoch"] <= epoch_decision].reset_index(drop=True)
         if len(d5) < 30:
+            compteurs["data_m5_insuffisante"] += 1
             continue
         if marche_choc_detecte(d5):
+            compteurs["choc_marche"] += 1
             continue
 
         regime = detecter_regime_marche(d15)
         if regime["regime"] == "CHAOTIC":
+            compteurs["regime_chaotic"] += 1
             continue
 
         candidats = []
@@ -176,14 +191,17 @@ def backtester_paire(symbole, jours, mode="STANDARD"):
             if r: candidats.append(r)
 
         if not candidats:
+            compteurs["aucun_candidat"] += 1
             continue
         setup = max(candidats, key=lambda c: c["score"])
         score, bande, _ = moteur_confluence(regime, setup)
         if bande not in ("POTENTIEL", "QUALIFIE"):
+            compteurs["bande_trop_basse"] += 1
             continue
 
         futurs = df5[df5["epoch"] >= epoch_decision + duree_option]
         if futurs.empty:
+            compteurs["pas_de_cloture_future"] += 1
             continue
         prix_entree = float(d5["close"].iloc[-1])
         prix_sortie = float(futurs["close"].iloc[0])
@@ -196,16 +214,59 @@ def backtester_paire(symbole, jours, mode="STANDARD"):
             "symbole": symbole, "date": dt.strftime("%Y-%m-%d"), "regime": regime["regime"],
             "strategie": setup["label"], "bande": bande, "gagne": gagne,
         })
+        compteurs["signaux"] += 1
 
-    print(f"[BACKTEST] {symbole}/{mode} — {len(signaux)} signaux trouvés.", flush=True)
-    return signaux
+    print(f"[BACKTEST] {symbole}/{mode} — diagnostic : {compteurs}", flush=True)
+    return signaux, compteurs
 
 
-def _rapport_texte(tous_signaux, jours, limite_cible):
+def _fusionner_compteurs(liste_compteurs):
+    total = {}
+    for c in liste_compteurs:
+        for k, v in c.items():
+            total[k] = total.get(k, 0) + v
+    return total
+
+
+def _rapport_texte(tous_signaux, tous_compteurs, jours, limite_cible):
+    diag = _fusionner_compteurs(tous_compteurs)
+    lignes_diag = [
+        "🔍 DIAGNOSTIC (où les bougies sont éliminées) :",
+        f"Bougies M15/M5 téléchargées : {diag.get('bougies_m15', 0)}/{diag.get('bougies_m5', 0)}",
+        f"Barres examinées (fenêtre demandée) : {diag.get('barres_examinees', 0)}",
+        f"  ├─ rejetées hors session horaire : {diag.get('hors_session', 0)}",
+        f"  ├─ rejetées cooldown scanner (300s) : {diag.get('cooldown_scanner', 0)}",
+        f"  ├─ rejetées data M5 insuffisante : {diag.get('data_m5_insuffisante', 0)}",
+        f"  ├─ rejetées choc de marché : {diag.get('choc_marche', 0)}",
+        f"  ├─ rejetées régime CHAOTIC : {diag.get('regime_chaotic', 0)}",
+        f"  ├─ rejetées aucun candidat (stratégies) : {diag.get('aucun_candidat', 0)}",
+        f"  ├─ rejetées bande < POTENTIEL (confluence) : {diag.get('bande_trop_basse', 0)}",
+        f"  └─ rejetées pas de clôture future : {diag.get('pas_de_cloture_future', 0)}",
+        f"  ➜ SIGNAUX PRODUITS : {diag.get('signaux', 0)}",
+    ]
+
     if not tous_signaux:
-        return ("❌ Aucun signal produit sur la période.\n"
-                "Le pipeline est probablement trop strict (SEUIL_OBSERVATION/SEUIL_POTENTIEL "
-                "trop hauts, ou trop peu de stratégies compatibles avec les régimes rencontrés).")
+        if diag.get("bougies_m15", 0) == 0 and diag.get("bougies_m5", 0) == 0:
+            explication = ("\n❌ 0 bougie téléchargée pour TOUTES les paires testées. Le problème n'est pas "
+                            "les seuils — c'est le TÉLÉCHARGEMENT des données Deriv qui échoue "
+                            "(symbole mal préfixé, app_id bloqué, ou le serveur Render n'arrive pas à "
+                            "joindre wss://ws.derivws.com). Vérifie dans Render > Logs si tu vois des "
+                            "erreurs de connexion WebSocket pendant le backtest.")
+        elif diag.get("barres_examinees", 0) == 0:
+            explication = ("\n❌ Aucune barre dans la fenêtre de temps demandée n'a passé le filtre horaire "
+                            "(hors_session). Essaie avec plus de jours (--days 30) ou avec des cryptos "
+                            "(BTCUSD, actives 7j/7).")
+        elif diag.get("regime_chaotic", 0) == diag.get("barres_examinees", 0) - diag.get("hors_session", 0) - diag.get("cooldown_scanner", 0):
+            explication = "\n❌ Quasi 100% des barres sont classées CHAOTIC — regarde le seuil chaos dans detecter_regime_marche."
+        elif diag.get("aucun_candidat", 0) > 0:
+            explication = ("\n❌ Le régime passe, mais aucune stratégie ne produit de candidat "
+                            f"(SEUIL_MIN_STRATEGIE trop haut encore, ou bug dans une des fonctions "
+                            f"analyser_.../strategie_...). Baisse SEUIL_MIN_STRATEGIE davantage (essaie 10).")
+        elif diag.get("bande_trop_basse", 0) > 0:
+            explication = "\n❌ Des candidats existent mais la bande de confluence reste sous POTENTIEL — baisse encore SEUIL_OBSERVATION."
+        else:
+            explication = "\n❌ Aucun signal, cause non identifiée par ce diagnostic — regarde les compteurs ci-dessus ligne par ligne."
+        return "\n".join(lignes_diag) + explication
 
     df = pd.DataFrame(tous_signaux)
     par_jour = df.groupby("date").size()
@@ -221,7 +282,8 @@ def _rapport_texte(tous_signaux, jours, limite_cible):
     seuil_equilibre = round(100 / (1 + payout), 2)
     moyenne = round(jours_couverts.mean(), 1)
 
-    lignes = [
+    lignes = lignes_diag + [
+        "",
         "📊 RÉSULTAT DU BACKTEST",
         f"Période : {jours}j ({df['date'].min()} → {df['date'].max()})",
         f"Signaux totaux : {total}",
@@ -241,7 +303,7 @@ def _rapport_texte(tous_signaux, jours, limite_cible):
     ]
 
     if moyenne < limite_cible * 0.5:
-        lignes.append(f"\n💡 Bien SOUS ta cible de {limite_cible}/j → baisse SEUIL_OBSERVATION/SEUIL_POTENTIEL.")
+        lignes.append(f"\n💡 Bien SOUS ta cible de {limite_cible}/j → baisse SEUIL_OBSERVATION/SEUIL_MIN_STRATEGIE.")
     elif moyenne > limite_cible * 1.3:
         lignes.append(f"\n💡 Dépasse ta cible de {limite_cible}/j → remonte les seuils ou force le filtre QUALIFIÉ.")
     else:
@@ -258,11 +320,13 @@ def lancer_backtest_texte(pairs_str, jours, mode, limite_cible=15):
     modes = ["STANDARD", "SCALP"] if mode.upper() == "BOTH" else [mode.upper()]
 
     print(f"[BACKTEST] Démarrage — paires={paires} jours={jours} modes={modes}", flush=True)
-    tous_signaux = []
+    tous_signaux, tous_compteurs = [], []
     for paire in paires:
         for m in modes:
-            tous_signaux += backtester_paire(paire, jours, m)
+            signaux, compteurs = backtester_paire(paire, jours, m)
+            tous_signaux += signaux
+            tous_compteurs.append(compteurs)
 
-    rapport = _rapport_texte(tous_signaux, jours, limite_cible)
+    rapport = _rapport_texte(tous_signaux, tous_compteurs, jours, limite_cible)
     print("[BACKTEST] Terminé.\n" + rapport, flush=True)
     return rapport
