@@ -1443,20 +1443,24 @@ def commande_backtest(message):
     jours = int(parts[2]) if len(parts) > 2 else 14
     mode = parts[3] if len(parts) > 3 else "STANDARD"
     limite = int(parts[4]) if len(parts) > 4 else LIMITE_SIGNAUX_JOUR
+    # ✅ 6e argument optionnel : "IMPULSION" pour tester UNIQUEMENT la
+    # stratégie Prime Impulse + Retest, isolée des 8 stratégies existantes.
+    strategie_isolee = parts[5].upper() if len(parts) > 5 else None
 
     bot.send_message(
         message.chat.id,
-        f"⏳ **Backtest lancé** — {pairs} · {jours}j · {mode}\n"
+        f"⏳ **Backtest lancé** — {pairs} · {jours}j · {mode}"
+        + (f" · stratégie isolée : {strategie_isolee}" if strategie_isolee else "") + "\n"
         f"Ça peut prendre plusieurs minutes. Suis la progression dans Render > Logs, "
         f"ou attends le résumé ici.",
         parse_mode="Markdown",
     )
-    print(f"[BACKTEST] Commande reçue de {message.chat.id} : {pairs} / {jours}j / {mode}", flush=True)
+    print(f"[BACKTEST] Commande reçue de {message.chat.id} : {pairs} / {jours}j / {mode} / isolee={strategie_isolee}", flush=True)
 
     def tache():
         try:
             import backtest_engine  # import différé pour éviter tout souci d'import circulaire
-            rapport = backtest_engine.lancer_backtest_texte(pairs, jours, mode, limite)
+            rapport = backtest_engine.lancer_backtest_texte(pairs, jours, mode, limite, strategie_isolee=strategie_isolee)
         except Exception as e:
             rapport = f"❌ Erreur pendant le backtest : {e}"
             print(f"[BACKTEST] ERREUR : {e}", flush=True)
