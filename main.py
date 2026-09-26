@@ -131,17 +131,19 @@ BAREME_CONFLUENCE = {
     "setup_max": 15,
     "contexte_defavorable": -30,
 }
-SEUIL_NO_TRADE = 55
-SEUIL_OBSERVATION = 75
-SEUIL_POTENTIEL = 85
-# < 55 NO_TRADE | 55-74 OBSERVATION (jamais envoyé) | 75-84 POTENTIEL | 85+ QUALIFIÉ
+SEUIL_NO_TRADE = 60
+SEUIL_OBSERVATION = 80
+SEUIL_POTENTIEL = 90
+# < 60 NO_TRADE | 60-79 OBSERVATION (jamais envoyé) | 80-89 POTENTIEL | 90+ QUALIFIÉ
 
-# ✅ Remonté (25 → 55) après le backtest du 25/09 : à 25, le pipeline
-# produisait 73.8 signaux/jour en moyenne pour un win rate de 49.4%
-# (sous le seuil de rentabilité de 55.56% @ payout 80%, donc expectancy
-# négative). Remonter ce seuil réduit le volume ET devrait améliorer la
-# qualité moyenne des setups retenus — à re-vérifier avec /backtest.
-SEUIL_MIN_STRATEGIE = 55
+# ✅ Remonté (55 → 70) après le backtest du 25/09 : à 55, 80% des barres
+# éligibles produisaient encore un candidat (716 signaux/14j = 59.7/j),
+# et le Confluence Engine ne filtrait presque rien derrière (seulement 4
+# rejets sur 720) car son propre seuil "momentum_ok" (score>=55) devenait
+# redondant avec SEUIL_MIN_STRATEGIE une fois les deux égaux. Le vrai
+# levier de volume est ici, pas SEUIL_OBSERVATION — remonté fort (55→70)
+# pour viser la cible de 15/j, à re-vérifier avec /backtest.
+SEUIL_MIN_STRATEGIE = 70
 # < 55 NO_TRADE | 55-69 OBSERVATION (jamais envoyé) | 70-79 POTENTIEL | 80+ QUALIFIÉ
 
 # ==========================================
