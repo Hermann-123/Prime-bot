@@ -15,6 +15,7 @@ import time
 import datetime
 import websocket
 import pandas as pd
+import ta
 
 # ✅ Le nom du fichier principal du bot varie selon comment tu l'as déployé
 # (main.py, bot.py, bot_v19_updated.py...). On essaie les noms courants
@@ -51,6 +52,7 @@ strategie_breakout_retest = _module_bot.strategie_breakout_retest
 strategie_momentum_expansion = _module_bot.strategie_momentum_expansion
 strategie_range_reversion = _module_bot.strategie_range_reversion
 moteur_confluence = _module_bot.moteur_confluence
+calculer_donchian = _module_bot.calculer_donchian
 
 DERIV_ENDPOINTS = [
     "wss://ws.derivws.com/websockets/v3?app_id=1089",
@@ -160,7 +162,100 @@ def _vers_df(candles):
     } for c in candles])
 
 
-def backtester_paire(symbole, jours, mode="STANDARD"):
+def detecter_bougie_impulsion(df5, lookback=10):
+    """Détecte une vraie bougie d'impulsion sur la dernière bougie clôturée :
+    corps nettement plus grand que la moyenne récente, et clôture proche
+    de l'extrémité (peu de mèche du côté du mouvement)."""
+    if len(df5) < lookback + 3:
+        return None
+    try:
+        corps = (df5['close'] - df5['open']).abs()
+        corps_moy = corps.iloc[-(lookback + 2):-2].mean()
+        last = df5.iloc[-2]
+        corps_last = abs(last['close'] - last['open'])
+        if corps_moy <= 0 or corps_last < corps_moy * 1.2:
+            return None
+        direction = "CALL" if last['close'] > last['open'] else "PUT"
+        rng = last['high'] - last['low']
+        if rng <= 0:
+            return None
+        cloture_extreme = ((last['close'] - last['low']) / rng) if direction == "CALL" else ((last['high'] - last['close']) / rng)
+        return {"direction": direction, "ratio_corps": corps_last / corps_moy, "cloture_extreme": cloture_extreme}
+    except Exception:
+        return None
+
+
+def _distance_obstacle_ok(df15, direction, px, atr_val, marge_atr=0.8):
+    """Veto unique et simple : si un swing proche (dans le sens du trade)
+    est à une distance inférieure à marge_atr x ATR, on n'entre pas juste
+    avant un mur. Un seul filtre dur, pas huit — pour ne pas reproduire
+    l'effondrement d'échantillon vu sur les seuils du bot principal."""
+    try:
+        lookback = df15.iloc[-30:-2]
+        if direction == "CALL":
+            distance = lookback['high'].max() - px
+        else:
+            distance = px - lookback['low'].min()
+        if atr_val <= 0:
+            return True
+        return distance >= atr_val * marge_atr
+    except Exception:
+        return True  # en cas de doute (données insuffisantes), on ne bloque pas
+
+
+def strategie_impulsion_retest(df15, df5, regime):
+    """✅ 'Prime Impulse + Retest' — adaptation scorée (additive) d'une
+    proposition externe. Verrouillée sur régime TREND/BREAKOUT comme les
+    autres stratégies verrouillées. Un seul filtre dur (obstacle proche),
+    tout le reste contribue au score plutôt que d'exiger chaque condition
+    en cascade — pour rester testable sur un échantillon suffisant."""
+    if regime["regime"] not in ("TREND", "BREAKOUT"):
+        return None
+    try:
+        ema20 = df15['close'].ewm(span=20, adjust=False).mean()
+        ema50 = df15['close'].ewm(span=50, adjust=False).mean()
+        direction_biais = "CALL" if ema20.iloc[-2] > ema50.iloc[-2] else "PUT"
+
+        impulsion = detecter_bougie_impulsion(df5)
+        if not impulsion or impulsion["direction"] != direction_biais:
+            return None  # pas d'impulsion cohérente avec le biais M15 -> rien ici
+
+        direction = direction_biais
+        upper, lower = calculer_donchian(df15, 20)
+        px = float(df15['close'].iloc[-2])
+
+        if direction == "CALL":
+            niveau = float(upper.iloc[-6])
+            cassure = float(df15['close'].iloc[-5]) > niveau
+        else:
+            niveau = float(lower.iloc[-6])
+            cassure = float(df15['close'].iloc[-5]) < niveau
+        dist_retest = abs(px - niveau) / px if px else 1
+
+        atr_val = float(ta.volatility.AverageTrueRange(df15['high'], df15['low'], df15['close'], window=14).average_true_range().iloc[-2])
+        if not _distance_obstacle_ok(df15, direction, px, atr_val):
+            return None  # le seul veto dur : mur trop proche pour le mouvement attendu
+
+        rsi_val = float(ta.momentum.RSIIndicator(df15['close'], window=14).rsi().iloc[-2])
+        macd_hist = float(ta.trend.MACD(df15['close']).macd_diff().iloc[-2])
+
+        score, raisons = 0.0, []
+        if cassure: score += 20; raisons.append("Cassure structurelle confirmée")
+        if dist_retest < 0.006: score += 20; raisons.append(f"Retest proche du niveau ({dist_retest*100:.2f}%)")
+        score += min(20, impulsion["ratio_corps"] * 10); raisons.append(f"Bougie d'impulsion (x{impulsion['ratio_corps']:.1f})")
+        if impulsion["cloture_extreme"] > 0.65: score += 10; raisons.append("Clôture proche de l'extrême")
+        if (direction == "CALL" and rsi_val > 50) or (direction == "PUT" and rsi_val < 50): score += 10; raisons.append(f"RSI cohérent ({rsi_val:.1f})")
+        if (direction == "CALL" and macd_hist > 0) or (direction == "PUT" and macd_hist < 0): score += 10; raisons.append("MACD histogram cohérent")
+        if 0.8 <= regime["atr_pct"] <= 1.6: score += 10; raisons.append(f"Volatilité exploitable (x{regime['atr_pct']})")
+
+        if score < 45: return None
+        return {"nom": "IMPULSION_RETEST", "label": "Prime Impulse + Retest", "direction": direction,
+                "score": round(min(100, score), 1), "raisons": raisons}
+    except Exception:
+        return None
+
+
+def backtester_paire(symbole, jours, mode="STANDARD", strategie_isolee=None):
     duree_option = 60 if mode == "SCALP" else 300
     compteurs = {
         "bougies_m15": 0, "bougies_m5": 0,
@@ -210,18 +305,24 @@ def backtester_paire(symbole, jours, mode="STANDARD"):
             continue
 
         candidats = []
-        for f in (analyser_aroon_rsi, analyser_adx_stc, analyser_cci_macd, analyser_donchian_cci):
-            r = f(d15)
+        if strategie_isolee == "IMPULSION":
+            # ✅ Mode isolé : on ne teste QUE Prime Impulse + Retest, pour
+            # obtenir des statistiques propres, non mélangées aux 8 autres.
+            r = strategie_impulsion_retest(d15, d5, regime)
             if r: candidats.append(r)
-        if regime["regime"] == "TREND":
-            for r in (strategie_trend_pullback(d15, d5, regime), strategie_momentum_expansion(d15, regime)):
+        else:
+            for f in (analyser_aroon_rsi, analyser_adx_stc, analyser_cci_macd, analyser_donchian_cci):
+                r = f(d15)
                 if r: candidats.append(r)
-        elif regime["regime"] == "BREAKOUT":
-            for r in (strategie_breakout_retest(d15, d5, regime), strategie_momentum_expansion(d15, regime)):
+            if regime["regime"] == "TREND":
+                for r in (strategie_trend_pullback(d15, d5, regime), strategie_momentum_expansion(d15, regime)):
+                    if r: candidats.append(r)
+            elif regime["regime"] == "BREAKOUT":
+                for r in (strategie_breakout_retest(d15, d5, regime), strategie_momentum_expansion(d15, regime)):
+                    if r: candidats.append(r)
+            elif regime["regime"] == "RANGE":
+                r = strategie_range_reversion(d15, regime)
                 if r: candidats.append(r)
-        elif regime["regime"] == "RANGE":
-            r = strategie_range_reversion(d15, regime)
-            if r: candidats.append(r)
 
         if not candidats:
             compteurs["aucun_candidat"] += 1
@@ -333,6 +434,12 @@ def _rapport_texte(tous_signaux, tous_compteurs, jours, limite_cible):
         "",
         "Par paire :",
         df["symbole"].value_counts().to_string(),
+        "",
+        "Par stratégie :",
+        df["strategie"].value_counts().to_string(),
+        "",
+        "Win rate par stratégie :",
+        (df.groupby("strategie")["gagne"].mean() * 100).round(1).to_string(),
     ]
 
     if moyenne < limite_cible * 0.5:
@@ -345,18 +452,20 @@ def _rapport_texte(tous_signaux, tous_compteurs, jours, limite_cible):
     return "\n".join(lignes)
 
 
-def lancer_backtest_texte(pairs_str, jours, mode, limite_cible=15):
+def lancer_backtest_texte(pairs_str, jours, mode, limite_cible=15, strategie_isolee=None):
     """Point d'entrée appelé par la commande /backtest du bot. Imprime la
     progression (visible dans Render > Logs) et retourne le rapport final
-    en texte (à envoyer sur Telegram)."""
+    en texte (à envoyer sur Telegram). strategie_isolee="IMPULSION" teste
+    UNIQUEMENT la stratégie Prime Impulse + Retest, séparément des 8
+    stratégies existantes."""
     paires = (CRYPTO_PAIRS + FOREX_PAIRS) if pairs_str.upper() == "ALL" else [p.strip().upper() for p in pairs_str.split(",")]
     modes = ["STANDARD", "SCALP"] if mode.upper() == "BOTH" else [mode.upper()]
 
-    print(f"[BACKTEST] Démarrage — paires={paires} jours={jours} modes={modes}", flush=True)
+    print(f"[BACKTEST] Démarrage — paires={paires} jours={jours} modes={modes} strategie_isolee={strategie_isolee}", flush=True)
     tous_signaux, tous_compteurs = [], []
     for paire in paires:
         for m in modes:
-            signaux, compteurs = backtester_paire(paire, jours, m)
+            signaux, compteurs = backtester_paire(paire, jours, m, strategie_isolee=strategie_isolee)
             tous_signaux += signaux
             tous_compteurs.append(compteurs)
             time.sleep(2.0)  # ✅ pause entre chaque paire/mode pour rester loin de tout seuil d'abus
