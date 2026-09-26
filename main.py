@@ -136,14 +136,13 @@ SEUIL_OBSERVATION = 80
 SEUIL_POTENTIEL = 90
 # < 60 NO_TRADE | 60-79 OBSERVATION (jamais envoyé) | 80-89 POTENTIEL | 90+ QUALIFIÉ
 
-# ✅ Remonté (55 → 70) après le backtest du 25/09 : à 55, 80% des barres
-# éligibles produisaient encore un candidat (716 signaux/14j = 59.7/j),
-# et le Confluence Engine ne filtrait presque rien derrière (seulement 4
-# rejets sur 720) car son propre seuil "momentum_ok" (score>=55) devenait
-# redondant avec SEUIL_MIN_STRATEGIE une fois les deux égaux. Le vrai
-# levier de volume est ici, pas SEUIL_OBSERVATION — remonté fort (55→70)
-# pour viser la cible de 15/j, à re-vérifier avec /backtest.
-SEUIL_MIN_STRATEGIE = 70
+# ✅ Remonté (70 → 82) après le backtest du 25/09 : 55→70 avait déjà fait
+# baisser le volume de 59.7 à 43.2/j ET amélioré le win rate de 51.7% à
+# 53.1-53.4% — tendance claire dans le bon sens, mais encore loin de la
+# cible de 15/j et sous le seuil de rentabilité (55.56% @ payout 80%).
+# On pousse plus fort, en anticipant un effet non-linéaire à l'approche
+# du haut de l'échelle de score — à re-vérifier avec /backtest.
+SEUIL_MIN_STRATEGIE = 82
 # < 55 NO_TRADE | 55-69 OBSERVATION (jamais envoyé) | 70-79 POTENTIEL | 80+ QUALIFIÉ
 
 # ==========================================
