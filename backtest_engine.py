@@ -312,10 +312,26 @@ def backtester_paire(symbole, jours, mode="STANDARD", strategie_isolee=None):
             continue
 
         candidats = []
-        if strategie_isolee == "IMPULSION":
-            # ✅ Mode isolé : on ne teste QUE Prime Impulse + Retest, pour
-            # obtenir des statistiques propres, non mélangées aux 8 autres.
-            r = strategie_impulsion_retest(d15, d5, regime)
+        if strategie_isolee:
+            # ✅ Mode isolé : ne teste QU'UNE stratégie nommée, pour obtenir
+            # des statistiques propres, non mélangées aux autres (pas de
+            # biais de sélection par "max score" entre plusieurs candidats).
+            fonctions_isolables = {
+                "IMPULSION": lambda: strategie_impulsion_retest(d15, d5, regime),
+                "BREAKOUT_RETEST": lambda: strategie_breakout_retest(d15, d5, regime),
+                "RANGE_REVERSION": lambda: strategie_range_reversion(d15, regime),
+                "MOMENTUM_EXPANSION": lambda: strategie_momentum_expansion(d15, regime),
+                "TREND_PULLBACK": lambda: strategie_trend_pullback(d15, d5, regime),
+                "AROON_RSI": lambda: analyser_aroon_rsi(d15),
+                "ADX_STC": lambda: analyser_adx_stc(d15),
+                "CCI_MACD": lambda: analyser_cci_macd(d15),
+                "DONCHIAN_CCI": lambda: analyser_donchian_cci(d15),
+            }
+            fn = fonctions_isolables.get(strategie_isolee)
+            if fn is None:
+                raise ValueError(f"Stratégie isolée inconnue : {strategie_isolee}. "
+                                  f"Options : {', '.join(fonctions_isolables.keys())}")
+            r = fn()
             if r: candidats.append(r)
         else:
             for f in (analyser_aroon_rsi, analyser_adx_stc, analyser_cci_macd, analyser_donchian_cci):
