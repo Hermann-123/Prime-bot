@@ -290,8 +290,15 @@ def backtester_paire(symbole, jours, mode="STANDARD", strategie_isolee=None):
             compteurs["cooldown_scanner"] += 1
             continue
 
-        d15 = df15.iloc[: i + 1].reset_index(drop=True)
-        d5 = df5[df5["epoch"] <= epoch_decision].reset_index(drop=True)
+        # ✅ Fenêtre glissante bornée (comme le bot en direct, qui ne voit
+        # jamais que ses 250 dernières bougies) — recalculer les
+        # indicateurs sur tout l'historique depuis le début à CHAQUE
+        # bougie testée coûtait O(n²) et rendait les gros backtests
+        # (45j × ALL × BOTH) extrêmement lents, voire assez longs pour
+        # risquer une mise en veille Render en plein calcul.
+        d15 = df15.iloc[max(0, i + 1 - 260): i + 1].reset_index(drop=True)
+        idx_m5 = df5["epoch"].searchsorted(epoch_decision, side="right")
+        d5 = df5.iloc[max(0, idx_m5 - 260): idx_m5].reset_index(drop=True)
         if len(d5) < 30:
             compteurs["data_m5_insuffisante"] += 1
             continue
@@ -333,12 +340,12 @@ def backtester_paire(symbole, jours, mode="STANDARD", strategie_isolee=None):
             compteurs["bande_trop_basse"] += 1
             continue
 
-        futurs = df5[df5["epoch"] >= epoch_decision + duree_option]
-        if futurs.empty:
+        idx_futur = df5["epoch"].searchsorted(epoch_decision + duree_option, side="left")
+        if idx_futur >= len(df5):
             compteurs["pas_de_cloture_future"] += 1
             continue
         prix_entree = float(d5["close"].iloc[-1])
-        prix_sortie = float(futurs["close"].iloc[0])
+        prix_sortie = float(df5["close"].iloc[idx_futur])
         gagne = (setup["direction"] == "CALL" and prix_sortie > prix_entree) or \
                 (setup["direction"] == "PUT" and prix_sortie < prix_entree)
 
