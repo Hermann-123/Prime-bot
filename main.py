@@ -131,19 +131,17 @@ BAREME_CONFLUENCE = {
     "setup_max": 15,
     "contexte_defavorable": -30,
 }
-SEUIL_NO_TRADE = 40
-SEUIL_OBSERVATION = 55
-SEUIL_POTENTIEL = 80
-# < 40 NO_TRADE | 40-54 OBSERVATION (jamais envoyé) | 55-79 POTENTIEL | 80+ QUALIFIÉ
+SEUIL_NO_TRADE = 55
+SEUIL_OBSERVATION = 75
+SEUIL_POTENTIEL = 85
+# < 55 NO_TRADE | 55-74 OBSERVATION (jamais envoyé) | 75-84 POTENTIEL | 85+ QUALIFIÉ
 
-# ✅ NOUVEAU — seuil minimum qu'une stratégie individuelle doit atteindre
-# (sur 100) pour même être proposée au Confluence Engine. C'était le vrai
-# goulot d'étranglement : à 45, presque aucune stratégie ne l'atteignait,
-# donc baisser SEUIL_OBSERVATION seul n'avait aucun effet (le Confluence
-# Engine n'était jamais consulté, faute de candidat). Baissé à 25 par
-# défaut — remonte-le si tu reçois trop de signaux de mauvaise qualité,
-# baisse-le encore (ex. 15) si tu es toujours à 0.
-SEUIL_MIN_STRATEGIE = 25
+# ✅ Remonté (25 → 55) après le backtest du 25/09 : à 25, le pipeline
+# produisait 73.8 signaux/jour en moyenne pour un win rate de 49.4%
+# (sous le seuil de rentabilité de 55.56% @ payout 80%, donc expectancy
+# négative). Remonter ce seuil réduit le volume ET devrait améliorer la
+# qualité moyenne des setups retenus — à re-vérifier avec /backtest.
+SEUIL_MIN_STRATEGIE = 55
 # < 55 NO_TRADE | 55-69 OBSERVATION (jamais envoyé) | 70-79 POTENTIEL | 80+ QUALIFIÉ
 
 # ==========================================
