@@ -255,8 +255,52 @@ def strategie_impulsion_retest(df15, df5, regime):
         return None
 
 
-def backtester_paire(symbole, jours, mode="STANDARD", strategie_isolee=None):
-    duree_option = 60 if mode == "SCALP" else 300
+def strategie_range_bollinger(df15, regime):
+    """✅ Variante de Range Reversion utilisant les Bandes de Bollinger
+    (SMA20 ± 2 écarts-types) au lieu de Donchian+CCI — c'est la méthode
+    que la littérature sur le mean-reversion FX intraday documente
+    réellement (RSI + Bollinger pour repérer les extrêmes de range).
+    Verrouillée sur régime RANGE, comme l'originale."""
+    if regime["regime"] != "RANGE":
+        return None
+    try:
+        sma20 = df15['close'].rolling(20).mean()
+        std20 = df15['close'].rolling(20).std()
+        upper, lower = sma20 + 2 * std20, sma20 - 2 * std20
+        px = float(df15['close'].iloc[-2])
+        rsi = float(ta.momentum.RSIIndicator(df15['close'], window=14).rsi().iloc[-2])
+
+        upper_val, lower_val = float(upper.iloc[-2]), float(lower.iloc[-2])
+        largeur = upper_val - lower_val if (upper_val - lower_val) > 0 else 1e-9
+        position_pct = (px - lower_val) / largeur
+
+        if position_pct < 0.15 and rsi < 35:
+            direction = "CALL"
+        elif position_pct > 0.85 and rsi > 65:
+            direction = "PUT"
+        else:
+            return None
+
+        score, raisons = 0.0, []
+        proximite = (1 - position_pct) if direction == "CALL" else position_pct
+        score += proximite * 40
+        raisons.append(f"Extrême Bollinger ({position_pct*100:.0f}%)")
+        if (direction == "CALL" and rsi < 30) or (direction == "PUT" and rsi > 70):
+            score += 25; raisons.append(f"RSI extrême ({rsi:.1f})")
+        else:
+            score += 12
+        if regime["adx"] < 18: score += 20; raisons.append("Range confirmé (ADX faible)")
+        if regime["largeur_canal_pct"] < 1.2: score += 15
+
+        if score < 45: return None
+        return {"nom": "RANGE_BOLLINGER", "label": "Range Reversion (Bollinger)", "direction": direction,
+                "score": round(min(100, score), 1), "raisons": raisons}
+    except Exception:
+        return None
+
+
+def backtester_paire(symbole, jours, mode="STANDARD", strategie_isolee=None, duree_override=None):
+    duree_option = duree_override if duree_override else (60 if mode == "SCALP" else 300)
     compteurs = {
         "bougies_m15": 0, "bougies_m5": 0,
         "barres_examinees": 0, "hors_session": 0, "cooldown_scanner": 0,
@@ -320,6 +364,7 @@ def backtester_paire(symbole, jours, mode="STANDARD", strategie_isolee=None):
                 "IMPULSION": lambda: strategie_impulsion_retest(d15, d5, regime),
                 "BREAKOUT_RETEST": lambda: strategie_breakout_retest(d15, d5, regime),
                 "RANGE_REVERSION": lambda: strategie_range_reversion(d15, regime),
+                "RANGE_BOLLINGER": lambda: strategie_range_bollinger(d15, regime),
                 "MOMENTUM_EXPANSION": lambda: strategie_momentum_expansion(d15, regime),
                 "TREND_PULLBACK": lambda: strategie_trend_pullback(d15, d5, regime),
                 "AROON_RSI": lambda: analyser_aroon_rsi(d15),
@@ -475,24 +520,28 @@ def _rapport_texte(tous_signaux, tous_compteurs, jours, limite_cible):
     return "\n".join(lignes)
 
 
-def lancer_backtest_texte(pairs_str, jours, mode, limite_cible=15, strategie_isolee=None):
+def lancer_backtest_texte(pairs_str, jours, mode, limite_cible=15, strategie_isolee=None, duree_override=None):
     """Point d'entrée appelé par la commande /backtest du bot. Imprime la
     progression (visible dans Render > Logs) et retourne le rapport final
     en texte (à envoyer sur Telegram). strategie_isolee="IMPULSION" teste
     UNIQUEMENT la stratégie Prime Impulse + Retest, séparément des 8
-    stratégies existantes."""
+    stratégies existantes. duree_override (en secondes) remplace la durée
+    d'expiration normale du mode, pour tester des expirations plus
+    longues (15/30/60 min) sans changer le mode STANDARD/SCALP."""
     paires = (CRYPTO_PAIRS + FOREX_PAIRS) if pairs_str.upper() == "ALL" else [p.strip().upper() for p in pairs_str.split(",")]
     modes = ["STANDARD", "SCALP"] if mode.upper() == "BOTH" else [mode.upper()]
 
-    print(f"[BACKTEST] Démarrage — paires={paires} jours={jours} modes={modes} strategie_isolee={strategie_isolee}", flush=True)
+    print(f"[BACKTEST] Démarrage — paires={paires} jours={jours} modes={modes} strategie_isolee={strategie_isolee} duree_override={duree_override}", flush=True)
     tous_signaux, tous_compteurs = [], []
     for paire in paires:
         for m in modes:
-            signaux, compteurs = backtester_paire(paire, jours, m, strategie_isolee=strategie_isolee)
+            signaux, compteurs = backtester_paire(paire, jours, m, strategie_isolee=strategie_isolee, duree_override=duree_override)
             tous_signaux += signaux
             tous_compteurs.append(compteurs)
             time.sleep(2.0)  # ✅ pause entre chaque paire/mode pour rester loin de tout seuil d'abus
 
     rapport = _rapport_texte(tous_signaux, tous_compteurs, jours, limite_cible)
+    if duree_override:
+        rapport = f"⏳ Durée d'expiration testée : {duree_override}s ({duree_override/60:.0f} min)\n\n" + rapport
     print("[BACKTEST] Terminé.\n" + rapport, flush=True)
     return rapport
