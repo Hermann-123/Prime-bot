@@ -1452,12 +1452,16 @@ def commande_backtest(message):
     # des expirations plus longues (900=15min, 1800=30min, 3600=1h) sans
     # changer le mode STANDARD/SCALP habituel.
     duree_override = int(parts[6]) if len(parts) > 6 else None
+    # ✅ 8e argument optionnel : "INVERSE" pour tester chaque signal dans
+    # le sens opposé (fade/contrarian).
+    inverser = len(parts) > 7 and parts[7].upper() == "INVERSE"
 
     bot.send_message(
         message.chat.id,
         f"⏳ **Backtest lancé** — {pairs} · {jours}j · {mode}"
         + (f" · stratégie isolée : {strategie_isolee}" if strategie_isolee else "")
-        + (f" · expiration : {duree_override}s" if duree_override else "") + "\n"
+        + (f" · expiration : {duree_override}s" if duree_override else "")
+        + (" · MODE INVERSÉ" if inverser else "") + "\n"
         f"Ça peut prendre plusieurs minutes. Suis la progression dans Render > Logs, "
         f"ou attends le résumé ici.",
         parse_mode="Markdown",
@@ -1467,7 +1471,7 @@ def commande_backtest(message):
     def tache():
         try:
             import backtest_engine  # import différé pour éviter tout souci d'import circulaire
-            rapport = backtest_engine.lancer_backtest_texte(pairs, jours, mode, limite, strategie_isolee=strategie_isolee, duree_override=duree_override)
+            rapport = backtest_engine.lancer_backtest_texte(pairs, jours, mode, limite, strategie_isolee=strategie_isolee, duree_override=duree_override, inverser=inverser)
         except Exception as e:
             rapport = f"❌ Erreur pendant le backtest : {e}"
             print(f"[BACKTEST] ERREUR : {e}", flush=True)
