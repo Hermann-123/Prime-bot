@@ -1446,6 +1446,8 @@ def commande_backtest(message):
     # ✅ 6e argument optionnel : nom d'une stratégie pour la tester ISOLÉE
     # des autres (ex. "IMPULSION", "BREAKOUT_RETEST", "RANGE_BOLLINGER"...).
     strategie_isolee = parts[5].upper() if len(parts) > 5 else None
+    if strategie_isolee in ("-", "TOUS", "TOUTES", "NONE", "ALL", "MIX", "AUCUNE"):
+        strategie_isolee = None  # mot-clé pour "pipeline complet, pas d'isolement"
     # ✅ 7e argument optionnel : durée d'expiration en secondes, pour tester
     # des expirations plus longues (900=15min, 1800=30min, 3600=1h) sans
     # changer le mode STANDARD/SCALP habituel.
