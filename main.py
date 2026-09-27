@@ -1443,24 +1443,29 @@ def commande_backtest(message):
     jours = int(parts[2]) if len(parts) > 2 else 14
     mode = parts[3] if len(parts) > 3 else "STANDARD"
     limite = int(parts[4]) if len(parts) > 4 else LIMITE_SIGNAUX_JOUR
-    # ✅ 6e argument optionnel : "IMPULSION" pour tester UNIQUEMENT la
-    # stratégie Prime Impulse + Retest, isolée des 8 stratégies existantes.
+    # ✅ 6e argument optionnel : nom d'une stratégie pour la tester ISOLÉE
+    # des autres (ex. "IMPULSION", "BREAKOUT_RETEST", "RANGE_BOLLINGER"...).
     strategie_isolee = parts[5].upper() if len(parts) > 5 else None
+    # ✅ 7e argument optionnel : durée d'expiration en secondes, pour tester
+    # des expirations plus longues (900=15min, 1800=30min, 3600=1h) sans
+    # changer le mode STANDARD/SCALP habituel.
+    duree_override = int(parts[6]) if len(parts) > 6 else None
 
     bot.send_message(
         message.chat.id,
         f"⏳ **Backtest lancé** — {pairs} · {jours}j · {mode}"
-        + (f" · stratégie isolée : {strategie_isolee}" if strategie_isolee else "") + "\n"
+        + (f" · stratégie isolée : {strategie_isolee}" if strategie_isolee else "")
+        + (f" · expiration : {duree_override}s" if duree_override else "") + "\n"
         f"Ça peut prendre plusieurs minutes. Suis la progression dans Render > Logs, "
         f"ou attends le résumé ici.",
         parse_mode="Markdown",
     )
-    print(f"[BACKTEST] Commande reçue de {message.chat.id} : {pairs} / {jours}j / {mode} / isolee={strategie_isolee}", flush=True)
+    print(f"[BACKTEST] Commande reçue de {message.chat.id} : {pairs} / {jours}j / {mode} / isolee={strategie_isolee} / duree={duree_override}", flush=True)
 
     def tache():
         try:
             import backtest_engine  # import différé pour éviter tout souci d'import circulaire
-            rapport = backtest_engine.lancer_backtest_texte(pairs, jours, mode, limite, strategie_isolee=strategie_isolee)
+            rapport = backtest_engine.lancer_backtest_texte(pairs, jours, mode, limite, strategie_isolee=strategie_isolee, duree_override=duree_override)
         except Exception as e:
             rapport = f"❌ Erreur pendant le backtest : {e}"
             print(f"[BACKTEST] ERREUR : {e}", flush=True)
