@@ -299,7 +299,7 @@ def strategie_range_bollinger(df15, regime):
         return None
 
 
-def backtester_paire(symbole, jours, mode="STANDARD", strategie_isolee=None, duree_override=None):
+def backtester_paire(symbole, jours, mode="STANDARD", strategie_isolee=None, duree_override=None, inverser=False):
     duree_option = duree_override if duree_override else (60 if mode == "SCALP" else 300)
     compteurs = {
         "bougies_m15": 0, "bougies_m5": 0,
@@ -407,14 +407,17 @@ def backtester_paire(symbole, jours, mode="STANDARD", strategie_isolee=None, dur
             continue
         prix_entree = float(d5["close"].iloc[-1])
         prix_sortie = float(df5["close"].iloc[idx_futur])
-        gagne = (setup["direction"] == "CALL" and prix_sortie > prix_entree) or \
-                (setup["direction"] == "PUT" and prix_sortie < prix_entree)
+        direction_effective = setup["direction"]
+        if inverser:
+            direction_effective = "PUT" if setup["direction"] == "CALL" else "CALL"
+        gagne = (direction_effective == "CALL" and prix_sortie > prix_entree) or \
+                (direction_effective == "PUT" and prix_sortie < prix_entree)
 
         derniere_alerte = epoch_decision
         dt = datetime.datetime.utcfromtimestamp(epoch_decision)
         signaux.append({
             "symbole": symbole, "date": dt.strftime("%Y-%m-%d"), "regime": regime["regime"],
-            "strategie": setup["label"], "bande": bande, "gagne": gagne,
+            "strategie": setup["label"] + (" (inversé)" if inverser else ""), "bande": bande, "gagne": gagne,
         })
         compteurs["signaux"] += 1
 
@@ -520,27 +523,32 @@ def _rapport_texte(tous_signaux, tous_compteurs, jours, limite_cible):
     return "\n".join(lignes)
 
 
-def lancer_backtest_texte(pairs_str, jours, mode, limite_cible=15, strategie_isolee=None, duree_override=None):
+def lancer_backtest_texte(pairs_str, jours, mode, limite_cible=15, strategie_isolee=None, duree_override=None, inverser=False):
     """Point d'entrée appelé par la commande /backtest du bot. Imprime la
     progression (visible dans Render > Logs) et retourne le rapport final
     en texte (à envoyer sur Telegram). strategie_isolee="IMPULSION" teste
     UNIQUEMENT la stratégie Prime Impulse + Retest, séparément des 8
     stratégies existantes. duree_override (en secondes) remplace la durée
     d'expiration normale du mode, pour tester des expirations plus
-    longues (15/30/60 min) sans changer le mode STANDARD/SCALP."""
+    longues (15/30/60 min) sans changer le mode STANDARD/SCALP. inverser=True
+    prend chaque signal dans le sens OPPOSÉ (fade/contrarian), pour tester
+    si un signal statistiquement mauvais devient statistiquement bon une
+    fois inversé."""
     paires = (CRYPTO_PAIRS + FOREX_PAIRS) if pairs_str.upper() == "ALL" else [p.strip().upper() for p in pairs_str.split(",")]
     modes = ["STANDARD", "SCALP"] if mode.upper() == "BOTH" else [mode.upper()]
 
-    print(f"[BACKTEST] Démarrage — paires={paires} jours={jours} modes={modes} strategie_isolee={strategie_isolee} duree_override={duree_override}", flush=True)
+    print(f"[BACKTEST] Démarrage — paires={paires} jours={jours} modes={modes} strategie_isolee={strategie_isolee} duree_override={duree_override} inverser={inverser}", flush=True)
     tous_signaux, tous_compteurs = [], []
     for paire in paires:
         for m in modes:
-            signaux, compteurs = backtester_paire(paire, jours, m, strategie_isolee=strategie_isolee, duree_override=duree_override)
+            signaux, compteurs = backtester_paire(paire, jours, m, strategie_isolee=strategie_isolee, duree_override=duree_override, inverser=inverser)
             tous_signaux += signaux
             tous_compteurs.append(compteurs)
             time.sleep(2.0)  # ✅ pause entre chaque paire/mode pour rester loin de tout seuil d'abus
 
     rapport = _rapport_texte(tous_signaux, tous_compteurs, jours, limite_cible)
+    if inverser:
+        rapport = "🔄 MODE INVERSÉ (fade/contrarian) — chaque signal pris dans le sens opposé\n\n" + rapport
     if duree_override:
         rapport = f"⏳ Durée d'expiration testée : {duree_override}s ({duree_override/60:.0f} min)\n\n" + rapport
     print("[BACKTEST] Terminé.\n" + rapport, flush=True)
