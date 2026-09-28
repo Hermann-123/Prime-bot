@@ -350,30 +350,46 @@ def _connecter_deriv(timeout=5):
             continue
     raise derniere_erreur if derniere_erreur else ConnectionError("Aucun endpoint Deriv disponible")
 
+def _telecharger_bougies(ws, symbole, granularite, count, fin):
+    """✅ Le nouvel endpoint Deriv renvoie moins de bougies que demandé
+    (47 au lieu de 250 sur M15). On remonte donc dans le passé par pages
+    successives (comme le backtest) jusqu'à obtenir `count` bougies."""
+    toutes, end = [], fin
+    for _ in range(8):
+        restant = count - len(toutes)
+        if restant <= 0:
+            break
+        ws.send(json.dumps({"ticks_history": symbole, "end": end, "count": restant,
+                             "style": "candles", "granularity": granularite}))
+        rep = json.loads(ws.recv())
+        if "error" in rep:
+            raise RuntimeError(str(rep["error"].get("message", rep["error"]))[:120])
+        page = rep.get("candles") or []
+        if toutes:
+            page = [c for c in page if c["epoch"] < toutes[0]["epoch"]]
+        if not page:
+            break
+        toutes = page + toutes
+        end = toutes[0]["epoch"] - 1
+        time.sleep(0.2)
+    return toutes
+
 def obtenir_donnees_deriv(symbole_brut, granularite=300, count=250):
     symbole = prefixer_symbole(symbole_brut)
     for _ in range(3):
         try:
             ws, url = _connecter_deriv(timeout=5)
-            # ✅ Le nouvel endpoint renvoie "candles": [] (liste vide) avec
-            # "end": "latest", alors qu'une date de fin explicite fonctionne
-            # (c'est ce que le backtest utilise, et il télécharge bien ses
-            # bougies). On essaie donc l'epoch explicite d'abord, "latest"
-            # ensuite, et on considère une liste vide comme un ÉCHEC.
             for fin in (int(time.time()), "latest"):
-                req = {"ticks_history": symbole, "end": fin, "count": count, "style": "candles", "granularity": granularite}
-                ws.send(json.dumps(req))
-                history = json.loads(ws.recv())
-                candles = history.get("candles") if "error" not in history else None
+                candles = _telecharger_bougies(ws, symbole, granularite, count, fin)
                 if candles:
                     ws.close()
                     return candles
-                _derniere_raison_deriv[symbole_brut] = f"M{granularite//60}: 0 bougie reçue — {str(history)[:110]}"
-                print(f"[DERIV] {symbole_brut} via {url} (end={fin}) — 0 bougie. Réponse : {str(history)[:200]}", flush=True)
+                _derniere_raison_deriv[symbole_brut] = f"M{granularite//60}: 0 bougie reçue (end={fin})"
+                print(f"[DERIV] {symbole_brut} via {url} (end={fin}) — 0 bougie.", flush=True)
             ws.close()
         except Exception as e:
-            _derniere_raison_deriv[symbole_brut] = f"M{granularite//60}: connexion — {type(e).__name__}: {str(e)[:90]}"
-            print(f"[DERIV] {symbole_brut} — échec connexion (tous endpoints) : {type(e).__name__}: {e}", flush=True)
+            _derniere_raison_deriv[symbole_brut] = f"M{granularite//60}: {type(e).__name__}: {str(e)[:90]}"
+            print(f"[DERIV] {symbole_brut} — échec : {type(e).__name__}: {e}", flush=True)
         time.sleep(1)
     return None
 
@@ -1542,25 +1558,13 @@ def commande_diagnostic(message):
         # du catalogue, sur le nouvel endpoint — montre quelles paires
         # répondent vraiment, lesquelles échouent, et pourquoi.
         ok_paires, ko_paires = [], []
-        for paire in CRYPTO_PAIRS + FOREX_PAIRS:
-            try:
-                ws = websocket.WebSocket()
-                ws.connect(DERIV_ENDPOINTS[1], timeout=8)
-                req = {"ticks_history": prefixer_symbole(paire), "end": int(time.time()),
-                       "count": 250, "style": "candles", "granularity": 900}
-                ws.send(json.dumps(req))
-                rep = json.loads(ws.recv())
-                ws.close()
-                if "error" in rep:
-                    ko_paires.append(f"❌ {paire}: {str(rep['error'].get('message', rep['error']))[:70]}")
-                else:
-                    nb = len(rep.get("candles", []))
-                    if nb >= 60: ok_paires.append(f"✅ {paire}: {nb}")
-                    else: ko_paires.append(f"⚠️ {paire}: seulement {nb} bougies M15")
-            except Exception as e:
-                ko_paires.append(f"❌ {paire}: {type(e).__name__}: {str(e)[:60]}")
-            time.sleep(0.5)
-        resultats.append("— Bougies M15 (250 demandées), nouvel endpoint —")
+        for paire in FOREX_PAIRS:
+            c = obtenir_donnees_deriv(paire, 900, 250)
+            nb = len(c) if c else 0
+            if nb >= 60: ok_paires.append(f"✅ {paire}: {nb}")
+            else: ko_paires.append(f"⚠️ {paire}: {nb} — {_derniere_raison_deriv.get(paire, '')[:60]}")
+            time.sleep(0.3)
+        resultats.append("— Bougies M15 obtenues par le bot (250 demandées) —")
         resultats.extend(ko_paires + ok_paires)
 
         texte = "🔍 RÉSULTAT DIAGNOSTIC RÉSEAU\n" + "\n".join(resultats)
