@@ -165,7 +165,7 @@ cooldown_paire_utilisateur = {}  # (chat_id, symbole) -> {"until": ts, "raison":
 utilisateurs_autorises = {ADMIN_ID: "LIFETIME"}
 cles_generees = {}
 
-CRYPTO_PAIRS = ["BTCUSD", "ETHUSD", "LTCUSD"]
+CRYPTO_PAIRS = []  # ✅ cryptos retirées du bot (forex uniquement)
 FOREX_PAIRS = [
     "AUDUSD", "CADJPY", "CHFJPY", "EURJPY", "USDCAD",
     "AUDJPY", "EURAUD", "EURUSD", "AUDCAD", "USDCHF",
@@ -173,7 +173,7 @@ FOREX_PAIRS = [
 ]
 
 def nom_otc(symbole):
-    return f"{symbole[:3]}/{symbole[3:]} OTC"
+    return f"{symbole[:3]}/{symbole[3:]}"
 
 # ==========================================
 # SERVEUR WEB (KEEP ALIVE RENDER)
@@ -265,7 +265,7 @@ def est_symbole_autorise(symbole):
 
     if est_week_end:
         if symbole in CRYPTO_PAIRS: return "AUTORISE", ""
-        else: return "BLOCAGE_TOTAL", "🔒 **ACCÈS REFUSÉ** : Le marché Forex réel (source de données) est fermé le week-end — les prix gelés produiraient des signaux trompeurs. Seules les cryptos sont autorisées."
+        else: return "BLOCAGE_TOTAL", "🔒 **ACCÈS REFUSÉ** : Le marché Forex réel (source de données) est fermé le week-end — les prix gelés produiraient des signaux trompeurs. Reprise dimanche soir (21h GMT)."
 
     if symbole in CRYPTO_PAIRS:
         return "BLOCAGE_TOTAL", "🔒 **ACCÈS REFUSÉ** : Les Cryptomonnaies sont verrouillées la semaine. Réservées au week-end."
@@ -328,6 +328,7 @@ DERIV_ENDPOINTS = [
     "wss://api.derivws.com/trading/v1/options/ws/public",
 ]
 _derniere_url_deriv_ok = {"url": None}
+_derniere_raison_deriv = {}  # paire -> dernière raison d'échec (affichée à l'utilisateur)
 
 def _connecter_deriv(timeout=5):
     """Essaie chaque endpoint Deriv connu dans l'ordre, retourne (ws, url)
@@ -367,9 +368,11 @@ def obtenir_donnees_deriv(symbole_brut, granularite=300, count=250):
                 if candles:
                     ws.close()
                     return candles
+                _derniere_raison_deriv[symbole_brut] = f"M{granularite//60}: 0 bougie reçue — {str(history)[:110]}"
                 print(f"[DERIV] {symbole_brut} via {url} (end={fin}) — 0 bougie. Réponse : {str(history)[:200]}", flush=True)
             ws.close()
         except Exception as e:
+            _derniere_raison_deriv[symbole_brut] = f"M{granularite//60}: connexion — {type(e).__name__}: {str(e)[:90]}"
             print(f"[DERIV] {symbole_brut} — échec connexion (tous endpoints) : {type(e).__name__}: {e}", flush=True)
         time.sleep(1)
     return None
@@ -410,6 +413,9 @@ def data_engine_fetch(symbole, avec_m1=False):
     c30 = obtenir_donnees_deriv(symbole, 1800, 250)
     c5 = obtenir_donnees_deriv(symbole, 300, 250)
     if not c15 or len(c15) < 60 or not c5 or len(c5) < 30:
+        _derniere_raison_deriv[symbole] = (
+            f"M15={len(c15) if c15 else 0} bougies (min 60), M5={len(c5) if c5 else 0} (min 30). "
+            + _derniere_raison_deriv.get(symbole, ""))
         return None
 
     dfs = {
@@ -1036,7 +1042,7 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
     avec_m1 = (mode == "SCALP")
     dfs = data_engine_fetch(symbole, avec_m1=avec_m1)
     if not dfs:
-        return {"decision": "NO_TRADE", "raison_no_trade": "⚠️ Données insuffisantes."}
+        return {"decision": "NO_TRADE", "raison_no_trade": "⚠️ Données insuffisantes.\n" + _derniere_raison_deriv.get(symbole, "")[:250]}
 
     df15, df5 = dfs["M15"], dfs["M5"]
     df_entree = dfs.get("M1") if (mode == "SCALP" and dfs.get("M1") is not None) else df5
@@ -1291,6 +1297,9 @@ def save_devise(call):
     if not est_autorise(chat_id): return
 
     actif = call.data.replace("set_", "")
+    if actif not in FOREX_PAIRS:
+        bot.send_message(chat_id, "⚠️ Cette paire n'est plus disponible. Ouvre à nouveau 📊 CHOISIR UNE DEVISE.")
+        return
     statut, msg_erreur = est_symbole_autorise(actif)
     if statut == "BLOCAGE_TOTAL":
         bot.send_message(chat_id, msg_erreur, parse_mode="Markdown")
@@ -1338,7 +1347,7 @@ def horaires_trading(message):
 🇪🇺 **Session Europe (07h00-12h00) :** EUR, USD, CHF
 🔥 **Zone US/CA (12h00-17h30) :** EUR/USD, AUD/USD, USD/CAD
 🛑 **Repli Tactique (17h30-00h00) :** Forex bloqué.
-🪙 **Week-end :** Cryptos uniquement (données Deriv réelles fermées sur Forex).
+🌙 **Week-end :** marché fermé, reprise dimanche 21h GMT.
 
 *(Bilan Automatique à 18h00 GMT)*"""
     bot.send_message(message.chat.id, texte, parse_mode="Markdown")
@@ -1348,12 +1357,11 @@ def devises(message):
     if not est_autorise(message.chat.id): return
     markup = InlineKeyboardMarkup(row_width=3)
     markup.add(
-        InlineKeyboardButton("🪙 BTC/USD", callback_data="set_BTCUSD"), InlineKeyboardButton("🔷 ETH/USD", callback_data="set_ETHUSD"), InlineKeyboardButton("⚡ LTC/USD", callback_data="set_LTCUSD"),
-        InlineKeyboardButton("🇦🇺 AUD/USD OTC", callback_data="set_AUDUSD"), InlineKeyboardButton("🇨🇦 CAD/JPY OTC", callback_data="set_CADJPY"), InlineKeyboardButton("🇨🇭 CHF/JPY OTC", callback_data="set_CHFJPY"),
-        InlineKeyboardButton("🇪🇺 EUR/JPY OTC", callback_data="set_EURJPY"), InlineKeyboardButton("🇺🇸 USD/CAD OTC", callback_data="set_USDCAD"), InlineKeyboardButton("🇦🇺 AUD/JPY OTC", callback_data="set_AUDJPY"),
-        InlineKeyboardButton("🇪🇺 EUR/AUD OTC", callback_data="set_EURAUD"), InlineKeyboardButton("🇪🇺 EUR/USD OTC", callback_data="set_EURUSD"), InlineKeyboardButton("🇦🇺 AUD/CAD OTC", callback_data="set_AUDCAD"),
-        InlineKeyboardButton("🇺🇸 USD/CHF OTC", callback_data="set_USDCHF"), InlineKeyboardButton("🇨🇦 CAD/CHF OTC", callback_data="set_CADCHF"), InlineKeyboardButton("🇪🇺 EUR/CHF OTC", callback_data="set_EURCHF"),
-        InlineKeyboardButton("🇯🇵 USD/JPY OTC", callback_data="set_USDJPY")
+        InlineKeyboardButton("🇦🇺 AUD/USD", callback_data="set_AUDUSD"), InlineKeyboardButton("🇨🇦 CAD/JPY", callback_data="set_CADJPY"), InlineKeyboardButton("🇨🇭 CHF/JPY", callback_data="set_CHFJPY"),
+        InlineKeyboardButton("🇪🇺 EUR/JPY", callback_data="set_EURJPY"), InlineKeyboardButton("🇺🇸 USD/CAD", callback_data="set_USDCAD"), InlineKeyboardButton("🇦🇺 AUD/JPY", callback_data="set_AUDJPY"),
+        InlineKeyboardButton("🇪🇺 EUR/AUD", callback_data="set_EURAUD"), InlineKeyboardButton("🇪🇺 EUR/USD", callback_data="set_EURUSD"), InlineKeyboardButton("🇦🇺 AUD/CAD", callback_data="set_AUDCAD"),
+        InlineKeyboardButton("🇺🇸 USD/CHF", callback_data="set_USDCHF"), InlineKeyboardButton("🇨🇦 CAD/CHF", callback_data="set_CADCHF"), InlineKeyboardButton("🇪🇺 EUR/CHF", callback_data="set_EURCHF"),
+        InlineKeyboardButton("🇯🇵 USD/JPY", callback_data="set_USDJPY")
     )
     bot.send_message(message.chat.id, "Sélectionne ta cible :", reply_markup=markup)
 
@@ -1530,29 +1538,30 @@ def commande_diagnostic(message):
         except Exception as e:
             resultats.append(f"❌ HTTPS vers google.com — ÉCHEC : {type(e).__name__}: {e}")
 
-        # ✅ Test de la vraie requête de bougies, sur chaque endpoint, pour un
-        # forex ET une crypto, avec les deux variantes de "end" — on affiche
-        # juste le NOMBRE de bougies reçues (0 = le problème qu'on cherche).
-        for url in DERIV_ENDPOINTS:
-            for symbole_test in ("frxEURUSD", "cryBTCUSD"):
-                for fin_test in (int(time.time()), "latest"):
-                    try:
-                        ws = websocket.WebSocket()
-                        ws.connect(url, timeout=8)
-                        req = {"ticks_history": symbole_test, "end": fin_test, "count": 50,
-                               "style": "candles", "granularity": 300}
-                        ws.send(json.dumps(req))
-                        rep = json.loads(ws.recv())
-                        ws.close()
-                        nb = len(rep.get("candles", [])) if "error" not in rep else -1
-                        detail = "" if nb > 0 else f" | {str(rep)[:120]}"
-                        marque = "✅" if nb > 0 else "⚠️"
-                        court = "nouveau" if "api.derivws" in url else "ancien"
-                        etiquette = "epoch" if fin_test != "latest" else "latest"
-                        resultats.append(f"{marque} {court} · {symbole_test} · end={etiquette} → {nb} bougies{detail}")
-                    except Exception as e:
-                        court = "nouveau" if "api.derivws" in url else "ancien"
-                        resultats.append(f"❌ {court} · {symbole_test} → {type(e).__name__}: {str(e)[:80]}")
+        # ✅ Test EXACTEMENT comme le bot : M15, 250 bougies, pour CHAQUE paire
+        # du catalogue, sur le nouvel endpoint — montre quelles paires
+        # répondent vraiment, lesquelles échouent, et pourquoi.
+        ok_paires, ko_paires = [], []
+        for paire in CRYPTO_PAIRS + FOREX_PAIRS:
+            try:
+                ws = websocket.WebSocket()
+                ws.connect(DERIV_ENDPOINTS[1], timeout=8)
+                req = {"ticks_history": prefixer_symbole(paire), "end": int(time.time()),
+                       "count": 250, "style": "candles", "granularity": 900}
+                ws.send(json.dumps(req))
+                rep = json.loads(ws.recv())
+                ws.close()
+                if "error" in rep:
+                    ko_paires.append(f"❌ {paire}: {str(rep['error'].get('message', rep['error']))[:70]}")
+                else:
+                    nb = len(rep.get("candles", []))
+                    if nb >= 60: ok_paires.append(f"✅ {paire}: {nb}")
+                    else: ko_paires.append(f"⚠️ {paire}: seulement {nb} bougies M15")
+            except Exception as e:
+                ko_paires.append(f"❌ {paire}: {type(e).__name__}: {str(e)[:60]}")
+            time.sleep(0.5)
+        resultats.append("— Bougies M15 (250 demandées), nouvel endpoint —")
+        resultats.extend(ko_paires + ok_paires)
 
         texte = "🔍 RÉSULTAT DIAGNOSTIC RÉSEAU\n" + "\n".join(resultats)
         print("[DIAGNOSTIC] " + texte.replace("\n", " | "), flush=True)
