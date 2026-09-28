@@ -354,16 +354,24 @@ def obtenir_donnees_deriv(symbole_brut, granularite=300, count=250):
     for _ in range(3):
         try:
             ws, url = _connecter_deriv(timeout=5)
-            req = {"ticks_history": symbole, "end": "latest", "count": count, "style": "candles", "granularity": granularite}
-            ws.send(json.dumps(req))
-            history = json.loads(ws.recv())
+            # ✅ Le nouvel endpoint renvoie "candles": [] (liste vide) avec
+            # "end": "latest", alors qu'une date de fin explicite fonctionne
+            # (c'est ce que le backtest utilise, et il télécharge bien ses
+            # bougies). On essaie donc l'epoch explicite d'abord, "latest"
+            # ensuite, et on considère une liste vide comme un ÉCHEC.
+            for fin in (int(time.time()), "latest"):
+                req = {"ticks_history": symbole, "end": fin, "count": count, "style": "candles", "granularity": granularite}
+                ws.send(json.dumps(req))
+                history = json.loads(ws.recv())
+                candles = history.get("candles") if "error" not in history else None
+                if candles:
+                    ws.close()
+                    return candles
+                print(f"[DERIV] {symbole_brut} via {url} (end={fin}) — 0 bougie. Réponse : {str(history)[:200]}", flush=True)
             ws.close()
-            if "error" not in history and "candles" in history: return history['candles']
-            print(f"[DERIV] {symbole_brut} via {url} — réponse sans 'candles' : {str(history)[:300]}", flush=True)
         except Exception as e:
             print(f"[DERIV] {symbole_brut} — échec connexion (tous endpoints) : {type(e).__name__}: {e}", flush=True)
-            time.sleep(1)
-            continue
+        time.sleep(1)
     return None
 
 def obtenir_prix_actuel_deriv(symbole_brut):
@@ -371,16 +379,19 @@ def obtenir_prix_actuel_deriv(symbole_brut):
     for _ in range(3):
         try:
             ws, url = _connecter_deriv(timeout=5)
-            req = {"ticks_history": symbole, "end": "latest", "count": 1, "style": "ticks"}
-            ws.send(json.dumps(req))
-            res = json.loads(ws.recv())
+            for fin in (int(time.time()), "latest"):
+                req = {"ticks_history": symbole, "end": fin, "count": 1, "style": "ticks"}
+                ws.send(json.dumps(req))
+                res = json.loads(ws.recv())
+                prices = res.get("history", {}).get("prices") if "error" not in res else None
+                if prices:
+                    ws.close()
+                    return float(prices[-1])
+                print(f"[DERIV] {symbole_brut} via {url} (end={fin}) — aucun prix. Réponse : {str(res)[:200]}", flush=True)
             ws.close()
-            if "history" in res and "prices" in res["history"]: return float(res["history"]["prices"][0])
-            print(f"[DERIV] {symbole_brut} via {url} — réponse sans prix : {str(res)[:300]}", flush=True)
         except Exception as e:
             print(f"[DERIV] {symbole_brut} — échec connexion (prix, tous endpoints) : {type(e).__name__}: {e}", flush=True)
-            time.sleep(1)
-            continue
+        time.sleep(1)
     return None
 
 def _candles_vers_df(candles):
@@ -1519,35 +1530,31 @@ def commande_diagnostic(message):
         except Exception as e:
             resultats.append(f"❌ HTTPS vers google.com — ÉCHEC : {type(e).__name__}: {e}")
 
-        # ✅ La vraie requête que fait le bot pour analyser une paire —
-        # testée sur CHAQUE endpoint Deriv connu, pour voir lequel répond.
+        # ✅ Test de la vraie requête de bougies, sur chaque endpoint, pour un
+        # forex ET une crypto, avec les deux variantes de "end" — on affiche
+        # juste le NOMBRE de bougies reçues (0 = le problème qu'on cherche).
         for url in DERIV_ENDPOINTS:
-            try:
-                ws = websocket.WebSocket()
-                ws.connect(url, timeout=8)
-                req = {"ticks_history": "frxEURUSD", "end": "latest", "count": 5,
-                       "style": "candles", "granularity": 300}
-                ws.send(json.dumps(req))
-                brut = ws.recv()
-                ws.close()
-                resultats.append(f"🔎 {url}\n   → réponse : {brut[:250]}")
-            except Exception as e:
-                resultats.append(f"❌ {url}\n   → ÉCHEC : {type(e).__name__}: {e}")
+            for symbole_test in ("frxEURUSD", "cryBTCUSD"):
+                for fin_test in (int(time.time()), "latest"):
+                    try:
+                        ws = websocket.WebSocket()
+                        ws.connect(url, timeout=8)
+                        req = {"ticks_history": symbole_test, "end": fin_test, "count": 50,
+                               "style": "candles", "granularity": 300}
+                        ws.send(json.dumps(req))
+                        rep = json.loads(ws.recv())
+                        ws.close()
+                        nb = len(rep.get("candles", [])) if "error" not in rep else -1
+                        detail = "" if nb > 0 else f" | {str(rep)[:120]}"
+                        marque = "✅" if nb > 0 else "⚠️"
+                        court = "nouveau" if "api.derivws" in url else "ancien"
+                        etiquette = "epoch" if fin_test != "latest" else "latest"
+                        resultats.append(f"{marque} {court} · {symbole_test} · end={etiquette} → {nb} bougies{detail}")
+                    except Exception as e:
+                        court = "nouveau" if "api.derivws" in url else "ancien"
+                        resultats.append(f"❌ {court} · {symbole_test} → {type(e).__name__}: {str(e)[:80]}")
 
-        # ✅ Test avec un indice synthétique (R_100) — coté 24/7, jamais
-        # fermé, donc si LUI aussi revient vide sur le nouvel endpoint,
-        # ce n'est pas un problème d'heure de marché mais de symbole/API.
-        try:
-            ws = websocket.WebSocket()
-            ws.connect("wss://api.derivws.com/trading/v1/options/ws/public", timeout=8)
-            req = {"ticks_history": "R_100", "end": "latest", "count": 5,
-                   "style": "candles", "granularity": 300}
-            ws.send(json.dumps(req))
-            brut = ws.recv()
-            ws.close()
-            resultats.append(f"🔎 Nouvel endpoint + symbole R_100 (synthétique, 24/7)\n   → réponse : {brut[:250]}")
-        except Exception as e:
-            resultats.append(f"❌ Nouvel endpoint + symbole R_100 — ÉCHEC : {type(e).__name__}: {e}")
+        texte = "🔍 RÉSULTAT DIAGNOSTIC RÉSEAU\n" + "\n".join(resultats)
         print("[DIAGNOSTIC] " + texte.replace("\n", " | "), flush=True)
         try:
             bot.send_message(message.chat.id, texte)
