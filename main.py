@@ -1039,7 +1039,7 @@ def calculer_expectancy(wins, losses, payout_net):
 # ORCHESTRATEUR — PIPELINE COMPLET DES 5 COUCHES
 # ==========================================
 
-def analyser_binaire_pro(symbole, mode="STANDARD"):
+def _analyser_binaire_pro_interne(symbole, mode="STANDARD"):
     """
     ✅ V19 — pipeline complet : DATA -> REGIME -> STRATEGIES (gating) ->
     CONFLUENCE -> AI VALIDATOR. Le Risk Engine (par utilisateur) est
@@ -1124,6 +1124,19 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
         "regime": regime, "setup": setup, "score_confluence": score_confluence,
         "bande": bande, "ai": ai, "raisons": raisons_confluence + setup["raisons"][:2],
     }
+
+def analyser_binaire_pro(symbole, mode="STANDARD"):
+    """✅ Enveloppe de sécurité : une erreur inattendue sur UNE paire ne doit
+    jamais faire planter tout un cycle de scan (les autres paires/
+    utilisateurs) ni /scan. On imprime la trace complète dans Render >
+    Logs (avant, on avait juste 'TypeError' sans savoir où)."""
+    try:
+        return _analyser_binaire_pro_interne(symbole, mode)
+    except Exception as e:
+        import traceback
+        print(f"[ANALYSE] {symbole}/{mode} — ERREUR : {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
+        return {"decision": "NO_TRADE", "raison_no_trade": f"⚠️ Erreur interne ({type(e).__name__}) — voir Render > Logs."}
 
 # ==========================================
 # EXÉCUTION DU SIGNAL — SANS MARTINGALE (V19)
@@ -1605,7 +1618,10 @@ def commande_scan(message):
             try:
                 r = analyser_binaire_pro(paire, mode)
             except Exception as e:
-                lignes.append(f"❌ {nom_otc(paire)} : erreur {type(e).__name__}")
+                import traceback
+                print(f"[SCAN] {paire} — ERREUR : {type(e).__name__}: {e}", flush=True)
+                traceback.print_exc()
+                lignes.append(f"❌ {nom_otc(paire)} : erreur {type(e).__name__} (détail dans Render > Logs)")
                 continue
             if r["decision"] == "SIGNAL":
                 lignes.append(f"🟢 {nom_otc(paire)} : SIGNAL {r['direction']} ({r['bande']}, {r['score_confluence']}/100)")
