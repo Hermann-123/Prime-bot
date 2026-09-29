@@ -1396,7 +1396,10 @@ def scanner_marche_auto():
         try:
             time.sleep(45)
             utilisateurs_libres = [uid for uid in utilisateurs_actifs if est_autorise(uid)]
-            if not utilisateurs_libres: continue
+            if not utilisateurs_libres:
+                print("[SCANNER] aucun utilisateur actif — envoie /start au bot.", flush=True)
+                continue
+            _analysees, _signaux = 0, 0
 
             for paire in CRYPTO_PAIRS + FOREX_PAIRS:
                 statut, _ = est_symbole_autorise(paire)
@@ -1409,7 +1412,9 @@ def scanner_marche_auto():
                         continue
 
                     resultat = analyser_binaire_pro(paire, mode)
+                    _analysees += 1
                     if resultat["decision"] != "SIGNAL": continue
+                    _signaux += 1
 
                     derniere_alerte_auto[cle_memoire] = time.time()
                     nom_affiche = nom_otc(paire)
@@ -1426,8 +1431,9 @@ def scanner_marche_auto():
                         msg = f"{badge} **SIGNAL {resultat['setup']['label']} : {nom_affiche}**\nRégime {resultat['regime']['regime']} · Score {resultat['score_confluence']}/100"
                         try: bot.send_message(uid, msg, reply_markup=markup)
                         except: pass
-        except Exception:
-            pass
+            print(f"[SCANNER] cycle terminé : {_analysees} analyses, {_signaux} signaux, {len(utilisateurs_libres)} utilisateur(s).", flush=True)
+        except Exception as e:
+            print(f"[SCANNER] ERREUR : {type(e).__name__}: {e}", flush=True)
 
 def gestionnaire_bilan():
     bilan_envoye_aujourdhui = False
@@ -1577,7 +1583,43 @@ def commande_diagnostic(message):
     Thread(target=tache, daemon=True).start()
 
 
+@bot.message_handler(commands=['scan'])
+def commande_scan(message):
+    if message.chat.id != ADMIN_ID:
+        return
+    mode = mode_trading.get(message.chat.id, "STANDARD")
+    bot.send_message(message.chat.id, f"🔎 Scan en direct ({mode}) — compte 1 à 2 minutes...")
+
+    def tache():
+        lignes = []
+        try: news = est_heure_de_news_dynamique()
+        except Exception: news = False
+        lignes.append(f"📰 News majeures (±30 min) : {'OUI — analyses bloquées' if news else 'non'}")
+        lignes.append(f"🤖 IA Groq : {'active' if GROQ_API_KEY else 'désactivée'}")
+        lignes.append(f"👥 Utilisateurs suivis par le scanner : {len(utilisateurs_actifs)}")
+        for paire in FOREX_PAIRS:
+            statut, _ = est_symbole_autorise(paire)
+            if statut != "AUTORISE":
+                lignes.append(f"⏸ {nom_otc(paire)} : hors session")
+                continue
+            try:
+                r = analyser_binaire_pro(paire, mode)
+            except Exception as e:
+                lignes.append(f"❌ {nom_otc(paire)} : erreur {type(e).__name__}")
+                continue
+            if r["decision"] == "SIGNAL":
+                lignes.append(f"🟢 {nom_otc(paire)} : SIGNAL {r['direction']} ({r['bande']}, {r['score_confluence']}/100)")
+            else:
+                raison = str(r.get("raison_no_trade", "")).replace("**", "").replace("\n", " ")[:85]
+                regime = r.get("regime", {}).get("regime", "")
+                lignes.append(f"⚪ {nom_otc(paire)} : {(regime + ' · ') if regime else ''}{raison}")
+        bot.send_message(message.chat.id, "\n".join(lignes))
+
+    Thread(target=tache, daemon=True).start()
+
+
 if __name__ == "__main__":
+    utilisateurs_actifs.add(ADMIN_ID)  # ✅ l'admin reçoit les alertes sans devoir refaire /start après un redéploiement
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestionnaire_bilan, daemon=True).start()
