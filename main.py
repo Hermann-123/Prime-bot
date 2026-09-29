@@ -1134,9 +1134,14 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
         return _analyser_binaire_pro_interne(symbole, mode)
     except Exception as e:
         import traceback
-        print(f"[ANALYSE] {symbole}/{mode} — ERREUR : {type(e).__name__}: {e}", flush=True)
-        traceback.print_exc()
-        return {"decision": "NO_TRADE", "raison_no_trade": f"⚠️ Erreur interne ({type(e).__name__}) — voir Render > Logs."}
+        trace = traceback.format_exc()
+        # ✅ La ligne exacte qui plante est incluse directement dans le
+        # message Telegram — plus besoin d'aller chercher dans Render.
+        derniere_ligne = [l for l in trace.strip().split("\n") if l.strip()][-1]
+        ligne_code = [l for l in trace.strip().split("\n") if "bot_v19_updated.py" in l or "main.py" in l]
+        print(f"[ANALYSE] {symbole}/{mode} — ERREUR :\n{trace}", flush=True)
+        detail = (ligne_code[-1].strip() if ligne_code else "") + " | " + derniere_ligne
+        return {"decision": "NO_TRADE", "raison_no_trade": f"⚠️ Erreur interne ({type(e).__name__}) : {detail[:300]}"}
 
 # ==========================================
 # EXÉCUTION DU SIGNAL — SANS MARTINGALE (V19)
