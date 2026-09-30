@@ -540,7 +540,7 @@ def detecter_regime_marche(df15):
         ratio_corps_recent = (corps / taille).iloc[-4:-1].mean()
 
         # 🔴 CHAOTIC : volatilité en pic anormal OU bougies dominées par les mèches
-        chaos = (atr_pct > 2.2) or (ratio_corps_recent < 0.15)
+        chaos = bool((atr_pct > 2.2) or (ratio_corps_recent < 0.15))
 
         # 🔵 BREAKOUT : prix vient de dépasser le canal Donchian PRÉCÉDENT (pas
         # celui recalculé avec la bougie courante — évite l'auto-référence) et
@@ -910,9 +910,9 @@ def ai_validator(symbole, regime, setup, score_confluence, bande):
 
     dossier = {
         "asset": symbole, "regime": regime["regime"], "direction": setup["direction"],
-        "strategy": setup["nom"], "adx": regime["adx"], "atr_pct": regime["atr_pct"],
-        "structure_score": regime["structure_score"], "setup_score": setup["score"],
-        "confluence_score": score_confluence, "bande": bande, "chaos": regime["chaos"],
+        "strategy": setup["nom"], "adx": float(regime["adx"]), "atr_pct": float(regime["atr_pct"]),
+        "structure_score": float(regime["structure_score"]), "setup_score": float(setup["score"]),
+        "confluence_score": float(score_confluence), "bande": bande, "chaos": bool(regime["chaos"]),
     }
 
     prompt = (
