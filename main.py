@@ -1158,11 +1158,17 @@ def executer_trade(chat_id, symbole, direction, duree_secondes, resultat_analyse
     action_affichage = "🟢 ACHAT (CALL)" if direction == "CALL" else "🔴 VENTE (PUT)"
     nom_paire = nom_otc(symbole)
 
-    maintenant = datetime.datetime.now()
-    sec_rest = 60 - maintenant.second
-    if sec_rest < 15: sec_rest += 60
+    # ✅ Horloge unique en GMT (comme tout le reste du bot : est_symbole_autorise,
+    # est_heure_de_news_dynamique, etc. utilisent déjà utcnow()). Avant, cette
+    # ligne utilisait l'heure LOCALE du serveur — deux horloges différentes
+    # qui pouvaient désynchroniser l'heure affichée de l'heure réelle.
+    # Délai FIXE de 90 secondes (1 min 30) à partir du moment exact où le
+    # signal est construit, plus d'arrondi à la minute pile.
+    DELAI_ENTREE_SECONDES = 90
+    maintenant = datetime.datetime.utcnow()
+    sec_rest = DELAI_ENTREE_SECONDES
     heure_entree = maintenant + datetime.timedelta(seconds=sec_rest)
-    heure_texte = heure_entree.strftime("%H:%M:00")
+    heure_texte = heure_entree.strftime("%H:%M:%S") + " GMT"
 
     mise = int(CAPITAL_ACTUEL * MISE_PCT_CAPITAL)
     regime, setup = resultat_analyse["regime"], resultat_analyse["setup"]
@@ -1185,7 +1191,7 @@ def executer_trade(chat_id, symbole, direction, duree_secondes, resultat_analyse
         f"📊 **Confluence :** {resultat_analyse['score_confluence']}/100\n"
         f"📍 {raisons_txt}{ai_txt}\n"
         f"──────────────────\n"
-        f"⏳ *Préparez le broker.*"
+        f"⏳ *Entrée dans {DELAI_ENTREE_SECONDES} secondes (1 min 30) — synchronise ton horloge sur le GMT ci-dessus.*"
     )
     try: bot.send_message(chat_id, texte, parse_mode="Markdown")
     except: pass
