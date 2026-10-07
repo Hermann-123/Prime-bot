@@ -15,22 +15,21 @@ from flask import Flask
 from threading import Thread, Timer
 
 # ==========================================
-# ✅ V20 — MOTEUR PRÉCIS, SÉLECTIF, SETUP-DRIVEN
+# ✅ V20.1 — MOTEUR PRÉCIS, SÉLECTIF, SETUP-DRIVEN
 # ==========================================
 # Philosophie :
 #   1. DATA ENGINE        — M5/M15/M30 (+M1 si SCALP)
 #   2. MARKET REGIME      — TREND / RANGE / BREAKOUT / CHAOTIC
 #   3. SETUPS V20         — 3 setups stricts uniquement :
-#                           - TREND_PULLBACK_PRECIS
-#                           - RANGE_REJECTION_PRECIS
-#                           - BREAKOUT_RETEST_PRECIS
+#                           - TREND_PULLBACK_PRECIS    (10 MIN)
+#                           - RANGE_REJECTION_PRECIS   (2 MIN)
+#                           - BREAKOUT_RETEST_PRECIS   (5 MIN)
 #   4. AI VALIDATOR       — APPROVE/REJECT seulement
 #   5. RISK ENGINE        — pertes/jour, pause, cooldown, plafond de signaux
 #
-# Le principe central :
-#   "Pas de zone claire = pas de trade."
-#   "Pas de confirmation claire = pas de trade."
-#   "Entrée tardive = pas de trade."
+# Nouveautés V20.1 :
+#   - Délai d'entrée porté à 50 secondes (le temps de placer le trade).
+#   - Expirations mappées 2 / 5 / 10 minutes selon le setup.
 
 # ==========================================
 # CONFIGURATION PRINCIPALE ET SÉCURITÉ
@@ -92,6 +91,11 @@ GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 MISE_PCT_CAPITAL = 0.02
 
 # ==========================================
+# ⏱ DÉLAI D'ENTRÉE (V20.1 : 20s → 50s)
+# ==========================================
+DELAI_ENTREE_SECONDES = 50
+
+# ==========================================
 # RISK ENGINE — CONFIGURATION
 # ==========================================
 
@@ -151,7 +155,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Terminal Prime VIP : Édition V20 — Setup-Driven Precision Engine"
+    return "Terminal Prime VIP : Édition V20.1 — Setup-Driven Precision Engine"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -725,6 +729,7 @@ def strategie_trend_pullback_precis(df15, df5, regime):
 
         score = min(100, score)
 
+        # V20.1 : Trend Pullback = 10 MINUTES (600s)
         return {
             "nom": "TREND_PULLBACK_PRECIS",
             "label": "Trend Pullback Précis",
@@ -807,6 +812,7 @@ def strategie_range_rejection_precis(df15, df5, regime):
 
         score = min(100, score)
 
+        # V20.1 : Range Rejection = 2 MINUTES (120s)
         return {
             "nom": "RANGE_REJECTION_PRECIS",
             "label": "Range Rejection Précis",
@@ -815,8 +821,8 @@ def strategie_range_rejection_precis(df15, df5, regime):
             "raisons": raisons,
             "details_txt": f"Position {pos*100:.0f}% · CCI {cci_val:.0f} · RSI {rsi_val:.1f}",
             "regime_natif": "RANGE",
-            "expiration": 300,
-            "exp_texte": "5 MINUTES",
+            "expiration": 120,
+            "exp_texte": "2 MINUTES",
         }
     except Exception:
         return None
@@ -894,8 +900,9 @@ def strategie_breakout_retest_precis(df15, df5, regime):
 
         score = min(100, score)
 
-        expiration = 300 if dist_retest <= 0.0025 else 600
-        exp_texte = "5 MINUTES" if expiration == 300 else "10 MINUTES"
+        # V20.1 : Breakout Retest = 5 MINUTES (300s) — fixe
+        expiration = 300
+        exp_texte = "5 MINUTES"
 
         return {
             "nom": "BREAKOUT_RETEST_PRECIS",
@@ -1209,7 +1216,7 @@ def analyser_binaire_pro(symbole, mode="STANDARD"):
         import traceback
         trace = traceback.format_exc()
         derniere_ligne = [l for l in trace.strip().split("\n") if l.strip()][-1]
-        ligne_code = [l for l in trace.strip().split("\n") if "bot_v20.py" in l or "main.py" in l]
+        ligne_code = [l for l in trace.strip().split("\n") if "bot_v20" in l or "main.py" in l]
         print(f"[ANALYSE] {symbole}/{mode} — ERREUR :\n{trace}", flush=True)
         detail = (ligne_code[-1].strip() if ligne_code else "") + " | " + derniere_ligne
         return {"decision": "NO_TRADE", "raison_no_trade": f"⚠️ Erreur interne ({type(e).__name__}) : {detail[:300]}"}
@@ -1227,7 +1234,6 @@ def executer_trade(chat_id, symbole, direction, duree_secondes, resultat_analyse
     action_affichage = "🟢 ACHAT (CALL)" if direction == "CALL" else "🔴 VENTE (PUT)"
     nom_paire = nom_otc(symbole)
 
-    DELAI_ENTREE_SECONDES = 20
     maintenant = datetime.datetime.utcnow()
     heure_entree = maintenant + datetime.timedelta(seconds=DELAI_ENTREE_SECONDES)
     heure_texte = heure_entree.strftime("%H:%M:%S") + " GMT"
@@ -1253,7 +1259,7 @@ def executer_trade(chat_id, symbole, direction, duree_secondes, resultat_analyse
         f"📊 **Score :** {resultat_analyse['score_confluence']}/100\n"
         f"📍 {raisons_txt}{ai_txt}\n"
         f"──────────────────\n"
-        f"⏳ *Entrée dans {DELAI_ENTREE_SECONDES} secondes — synchronise ton horloge sur le GMT ci-dessus.*"
+        f"⏳ *Entrée dans {DELAI_ENTREE_SECONDES} secondes — tu as le temps d'ouvrir Deriv et de placer ton trade.*"
     )
     try:
         bot.send_message(chat_id, texte, parse_mode="Markdown")
@@ -1360,7 +1366,7 @@ def toggle_mode(message):
     mode_actuel = mode_trading.get(user_id, "STANDARD")
     mode_trading[user_id] = "SCALP" if mode_actuel == "STANDARD" else "STANDARD"
     if mode_trading[user_id] == "STANDARD":
-        texte_mode = "✅ Mode STANDARD activé — setups V20 en 5 à 10 minutes."
+        texte_mode = "✅ Mode STANDARD activé — setups V20 en 2, 5 ou 10 minutes."
     else:
         texte_mode = "✅ Mode SCALP activé — usage plus agressif, moins recommandé en V20."
     bot.send_message(user_id, texte_mode, reply_markup=obtenir_clavier(user_id), parse_mode="Markdown")
@@ -1396,18 +1402,19 @@ def bienvenue(message):
     mode_trading[user_id] = mode_trading.get(user_id, "STANDARD")
     filtre_vip_actif[user_id] = filtre_vip_actif.get(user_id, False)
     _init_risk_state(user_id)
-    texte = """🏴‍☠️ **TERMINAL PRIME - V20** 🔥
+    texte = """🏴‍☠️ **TERMINAL PRIME - V20.1** 🔥
 
 Moteur Setup-Driven — précision avant volume.
 
 🧭 **Market Regime** — TREND / RANGE / BREAKOUT / CHAOTIC
 🧩 **3 Setups précis** :
-   • Trend Pullback Précis
-   • Range Rejection Précis
-   • Breakout Retest Précis
+   • Trend Pullback Précis  → **10 MIN**
+   • Range Rejection Précis → **2 MIN**
+   • Breakout Retest Précis → **5 MIN**
 📊 **Scoring strict** — 0-74 NO TRADE · 75-84 OBSERVATION · 85-91 POTENTIEL · 92+ QUALIFIÉ
 🤖 **AI Validator** — Groq en APPROVE/REJECT, jamais générateur
 🛡️ **Risk Engine** — perte/jour, pause après pertes, cooldown, plafond de signaux
+⏱ **Entrée :** 50 secondes après le signal (le temps de placer ton trade).
 
 ❌ **Martingale supprimée** — mise fixe, un signal = une exécution.
 Le meilleur signal peut être l'absence de signal."""
@@ -1438,7 +1445,7 @@ def save_devise(call):
         return
 
     try:
-        msg = bot.send_message(chat_id, "⏳ *Pipeline V20 en cours...*", parse_mode="Markdown")
+        msg = bot.send_message(chat_id, "⏳ *Pipeline V20.1 en cours...*", parse_mode="Markdown")
     except:
         return
 
@@ -1553,7 +1560,7 @@ def scanner_marche_auto():
                             continue
 
                         markup = InlineKeyboardMarkup().add(InlineKeyboardButton(f"📊 Analyser {nom_affiche}", callback_data=f"set_{paire}"))
-                        msg = f"{badge} **SIGNAL {resultat['setup']['label']} : {nom_affiche}**\nRégime {resultat['regime']['regime']} · Score {resultat['score_confluence']}/100"
+                        msg = f"{badge} **SIGNAL {resultat['setup']['label']} : {nom_affiche}**\nRégime {resultat['regime']['regime']} · Score {resultat['score_confluence']}/100 · Durée {resultat['exp_texte']}"
                         try:
                             bot.send_message(uid, msg, reply_markup=markup)
                         except:
@@ -1731,7 +1738,7 @@ def commande_scan(message):
                 lignes.append(f"❌ {nom_otc(paire)} : erreur {type(e).__name__} (détail dans Render > Logs)")
                 continue
             if r["decision"] == "SIGNAL":
-                lignes.append(f"🟢 {nom_otc(paire)} : SIGNAL {r['direction']} ({r['bande']}, {r['score_confluence']}/100)")
+                lignes.append(f"🟢 {nom_otc(paire)} : SIGNAL {r['direction']} ({r['bande']}, {r['score_confluence']}/100, {r['exp_texte']})")
             else:
                 raison = str(r.get("raison_no_trade", "")).replace("**", "").replace("\n", " ")[:85]
                 regime = r.get("regime", {}).get("regime", "")
@@ -1745,5 +1752,5 @@ if __name__ == "__main__":
     keep_alive()
     Thread(target=scanner_marche_auto, daemon=True).start()
     Thread(target=gestionnaire_bilan, daemon=True).start()
-    print("⬛ BOÎTE NOIRE : Édition V20 — Setup-Driven Precision Engine Démarrée.", flush=True)
+    print("⬛ BOÎTE NOIRE : Édition V20.1 — Setup-Driven Precision Engine Démarrée.", flush=True)
     bot.infinity_polling()
